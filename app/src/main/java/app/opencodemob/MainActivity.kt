@@ -1020,6 +1020,57 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // ---- remote CI builds (GitHub/GitLab/Bitbucket/CircleCI/Azure/Codemagic/Bitrise/GCB) ----
+        @JavascriptInterface fun ciState(): String {
+            val o = JSONObject()
+            for (p in listOf("github","gitlab","bitbucket","circleci","azure","codemagic","bitrise","googlecloud")) {
+                val t = Prefs.get(this@MainActivity, "ci_$p")
+                if (t.isNotEmpty()) o.put(p, JSONObject().put("connected", true).put("token", t))
+            }
+            return o.toString()
+        }
+        @JavascriptInterface fun ciSaveToken(id: String, provider: String, token: String) {
+            runOnUiThread {
+                Prefs.put(this@MainActivity, "ci_$provider", token.trim())
+                emit("ci-save", JSONObject().put("id", id).put("ok", true))
+            }
+        }
+        @JavascriptInterface fun ciClearToken(provider: String) {
+            runOnUiThread { Prefs.put(this@MainActivity, "ci_$provider", "") }
+        }
+        @JavascriptInterface fun ciRequest(id: String, provider: String, method: String, path: String, body: String) {
+            thread {
+                val o = JSONObject().put("id", id)
+                try {
+                    val token = Prefs.get(this@MainActivity, "ci_$provider")
+                    if (token.isEmpty()) throw IllegalStateException("Токен не подключён")
+                    val base = when (provider) {
+                        "github" -> "https://api.github.com"
+                        "gitlab" -> "https://gitlab.com/api/v4"
+                        "bitbucket" -> "https://api.bitbucket.org/2.0"
+                        "circleci" -> "https://circleci.com/api/v2"
+                        "codemagic" -> "https://api.codemagic.io"
+                        "bitrise" -> "https://api.bitrise.io"
+                        "googlecloud" -> "https://cloudbuild.googleapis.com"
+                        "azure" -> "https://dev.azure.com"
+                        else -> throw IllegalStateException("Неизвестный сервис")
+                    }
+                    val url = base + path
+                    val client = okhttp3.OkHttpClient.Builder().connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS).readTimeout(60, java.util.concurrent.TimeUnit.SECONDS).build()
+                    val needsBody = method == "POST" || method == "PUT" || method == "PATCH"
+                    val rb = if (needsBody) (if (body.isEmpty()) "{}" else body).toRequestBody("application/json".toMediaType()) else null
+                    val req = okhttp3.Request.Builder().url(url).header("Authorization", "Bearer $token").method(method, rb).build()
+                    client.newCall(req).execute().use { r ->
+                        val bytes = r.body?.bytes() ?: ByteArray(0)
+                        val txt = String(bytes, Charsets.UTF_8)
+                        o.put("status", r.code)
+                        try { o.put("body", org.json.JSONObject(txt)) } catch (_: Exception) { o.put("body", org.json.JSONObject().put("message", txt.take(400))) }
+                    }
+                } catch (e: Exception) { o.put("error", e.message ?: e.toString()) }
+                emit("ci-resp", o)
+            }
+        }
+
         @JavascriptInterface fun resetConfig() {
             runOnUiThread {
                 val u = uid()

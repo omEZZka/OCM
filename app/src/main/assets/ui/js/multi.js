@@ -72,6 +72,7 @@ O.openMultimodal=()=>{
 O.mmEditor=(a,done)=>{
   const isNew=!a;
   a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,roles:[]};
+  a.roles=Array.isArray(a.roles)?a.roles:[];
   const body=h('div');
   const s=O.sheet(isNew?O.tr('New multimodal agent','Новый мультимодальный агент'):O.tr('Edit multimodal agent','Редактирование агента'),body,{full:true});
   const nameInp=h('input',{type:'text',placeholder:O.tr('Agent name, e.g. Translation team','Название, например Команда перевода'),value:a.name||''});
@@ -89,15 +90,15 @@ O.mmEditor=(a,done)=>{
     a.roles.forEach((r,i)=>{
       card.append(h('div',{class:'settings-row'},
         h('div',{class:'settings-row-icon blue'},O.icon('user')),
-        h('button',{class:'settings-row-text',style:{textAlign:'left'},onclick:()=>O.mmRoleEditor(r,ok=>{if(ok)draw()})},
+         h('button',{class:'settings-row-text',style:{textAlign:'left'},onclick:()=>O.mmRoleEditor(r,(ok,next)=>{if(ok&&next){a.roles[i]=next;draw()}})},
           h('b',null,r.name||O.tr('Unnamed role','Роль без названия')),
           h('span',null,r.model?mName(r.model):O.tr('Lead model will be used','Будет использована главная модель'))),
         h('button',{class:'ibtn s',onclick:()=>{a.roles.splice(i,1);draw()}},O.icon('trash'))));
     });
     rolesEl.append(card);
     rolesEl.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{
-      if(a.roles.length+1>=MAX){O.toast(O.tr('Limit: up to 7 models including the lead','Лимит: до 7 моделей вместе с главной'),3000);return}
-      O.mmRoleEditor({},ok=>{if(ok)draw()});
+      if(a.roles.length>=MAX-1){O.toast(O.tr('Limit: up to 7 models including the lead','Лимит: до 7 моделей вместе с главной'),3000);return}
+      O.mmRoleEditor({},(ok,next)=>{if(ok&&next){a.roles.push(next);draw()}});
     }},O.icon('plus'),O.tr('Add role','Добавить роль')));
   };
   body.append(h('div',{class:'field'},h('label',null,O.tr('Name','Название')),nameInp),

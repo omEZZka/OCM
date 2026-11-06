@@ -40,7 +40,8 @@ O.openSettings=()=>{
     O.listRow('cpu',O.tr('Active Model','Текущая модель'),S.model?S.model.providerID+'/'+S.model.modelID:O.tr('Not selected','Не выбрана'),O.icon('chevR'),()=>O.openModels()),
     O.listRow('key',O.tr('Connect Providers','Подключить провайдеров'),'OpenCode Zen, OpenAI, Anthropic, Gemini, DeepSeek...',O.icon('chevR'),()=>O.openConnect()),
     O.listRow('search',O.tr('Custom API Provider','Свой API провайдер'),'OpenAI-compatible, Groq, OpenRouter...',O.icon('chevR'),()=>O.openCustomProvider(s)),
-    O.listRow('bot',O.tr('Multimodality','Мультимодальность'),O.tr('Team agents: lead model + role models','Командные агенты: главная модель + модели ролей'),O.icon('chevR'),()=>O.openMultimodal())
+    O.listRow('bot',O.tr('Multimodality','Мультимодальность'),O.tr('Team agents: lead model + role models','Командные агенты: главная модель + модели ролей'),O.icon('chevR'),()=>O.openMultimodal()),
+    O.listRow('cloud',O.tr('Remote Builds','Удалённая сборка'),O.tr('GitHub, GitLab, Bitbucket, CircleCI, Azure, Codemagic, Bitrise, GCB','Удалённая сборка APK по токену'),O.icon('chevR'),()=>O.openRemoteBuilds())
   );
   body.append(modelsCard);
 
