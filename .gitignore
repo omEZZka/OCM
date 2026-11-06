@@ -1,0 +1,14 @@
+build/
+.gradle/
+local.properties
+*.apk
+runtime-info.txt
+notes.md
+app/src/main/jniLibs/
+app/src/main/assets/rootfs.tar.xz
+app/src/main/assets/rootfs.id
+app/src/main/assets/ui/vendor/
+app/src/main/assets/ui/icons/files/
+
+__pycache__/
+*.pyc

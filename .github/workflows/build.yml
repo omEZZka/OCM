@@ -1,0 +1,109 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VERSION_NAME: "2.0.1"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # setup-android@v3 is broken: it runs `sdkmanager tools` and Google removed
+      # the legacy 'tools' package from the SDK repository ("Failed to find package 'tools'").
+      # The ubuntu-24.04 runner already ships the SDK; we only accept licenses
+      # and install the exact components this project needs.
+      - name: Android SDK (licenses + components)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKM" ] || SDKM="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -n1)"
+          echo "sdkmanager: $SDKM"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Runtime (proot + Linux rootfs + opencode 1.x)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/build-runtime.sh
+
+      - name: UI assets (libraries and file icons)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/fetch-ui-deps.sh
+
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          PASS="${KEYSTORE_PASSWORD:-opencodemob}"
+          if [ -n "$KEYSTORE_BASE64" ]; then echo "$KEYSTORE_BASE64" | base64 -d > keystore/release.jks; fi
+          if [ ! -f keystore/release.jks ]; then
+            echo "::warning::No keystore in repo or secrets - generated a throwaway one. OTA updates will not install over older builds."
+            keytool -genkeypair -alias opencodemob -keyalg RSA -keysize 2048 -validity 36500 \
+              -keystore keystore/release.jks -storepass "$PASS" -keypass "$PASS" \
+              -dname "CN=OpenCode Mobile, O=OpenCodeMob, C=RU"
+          fi
+          echo "Register this SHA-1 in the Google Cloud Android OAuth client:"
+          keytool -list -v -keystore keystore/release.jks -storepass "$PASS" | grep -E "SHA1:"
+
+      - name: Build APK
+        env:
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          # Stay above every previously published versionCode (the 1.1.x upstream-client line
+          # reached 29887625), so this build installs over anything shipped before it.
+          CODE=$((29887625 + GITHUB_RUN_NUMBER))
+          gradle :app:assembleRelease --no-daemon -PappVersionName="$VERSION_NAME" -PappVersionCode="$CODE"
+          cp app/build/outputs/apk/release/app-release.apk "OpenCode-${VERSION_NAME}-${CODE}.apk"
+          {
+            echo "OpenCode Mobile ${VERSION_NAME} — Релиз v2.0.1"
+            echo
+            echo "Core: opencode $(grep opencode_core runtime-info.txt | cut -d= -f2) (1.x line) + Linux rootfs proot"
+            echo
+            echo "Что нового:"
+            echo "- 🚀 Высокая производительность и стабильность: чистое ядро OpenCode без избыточных зависимостей"
+            echo "- ⚡ 120Hz HUD: сверхплавный мобильный интерфейс с поддержкой высокой частоты кадров"
+            echo "- 🌐 Встроенный Веб-Предпросмотр: запуск сайтов и HTML/CSS/JS проектов прямо в приложении"
+            echo "- 📱 Интеграция с Android: запуск системных и сторонних приложений напрямую агентом"
+            echo "- 📊 Автоматический подсчёт изменений: вывод строк +N -M в ответах ассистента"
+            echo "- 🛡️ Полная безопасность и изоляция окружения"
+            echo
+            echo "Telegram: https://t.me/OpenCodeMob"
+          } > notes.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: OpenCode ${{ env.VERSION_NAME }} (build ${{ github.run_number }})
+          body_path: notes.md
+          files: OpenCode-*.apk
+          make_latest: true
