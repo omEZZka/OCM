@@ -1014,7 +1014,7 @@ class MainActivity : ComponentActivity() {
                     if (launch != null) startActivity(launch)
                 } catch (_: Exception) {}
                 ui.postDelayed({
-                    try { Runtime.getRuntime().exit(0) } catch (_: Exception) {}
+                    try { java.lang.Runtime.getRuntime().exit(0) } catch (_: Exception) {}
                     try { android.os.Process.killProcess(android.os.Process.myPid()) } catch (_: Exception) {}
                 }, 350)
             }
