@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION_NAME: "2.0.4"
+  VERSION_NAME: "2.0.5"
 
 jobs:
   build:
@@ -80,7 +80,7 @@ jobs:
         run: |
           # Stay above every previously published versionCode (the 1.1.x upstream-client line
           # reached 29887625), so this build installs over anything shipped before it.
-          CODE=$((29887625 + GITHUB_RUN_NUMBER))
+          CODE=$((29888000 + GITHUB_RUN_NUMBER))
           gradle :app:assembleRelease --no-daemon -PappVersionName="$VERSION_NAME" -PappVersionCode="$CODE"
           cp app/build/outputs/apk/release/app-release.apk "OpenCode-${VERSION_NAME}-${CODE}.apk"
           {
