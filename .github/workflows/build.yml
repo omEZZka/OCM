@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION_NAME: "2.0.1"
+  VERSION_NAME: "2.0.3"
 
 jobs:
   build:
@@ -84,7 +84,7 @@ jobs:
           gradle :app:assembleRelease --no-daemon -PappVersionName="$VERSION_NAME" -PappVersionCode="$CODE"
           cp app/build/outputs/apk/release/app-release.apk "OpenCode-${VERSION_NAME}-${CODE}.apk"
           {
-            echo "OpenCode Mobile ${VERSION_NAME} — Релиз v2.0.1"
+            echo "OpenCode Mobile ${VERSION_NAME} — Релиз v2.0.3"
             echo
             echo "Core: opencode $(grep opencode_core runtime-info.txt | cut -d= -f2) (1.x line) + Linux rootfs proot"
             echo
