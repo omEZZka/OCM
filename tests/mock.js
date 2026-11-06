@@ -67,3 +67,16 @@ window.__onPrompt=b=>{const sid='ses_1';const P=(part)=>__push({type:'message.pa
   __push({type:'session.diff',properties:{sessionID:sid,diff:[{file:'main.py',before:'x\n',after:'y\n',additions:1,deletions:1}]}});
   __push({type:'session.idle',properties:{sessionID:sid}})},60)};
 })();
+
+// ---- remote CI (ci.js) ----
+const ciStore = {};
+OC.ciState = () => {
+  const out = {};
+  for (const k of Object.keys(ciStore)) out[k.replace(/^ci_/, '')] = { connected: true, token: ciStore[k] };
+  return JSON.stringify(out);
+};
+OC.ciSaveToken = (id, provider, token) => { ciStore['ci_' + provider] = token; setTimeout(() => OCEvent && OCEvent('ci-save', { id, ok: true }), 30); };
+OC.ciClearToken = provider => { delete ciStore['ci_' + provider]; };
+OC.ciRequest = (id, provider, method, path, body) => {
+  setTimeout(() => OCEvent && OCEvent('ci-resp', { id, status: 200, body: { login: 'mock-user', message: 'ok' } }), 50);
+};

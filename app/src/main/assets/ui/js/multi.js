@@ -71,8 +71,9 @@ O.openMultimodal=()=>{
 // ---- editor ----
 O.mmEditor=(a,done)=>{
   const isNew=!a;
-  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,roles:[]};
+  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,backup:null,roles:[]};
   a.roles=Array.isArray(a.roles)?a.roles:[];
+  if(!a.backup)a.backup=null;
   const body=h('div');
   const s=O.sheet(isNew?O.tr('New multimodal agent','Новый мультимодальный агент'):O.tr('Edit multimodal agent','Редактирование агента'),body,{full:true});
   const nameInp=h('input',{type:'text',placeholder:O.tr('Agent name, e.g. Translation team','Название, например Команда перевода'),value:a.name||''});
@@ -81,9 +82,15 @@ O.mmEditor=(a,done)=>{
     h('div',{class:'settings-row-text'},h('b',null,O.tr('Lead model','Главная модель')),
       h('span',{id:'mm-main-sub'},a.main?mName(a.main):O.tr('Distributes tasks between roles','Распределяет задачу между ролями'))),
     O.icon('chevR'));
+  const backupRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(a.backup,m=>{a.backup=m;draw()})},
+    h('div',{class:'settings-row-icon'},O.icon('swap')),
+    h('div',{class:'settings-row-text'},h('b',null,O.tr('Backup lead model','Запасная главная модель')),
+      h('span',{id:'mm-backup-sub'},a.backup?mName(a.backup):O.tr('Used when the lead model fails','Включается, если главная модель дала сбой'))),
+    O.icon('chevR'));
   const rolesEl=h('div');
   const draw=()=>{
     const sub=mainRow.querySelector('#mm-main-sub');if(sub)sub.textContent=a.main?mName(a.main):O.tr('Not selected — tap to choose','Не выбрана — нажмите, чтобы выбрать');
+    const bsub=backupRow.querySelector('#mm-backup-sub');if(bsub)bsub.textContent=a.backup?mName(a.backup):O.tr('Not set','Не задана');
     rolesEl.textContent='';
     const card=h('div',{class:'settings-card'});
     if(!a.roles.length)card.append(h('div',{class:'mut',style:{padding:'14px 16px'}},O.tr('No roles yet. Add up to 6 — together with the lead model an agent can use up to 7 models.','Ролей пока нет. Добавьте до 6 — вместе с главной моделью агент может использовать до 7 моделей.')));
@@ -103,7 +110,7 @@ O.mmEditor=(a,done)=>{
   };
   body.append(h('div',{class:'field'},h('label',null,O.tr('Name','Название')),nameInp),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Lead model','Главная модель')),
-    h('div',{class:'settings-card'},mainRow),
+    h('div',{class:'settings-card'},mainRow,backupRow),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Roles','Роли')),
     rolesEl,
     h('button',{class:'btn pri wide',style:{marginTop:'14px'},onclick:()=>{
@@ -120,6 +127,7 @@ O.mmEditor=(a,done)=>{
 
 O.mmRoleEditor=(r,done)=>{
   r=Object.assign({},r);
+  r.backups=Array.isArray(r.backups)?r.backups.filter(Boolean):[];
   const body=h('div');
   const s=O.sheet(r.name?O.tr('Edit role','Редактирование роли'):O.tr('New role','Новая роль'),body,{full:true});
   const nameInp=h('input',{type:'text',placeholder:O.tr('Role, e.g. Translator, Critic, Coder','Роль, например Переводчик, Критик, Кодер'),value:r.name||''});
@@ -130,15 +138,26 @@ O.mmRoleEditor=(r,done)=>{
     O.icon('chevR'));
   const promptTa=h('textarea',{rows:6,class:'mono',placeholder:O.tr('System prompt for this role (optional)','Промпт роли (необязательно)')});
   promptTa.value=r.prompt||'';
-  const draw=()=>{const sub=modelRow.querySelector('#mm-role-sub');if(sub)sub.textContent=r.model?mName(r.model):O.tr('Optional — lead model by default','Необязательно — по умолчанию главная')};
+  const bEl=h('div',{class:'mm-bups',style:{padding:'6px 12px 10px'}});
+  const drawB=()=>{
+    bEl.textContent='';
+    const wrap=h('div',{class:'fchips'});
+    r.backups.forEach((bm,i)=>wrap.append(h('span',{class:'chip keep',style:{fontSize:'12px'}},mName(bm),
+      h('button',{class:'chip-x',style:{marginLeft:'4px',opacity:'.55'},onclick:()=>{r.backups.splice(i,1);drawB()}},O.icon('x')))));
+    if(r.backups.length<3)wrap.append(h('button',{class:'chip',style:{fontSize:'12px'},onclick:()=>O.mmPickModel(r.backups[r.backups.length-1],m=>{r.backups.push(m);drawB()})},
+      h('span',{class:'ic'},O.icon('plus')),h('span',null,O.tr('backup','запасная'))));
+    bEl.append(wrap);
+  };
+  const draw=()=>{const sub=modelRow.querySelector('#mm-role-sub');if(sub)sub.textContent=r.model?mName(r.model):O.tr('Optional — lead model by default','Необязательно — по умолчанию главная');drawB()};
   body.append(h('div',{class:'field'},h('label',null,O.tr('Role name','Название роли')),nameInp),
     h('div',{class:'field'},h('label',null,O.tr('Prompt (optional)','Промпт (необязательно)')),promptTa),
     h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Role model','Модель роли')),
-    h('div',{class:'settings-card'},modelRow),
+    h('div',{class:'settings-card'},modelRow,bEl),
     h('button',{class:'btn pri wide',style:{marginTop:'14px'},onclick:()=>{
       r.name=nameInp.value.trim();
       if(!r.name){O.toast(O.tr('Enter a role name','Введите название роли'));return}
       r.prompt=promptTa.value.trim();
+      r.backups=r.backups.slice(0,3);
       done(true,r);s.close();
     }},O.tr('Save','Сохранить')));
   draw();
@@ -204,16 +223,25 @@ O.mmSend=async(text,parts)=>{
   bus.emit('msg',sid,m);
   const post=(body)=>api('POST','/session/'+sid+'/prompt_async',Object.assign({agent:S.agent,variant:S.variant||undefined},body),{timeout:30000});
   try{
-    // step 1: lead model makes the plan
+    // step 1: lead model makes the plan; on failure fall back to the backup lead
     const roleLines=mm.roles.map(r=>' - '+r.name+(r.prompt?': '+String(r.prompt).slice(0,200):'')).join('\n');
     const planInstr=PLAN_TAG+'\nТы — координатор команды «'+mm.name+'». НЕ решай задачу самостоятельно — распредели её по ролям.\nДоступные роли:\n'+roleLines+
       '\n\nЗапрос пользователя: «'+userText+'»\n\nВерни ТОЛЬКО JSON-план в блоке ```json вида:\n{"tasks":[{"role":"<имя роли>","task":"<что сделать>"}]}\nЗадавай подзадачи только подходящим ролям, каждой — одну чёткую подзадачу.';
-    await post({messageID:O.mid(),model:mm.main,parts:[{type:'text',text:planInstr}]});
-    await mmWaitIdle([sid],run);
-    if(run.abort)throw new Error('aborted');
-    const planText=await mmLastAssistant(sid);
-    const plan=mmParsePlan(planText,mm);
-    if(!plan.length){O.mm.run=null;return true} // lead answered directly — done
+    const leadModels=[mm.main,mm.backup].filter(Boolean);
+    let plan=null,planText='',leadUsed=null;
+    for(const lead of leadModels){
+      await post({messageID:O.mid(),model:lead,parts:[{type:'text',text:planInstr}]});
+      await mmWaitIdle([sid],run);
+      if(run.abort)throw new Error('aborted');
+      let err=false;try{const st=await api('GET','/session/status',null,{timeout:6000});err=!!(st[sid]&&st[sid].type==='error')}catch(e){}
+      planText=await mmLastAssistant(sid);
+      plan=err?null:mmParsePlan(planText,mm);
+      if(plan&&plan.length){leadUsed=lead;break}
+      if(err&&leadModels[leadModels.indexOf(lead)+1])continue; // quota/error → try backup lead
+      if(!err)break; // direct answer (no plan) — done
+      leadUsed=lead
+    }
+    if(!plan||!plan.length){O.mm.run=null;return true} // lead answered directly — done
     // step 2: spawn subagent sessions per role
     const jobs=[];
     for(const t of plan){
@@ -223,23 +251,47 @@ O.mmSend=async(text,parts)=>{
         const rtext='Ты — «'+t.role.name+'» в команде «'+mm.name+'».\n'+(t.role.prompt||'')+
           '\n\nЗадача от координатора: '+t.task+'\nИсходный запрос пользователя: «'+userText+'»\n\nВыполни свою часть и дай конкретный результат.';
         await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:t.role.model||mm.main,parts:[{type:'text',text:rtext}]},{timeout:30000});
-        jobs.push({sid:cs.id,role:t.role.name});
+        jobs.push({sid:cs.id,role:t.role,task:t.task});
         O.toast(O.tr('Role started: ','Роль запущена: ')+t.role.name,1800);
-      }catch(e){jobs.push({sid:null,role:t.role.name,err:e.message||String(e)})}
+      }catch(e){jobs.push({sid:null,role:t.role,task:t.task,err:e.message||String(e)})}
     }
     // step 3: wait for all roles
     await mmWaitIdle(jobs.filter(j=>j.sid).map(j=>j.sid),run);
     if(run.abort)throw new Error('aborted');
+    // step 3.5: fallback per failed role — up to 3 backup models each (sequentially)
+    for(let x=0;x<jobs.length;x++){
+      const j=jobs[x];if(!j.sid)continue;
+      let err=false;try{const st=await api('GET','/session/status',null,{timeout:6000});err=!!(st[j.sid]&&st[j.sid].type==='error')}catch(e){}
+      if(!err)continue;
+      let t='';try{t=await mmLastAssistant(j.sid)}catch(e){}
+      if(t.trim())continue; // errored but produced content — keep it
+      const bups=[j.role.model||mm.main].concat((j.role.backups||[]).filter(Boolean));
+      let done=false;
+      for(const model of bups){
+        if(run.abort)break;
+        try{
+          const cs2=await api('POST','/session',{parentID:sid,title:mm.name+' · '+j.role.name+' · '+O.tr('retry','повтор')});
+          const rtext='Ты — «'+j.role.name+'» в команде «'+mm.name+'».\n'+(j.role.prompt||'')+
+            '\n\nЗадача от координатора: '+j.task+'\nИсходный запрос пользователя: «'+userText+'»\n\nВыполни свою часть и дай конкретный результат.';
+          await api('POST','/session/'+cs2.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model,parts:[{type:'text',text:rtext}]},{timeout:30000});
+          await mmWaitIdle([cs2.id],run,420000);
+          if(run.abort)break;
+          const t2=await mmLastAssistant(cs2.id).catch(()=>'');
+          if(t2.trim()){jobs[x]={sid:cs2.id,role:j.role,task:j.task};done=true;break}
+        }catch(e){}
+      }
+      if(!done){try{await api('DELETE','/session/'+j.sid,{})}catch(e){}jobs[x]={sid:null,role:j.role,err:O.tr('primary and backup models failed','основная и запасные модели не сработали')}}
+    }
     // step 4: final synthesis by the lead model
     const results=[];
     for(const j of jobs){
-      if(!j.sid){results.push('['+j.role+']: (ошибка запуска: '+j.err+')');continue}
+      if(!j.sid){results.push('['+j.role.name+']: (ошибка запуска: '+(j.err||'нет ответа')+')');continue}
       let t='';try{t=await mmLastAssistant(j.sid)}catch(e){}
-      results.push('['+j.role+']:\n'+(t||'(нет ответа)'));
+      results.push('['+j.role.name+']:\n'+(t||'(нет ответа)'));
     }
     const finInstr=PLAN_TAG+' — ФИНАЛ\nРоли команды «'+mm.name+'» завершили подзадачи. Их результаты:\n\n'+results.join('\n\n')+
       '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ для пользователя: что сделано и итог. Без служебных пометок.';
-    await post({messageID:O.mid(),model:mm.main,parts:[{type:'text',text:finInstr}]});
+    await post({messageID:O.mid(),model:leadUsed||mm.main,parts:[{type:'text',text:finInstr}]});
     O.mm.run=null;
   }catch(e){
     O.mm.run=null;
