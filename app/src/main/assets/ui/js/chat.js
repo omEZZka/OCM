@@ -1,6 +1,6 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
-let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot;
+let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,mmChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
 let atts=[],mentions=[],stick=true,revKey='',trail=[];
 O.rel=p=>{p=String(p||'');return S.dir&&p.startsWith(S.dir+'/')?p.slice(S.dir.length+1):p};
@@ -22,10 +22,11 @@ O.chatInit=root=>{
   const plusBtn=h('button',{class:'attach-btn',onclick:()=>fileIn.click()},O.icon('plus'));
   agentChip=h('button',{class:'hud-pill agent-pill',onclick:()=>O.openAgents()},h('span',null,'Build'),O.icon('chevD'));
   if(agentChip._mmWatch===undefined){agentChip._mmWatch=1;bus.on('mm',updateChips)}
+  mmChip=h('button',{class:'hud-pill mm-pill hide',onclick:()=>O.openMultimodalPicker()},O.icon('bot'),h('span',null,'MM'),O.icon('chevD'));
   modelChip=h('button',{class:'hud-pill model-pill',onclick:()=>O.openModels()},h('span',null,O.tr('Select model','Выбрать модель')),O.icon('chevD'));
   const micBtn=h('button',{class:'hud-icon-btn mic-btn',onclick:onMic},O.icon('mic'));
   sendBtn=h('button',{id:'send',onclick:onSend},O.icon('send'));
-  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentChip,modelChip);
+  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentChip,mmChip,modelChip);
   const cbarRight=h('div',{class:'cbar-right'},micBtn,sendBtn);
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
@@ -440,6 +441,13 @@ function updateChips(){
   const spanAg=agentChip.querySelector('span');
   if(spanAg){spanAg.textContent=agName.charAt(0).toUpperCase()+agName.slice(1);
     agentChip.classList.toggle('mm-on',!!mmA)}
+  if(mmChip){
+    const list=O.mmList?O.mmList():[];
+    mmChip.classList.toggle('hide',!list.length);
+    mmChip.classList.toggle('mm-on',!!mmA);
+    const sp=mmChip.querySelector('span');
+    if(sp)sp.textContent=mmA?mmA.name:'MM';
+  }
   let mName=O.tr('Select model','Выбрать модель');
   if(mi)mName=mi.name||m.modelID;
   else if(m)mName=m.modelID;

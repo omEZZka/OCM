@@ -88,7 +88,7 @@ O.setTab=t=>{
 
 O.calcSessionTokens=sid=>{
   const msgs=O.visibleMsgs(sid||S.sid);
-  let input=0,output=0,reasoning=0,total=0;
+  let input=0,output=0,reasoning=0,total=0,cost=0;
   for(const m of msgs){
     const info=m.info;
     if(info&&info.tokens){
@@ -96,10 +96,11 @@ O.calcSessionTokens=sid=>{
       output+=(info.tokens.output||0);
       reasoning+=(info.tokens.reasoning||0);
     }
+    if(info&&typeof info.cost==='number')cost+=info.cost;
   }
   total=input+output+reasoning;
   const usage=O.contextUsage(sid||S.sid);
-  return{input,output,reasoning,total,pct:usage?usage.pct:null,lim:usage?usage.lim:null};
+  return{input,output,reasoning,total,cost,pct:usage?usage.pct:null,lim:usage?usage.lim:null};
 };
 
 O.openTokensModal=()=>{
@@ -129,7 +130,12 @@ O.openTokensModal=()=>{
       h('div',{class:'settings-row-icon purple'},O.icon('memory')),
       h('div',{class:'settings-row-text'},
         h('b',null,O.tr('Context Window Utilization','Заполненность контекста')),
-        h('span',null,tok.pct+'%'+(tok.lim?' / '+O.fmtK(tok.lim)+' tok':'')))):null
+        h('span',null,tok.pct+'%'+(tok.lim?' / '+O.fmtK(tok.lim)+' tok':'')))):null,
+    tok.cost>0?h('div',{class:'settings-row'},
+      h('div',{class:'settings-row-icon green'},O.icon('star')),
+      h('div',{class:'settings-row-text'},
+        h('b',null,O.tr('Session Cost','Стоимость сессии')),
+        h('span',null,'$'+tok.cost.toFixed(4)))):null
   );
   O.sheet(O.tr('Token Statistics','Статистика токенов'),card);
 };
@@ -200,6 +206,17 @@ O.on('server',d=>{
     try{OC.sseStart()}catch(e){}
     refreshStatus();
   }
+});
+
+O.on('share',d=>{
+  if(!d||!d.text)return;
+  const go=()=>{
+    if(!built){setTimeout(go,200);return}
+    O.setTab('chat');
+    if(O.insertText)O.insertText(d.text);
+    O.toast(O.tr('Shared text inserted','Текст из другого приложения вставлен'),1800);
+  };
+  go();
 });
 
 const baseBack=O.back;

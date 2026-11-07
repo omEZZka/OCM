@@ -15,15 +15,17 @@ const mStr=m=>m?(m.providerID+'/'+m.modelID):'';
 const mName=m=>{if(!m)return'';const mi=O.modelInfo(m.providerID,m.modelID);return mi?(mi.name||m.modelID):m.modelID};
 
 // ---- model picker (does not touch global S.model) ----
-O.mmPickModel=(cur,cb)=>{
+O.mmPickModel=(cur,cb,opts)=>{
+  opts=opts||{};
   let filterText='';
   const listEl=h('div');
   const q=h('input',{placeholder:O.tr('Search models...','Поиск моделей...'),oninput:e=>{filterText=e.target.value.toLowerCase();draw()},style:{marginBottom:'8px'}});
   const s=O.sheet(O.tr('Select model','Выбор модели'),h('div',null,q,listEl),{hud:true,full:true});
   function draw(){
     listEl.textContent='';
-    const all=O.allModels();
-    if(!all.length){listEl.append(h('div',{class:'mut',style:{padding:'24px 16px',textAlign:'center'}},O.tr('No models available. Connect a provider first.','Моделей пока нет. Сначала подключите провайдера.')));return}
+    let all=O.allModels();
+    if(opts.freeOnly)all=all.filter(x=>O.isModelFree(x));
+    if(!all.length){listEl.append(h('div',{class:'mut',style:{padding:'24px 16px',textAlign:'center'}},opts.freeOnly?O.tr('No free models available.','Бесплатных моделей нет.'):O.tr('No models available. Connect a provider first.','Моделей пока нет. Сначала подключите провайдера.')));return}
     let items=filterText?all.filter(x=>(x.name+' '+x.mid+' '+(x.pname||x.pid)).toLowerCase().includes(filterText)):all;
     const ck=mStr(cur);
     items.sort((a,b)=>{const aOn=(a.pid+'/'+a.mid)===ck,bOn=(b.pid+'/'+b.mid)===ck;return aOn!==bOn?(aOn?-1:1):(a.name||a.mid).localeCompare(b.name||b.mid)});
@@ -39,6 +41,29 @@ O.mmPickModel=(cur,cb)=>{
   draw();
 };
 
+// ---- quick picker from the chat MM chip ----
+O.openMultimodalPicker=()=>{
+  const list=O.mmList();
+  const body=h('div');
+  const s=O.sheet(O.tr('Multimodal agents','Мультимодальные агенты'),body,{hud:true});
+  const card=h('div',{class:'group-card'});
+  const act=O.mmActiveId();
+  if(!list.length){
+    body.append(h('div',{class:'mut',style:{padding:'20px 14px',textAlign:'center'}},O.tr('No multimodal agents yet.','Мультимодальных агентов пока нет.')));
+  }else{
+    list.forEach(a=>{const on=act===a.id;
+      card.append(h('button',{class:'model-row'+(on?' on':''),onclick:()=>{O.mmSetActive(on?null:a.id);s.close();O.toast(on?O.tr('Multimodal agent off','Мультимодальный агент выключен'):(O.tr('Multimodal agent on: ','Мультимодальный агент включён: ')+a.name),2000)}},
+        h('div',{class:'model-row-left'},
+          h('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},
+            h('span',{class:'model-row-title'},a.name),
+            h('span',{class:'badge-model badge-free'},'MM')),
+          h('span',{class:'model-row-sub'},O.tr('Lead: ','Главная: ')+(a.main?mName(a.main):O.tr('active session model','модель активной сессии'))+' · '+a.roles.length+' '+O.tr('role(s)','рол(ей)'))),
+        on?O.icon('check','model-check'):null))});
+    body.append(card);
+  }
+  body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{s.close();O.openMultimodal()}},O.icon('sliders'),O.tr('Manage agents','Управление агентами')));
+};
+
 // ---- settings: list of multimodal agents ----
 O.openMultimodal=()=>{
   const body=h('div');
@@ -47,21 +72,24 @@ O.openMultimodal=()=>{
   function redraw(){
     body.textContent='';
     const list=O.mmList();
+    const act=O.mmActiveId();
     if(!list.length){
       body.append(h('div',{class:'mut',style:{padding:'28px 16px',textAlign:'center'}},
         h('p',null,O.tr('No multimodal agents yet. Create one: pick a lead model that delegates work to role models.','Мультимодальных агентов пока нет. Создайте первого: главная модель будет распределять задачи между ролями.'))));
     }else{
       const card=h('div',{class:'settings-card'});
       list.forEach(a=>{
-        card.append(O.listRow('bot',a.name,
-          O.tr('Lead: ','Главная: ')+mName(a.main)+' · '+a.roles.length+' '+O.tr('role(s)','рол(ей)'),
-          O.icon('chevR'),()=>O.mmEditor(a,redraw)));
+        const on=act===a.id;
+        card.append(h('div',{class:'settings-row'+(on?' on':'')},
+          h('button',{class:'settings-row-text',style:{textAlign:'left'},onclick:()=>O.mmEditor(a,redraw)},
+            h('b',null,a.name),
+            h('span',null,O.tr('Lead: ','Главная: ')+(a.main?mName(a.main):O.tr('active session model','модель активной сессии'))+' · '+a.roles.length+' '+O.tr('role(s)','рол(ей)')+(a.freeOnly?' · '+O.tr('free only','только бесплатные'):''))),
+          h('button',{class:'ibtn s',onclick:()=>{O.mmSetActive(on?null:a.id);redraw()}},on?O.icon('check','ok'):O.icon('play'))));
       });
       body.append(card);
-      const act=O.mmActiveId();
       body.append(h('div',{class:'note',style:{margin:'10px 2px'}},
-        act?O.tr('Active in chat: ','Активен в чате: ')+(list.find(x=>x.id===act)||{}).name+'. '+O.tr('Switch agents via the agent chip in the chat input.','Переключение — чипом агента в поле ввода чата.')
-           :O.tr('None is active. Activate one via the agent chip in the chat input.','Ни один не активен. Включите через чип агента в поле ввода чата.')));
+        act?O.tr('Active in chat: ','Активен в чате: ')+(list.find(x=>x.id===act)||{}).name+'. '+O.tr('Switch via the MM chip in the chat input.','Переключение — чипом MM в поле ввода чата.')
+           :O.tr('None is active. Activate one via the MM chip in the chat input.','Ни один не активен. Включите через чип MM в поле ввода чата.')));
     }
     body.append(h('button',{class:'btn pri wide',style:{marginTop:'6px'},onclick:()=>O.mmEditor(null,()=>redraw())},O.icon('plus'),O.tr('Add module','Добавить модуль')));
   }
@@ -71,25 +99,28 @@ O.openMultimodal=()=>{
 // ---- editor ----
 O.mmEditor=(a,done)=>{
   const isNew=!a;
-  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,backup:null,roles:[]};
+  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,backup:null,freeOnly:false,roles:[]};
   a.roles=Array.isArray(a.roles)?a.roles:[];
   if(!a.backup)a.backup=null;
+  const pickOpts=()=>({freeOnly:a.freeOnly});
   const body=h('div');
   const s=O.sheet(isNew?O.tr('New multimodal agent','Новый мультимодальный агент'):O.tr('Edit multimodal agent','Редактирование агента'),body,{full:true});
   const nameInp=h('input',{type:'text',placeholder:O.tr('Agent name, e.g. Translation team','Название, например Команда перевода'),value:a.name||''});
-  const mainRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(a.main,m=>{a.main=m;draw()})},
+  const mainRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(a.main,m=>{a.main=m;draw()},pickOpts())},
     h('div',{class:'settings-row-icon purple'},O.icon('cpu')),
     h('div',{class:'settings-row-text'},h('b',null,O.tr('Lead model','Главная модель')),
-      h('span',{id:'mm-main-sub'},a.main?mName(a.main):O.tr('Distributes tasks between roles','Распределяет задачу между ролями'))),
+      h('span',{id:'mm-main-sub'},a.main?mName(a.main):O.tr('Empty — uses the active session model','Пусто — берётся модель активной сессии'))),
     O.icon('chevR'));
-  const backupRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(a.backup,m=>{a.backup=m;draw()})},
+  const backupRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(a.backup,m=>{a.backup=m;draw()},pickOpts())},
     h('div',{class:'settings-row-icon'},O.icon('swap')),
     h('div',{class:'settings-row-text'},h('b',null,O.tr('Backup lead model','Запасная главная модель')),
       h('span',{id:'mm-backup-sub'},a.backup?mName(a.backup):O.tr('Used when the lead model fails','Включается, если главная модель дала сбой'))),
     O.icon('chevR'));
+  const freeRow=O.toggleRow('star',O.tr('Only free models','Только бесплатные модели'),O.tr('Hide paid models in every picker','Скрывать платные модели во всех выборах'),!!a.freeOnly,v=>{a.freeOnly=v;draw()});
+  a.freeOnly=!!a.freeOnly;
   const rolesEl=h('div');
   const draw=()=>{
-    const sub=mainRow.querySelector('#mm-main-sub');if(sub)sub.textContent=a.main?mName(a.main):O.tr('Not selected — tap to choose','Не выбрана — нажмите, чтобы выбрать');
+    const sub=mainRow.querySelector('#mm-main-sub');if(sub)sub.textContent=a.main?mName(a.main):O.tr('Empty — uses the active session model','Пусто — берётся модель активной сессии');
     const bsub=backupRow.querySelector('#mm-backup-sub');if(bsub)bsub.textContent=a.backup?mName(a.backup):O.tr('Not set','Не задана');
     rolesEl.textContent='';
     const card=h('div',{class:'settings-card'});
@@ -97,7 +128,7 @@ O.mmEditor=(a,done)=>{
     a.roles.forEach((r,i)=>{
       card.append(h('div',{class:'settings-row'},
         h('div',{class:'settings-row-icon blue'},O.icon('user')),
-         h('button',{class:'settings-row-text',style:{textAlign:'left'},onclick:()=>O.mmRoleEditor(r,(ok,next)=>{if(ok&&next){a.roles[i]=next;draw()}})},
+         h('button',{class:'settings-row-text',style:{textAlign:'left'},onclick:()=>O.mmRoleEditor(r,(ok,next)=>{if(ok&&next){a.roles[i]=next;draw()}},pickOpts())},
           h('b',null,r.name||O.tr('Unnamed role','Роль без названия')),
           h('span',null,r.model?mName(r.model):O.tr('Lead model will be used','Будет использована главная модель'))),
         h('button',{class:'ibtn s',onclick:()=>{a.roles.splice(i,1);draw()}},O.icon('trash'))));
@@ -105,18 +136,17 @@ O.mmEditor=(a,done)=>{
     rolesEl.append(card);
     rolesEl.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{
       if(a.roles.length>=MAX-1){O.toast(O.tr('Limit: up to 7 models including the lead','Лимит: до 7 моделей вместе с главной'),3000);return}
-      O.mmRoleEditor({},(ok,next)=>{if(ok&&next){a.roles.push(next);draw()}});
+      O.mmRoleEditor({},(ok,next)=>{if(ok&&next){a.roles.push(next);draw()}},pickOpts());
     }},O.icon('plus'),O.tr('Add role','Добавить роль')));
   };
   body.append(h('div',{class:'field'},h('label',null,O.tr('Name','Название')),nameInp),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Lead model','Главная модель')),
-    h('div',{class:'settings-card'},mainRow,backupRow),
+    h('div',{class:'settings-card'},mainRow,backupRow,freeRow),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Roles','Роли')),
     rolesEl,
     h('button',{class:'btn pri wide',style:{marginTop:'14px'},onclick:()=>{
       a.name=nameInp.value.trim();
       if(!a.name){O.toast(O.tr('Enter a name','Введите название'));return}
-      if(!a.main){O.toast(O.tr('Pick the lead model','Выберите главную модель'));return}
       O.mmSave(a);O.toast(O.tr('Saved','Сохранено'),1200);s.close();if(done)done();
     }},O.tr('Save','Сохранить')));
   if(!isNew)body.append(h('button',{class:'btn dng wide',style:{marginTop:'8px'},onclick:async()=>{
@@ -125,13 +155,14 @@ O.mmEditor=(a,done)=>{
   draw();
 };
 
-O.mmRoleEditor=(r,done)=>{
+O.mmRoleEditor=(r,done,opts)=>{
+  opts=opts||{};
   r=Object.assign({},r);
   r.backups=Array.isArray(r.backups)?r.backups.filter(Boolean):[];
   const body=h('div');
   const s=O.sheet(r.name?O.tr('Edit role','Редактирование роли'):O.tr('New role','Новая роль'),body,{full:true});
   const nameInp=h('input',{type:'text',placeholder:O.tr('Role, e.g. Translator, Critic, Coder','Роль, например Переводчик, Критик, Кодер'),value:r.name||''});
-  const modelRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(r.model,m=>{r.model=m;draw()})},
+  const modelRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(r.model,m=>{r.model=m;draw()},opts)},
     h('div',{class:'settings-row-icon purple'},O.icon('cpu')),
     h('div',{class:'settings-row-text'},h('b',null,O.tr('Role model','Модель роли')),
       h('span',{id:'mm-role-sub'},r.model?mName(r.model):O.tr('Optional — lead model by default','Необязательно — по умолчанию главная'))),
@@ -144,7 +175,7 @@ O.mmRoleEditor=(r,done)=>{
     const wrap=h('div',{class:'fchips'});
     r.backups.forEach((bm,i)=>wrap.append(h('span',{class:'chip keep',style:{fontSize:'12px'}},mName(bm),
       h('button',{class:'chip-x',style:{marginLeft:'4px',opacity:'.55'},onclick:()=>{r.backups.splice(i,1);drawB()}},O.icon('x')))));
-    if(r.backups.length<3)wrap.append(h('button',{class:'chip',style:{fontSize:'12px'},onclick:()=>O.mmPickModel(r.backups[r.backups.length-1],m=>{r.backups.push(m);drawB()})},
+    if(r.backups.length<3)wrap.append(h('button',{class:'chip',style:{fontSize:'12px'},onclick:()=>O.mmPickModel(r.backups[r.backups.length-1],m=>{r.backups.push(m);drawB()},opts)},
       h('span',{class:'ic'},O.icon('plus')),h('span',null,O.tr('backup','запасная'))));
     bEl.append(wrap);
   };
@@ -212,13 +243,17 @@ O.mmSend=async(text,parts)=>{
   const mm=O.mmActive();
   if(!mm)return false;
   if(O.mm.run){O.toast(O.tr('Multimodal agent is still running — wait for it to finish','Мультимодальный агент ещё работает — дождитесь завершения'),3000);return true}
+  const sessModel=S.model?{providerID:S.model.providerID,modelID:S.model.modelID}:null;
+  const leadMain=mm.main||sessModel;
+  const leadBackup=mm.backup||null;
+  if(!leadMain){O.toast(O.tr('No model selected — pick a model or set the lead model','Модель не выбрана — выберите модель или задайте главную'),3000);return true}
   const sid=await O.chat.sess();
   const run=O.mm.run={sid,abort:false};
   const fileNames=parts.filter(p=>p.type==='file').map(p=>p.filename||'').filter(Boolean);
   const userText=text+(fileNames.length?'\n(прикреплённые файлы: '+fileNames.join(', ')+')':'');
   // optimistic user bubble
   const mid=O.mid();
-  const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:mm.main});m.local=true;
+  const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:leadMain});m.local=true;
   m.parts=parts.map((p,i)=>Object.assign({id:'prt_local'+i,sessionID:sid,messageID:mid},p));
   bus.emit('msg',sid,m);
   const post=(body)=>api('POST','/session/'+sid+'/prompt_async',Object.assign({agent:S.agent,variant:S.variant||undefined},body),{timeout:30000});
@@ -227,7 +262,7 @@ O.mmSend=async(text,parts)=>{
     const roleLines=mm.roles.map(r=>' - '+r.name+(r.prompt?': '+String(r.prompt).slice(0,200):'')).join('\n');
     const planInstr=PLAN_TAG+'\nТы — координатор команды «'+mm.name+'». НЕ решай задачу самостоятельно — распредели её по ролям.\nДоступные роли:\n'+roleLines+
       '\n\nЗапрос пользователя: «'+userText+'»\n\nВерни ТОЛЬКО JSON-план в блоке ```json вида:\n{"tasks":[{"role":"<имя роли>","task":"<что сделать>"}]}\nЗадавай подзадачи только подходящим ролям, каждой — одну чёткую подзадачу.';
-    const leadModels=[mm.main,mm.backup].filter(Boolean);
+    const leadModels=[leadMain,leadBackup].filter(Boolean);
     let plan=null,planText='',leadUsed=null;
     for(const lead of leadModels){
       await post({messageID:O.mid(),model:lead,parts:[{type:'text',text:planInstr}]});
@@ -250,7 +285,7 @@ O.mmSend=async(text,parts)=>{
         const cs=await api('POST','/session',{parentID:sid,title:mm.name+' · '+t.role.name});
         const rtext='Ты — «'+t.role.name+'» в команде «'+mm.name+'».\n'+(t.role.prompt||'')+
           '\n\nЗадача от координатора: '+t.task+'\nИсходный запрос пользователя: «'+userText+'»\n\nВыполни свою часть и дай конкретный результат.';
-        await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:t.role.model||mm.main,parts:[{type:'text',text:rtext}]},{timeout:30000});
+        await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:t.role.model||leadMain,parts:[{type:'text',text:rtext}]},{timeout:30000});
         jobs.push({sid:cs.id,role:t.role,task:t.task});
         O.toast(O.tr('Role started: ','Роль запущена: ')+t.role.name,1800);
       }catch(e){jobs.push({sid:null,role:t.role,task:t.task,err:e.message||String(e)})}
@@ -265,7 +300,7 @@ O.mmSend=async(text,parts)=>{
       if(!err)continue;
       let t='';try{t=await mmLastAssistant(j.sid)}catch(e){}
       if(t.trim())continue; // errored but produced content — keep it
-      const bups=[j.role.model||mm.main].concat((j.role.backups||[]).filter(Boolean));
+      const bups=[j.role.model||leadMain].concat((j.role.backups||[]).filter(Boolean));
       let done=false;
       for(const model of bups){
         if(run.abort)break;
@@ -291,7 +326,7 @@ O.mmSend=async(text,parts)=>{
     }
     const finInstr=PLAN_TAG+' — ФИНАЛ\nРоли команды «'+mm.name+'» завершили подзадачи. Их результаты:\n\n'+results.join('\n\n')+
       '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ для пользователя: что сделано и итог. Без служебных пометок.';
-    await post({messageID:O.mid(),model:leadUsed||mm.main,parts:[{type:'text',text:finInstr}]});
+    await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:finInstr}]});
     O.mm.run=null;
   }catch(e){
     O.mm.run=null;

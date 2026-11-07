@@ -3,6 +3,7 @@ package app.opencodemob
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.PendingIntent
 import android.speech.RecognizerIntent
 import android.widget.Toast
 import android.content.ClipData
@@ -206,12 +207,26 @@ class MainActivity : ComponentActivity() {
         }
         watch()
         handleWidgetIntent(intent)
+        handleShareIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleWidgetIntent(intent)
+        handleShareIntent(intent)
+    }
+
+    private fun handleShareIntent(intent: Intent?) {
+        if (intent == null) return
+        if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_PROCESS_TEXT) return
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+            ?: intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+            ?: return
+        if (text.isBlank()) return
+        ui.postDelayed({
+            emit("share", JSONObject().put("text", text))
+        }, 500)
     }
 
     private fun handleWidgetIntent(intent: Intent?) {
@@ -1003,22 +1018,28 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Full restart: stop the server, kill the whole app process.
-        // The OS relaunches the activity (task removal keeps the recent task), so on reopen
-        // everything boots fresh — server included.
+        // Full restart: stop the server, then kill the whole app process.
+        // A pending alarm relaunches the app once the process is gone, so the fresh
+        // start never races with the dying process (which previously made the app
+        // vanish without reopening).
         @JavascriptInterface fun hardRestart() {
             runOnUiThread {
                 try { stopService(Intent(this@MainActivity, OpenCodeService::class.java)) } catch (_: Exception) {}
                 ServerState.ready = false
                 try {
-                    val launch = packageManager.getLaunchIntentForPackage(packageName)
-                    launch?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                    if (launch != null) startActivity(launch)
+                    val launch = packageManager.getLaunchIntentForPackage(packageName) ?: Intent(this@MainActivity, MainActivity::class.java)
+                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    val pi = PendingIntent.getActivity(
+                        this@MainActivity, 42, launch,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_CANCEL_CURRENT
+                    )
+                    val am = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                    am.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 600, pi)
                 } catch (_: Exception) {}
                 ui.postDelayed({
                     try { java.lang.Runtime.getRuntime().exit(0) } catch (_: Exception) {}
                     try { android.os.Process.killProcess(android.os.Process.myPid()) } catch (_: Exception) {}
-                }, 350)
+                }, 200)
             }
         }
 

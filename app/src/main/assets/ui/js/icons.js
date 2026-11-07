@@ -2,6 +2,7 @@
 const O=window.OCM;
 const I={
 menu:'<path d="M4 6.5h16M4 12h12M4 17.5h8"/>',plus:'<path d="M12 5v14M5 12h14"/>',x:'<path d="M18 6L6 18M6 6l12 12"/>',
+star:'<path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z"/>',
 swap:'<path d="M8 3L4 7l4 4M4 7h13"/>',
 ghost:'<path d="M12 2.5a7 7 0 00-7 7v11.5l3.5-2 3.5 2 3.5-2 3.5 2V9.5a7 7 0 00-7-7z"/><circle cx="9.5" cy="9.5" r="1.2" fill="currentColor"/><circle cx="14.5" cy="9.5" r="1.2" fill="currentColor"/>',
 memory:'<rect x="4" y="5.5" width="16" height="5" rx="2.2"/><rect x="4" y="13.5" width="16" height="5" rx="2.2"/>',

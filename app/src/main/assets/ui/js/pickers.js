@@ -3,6 +3,9 @@ const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 const search=(ph,fn)=>h('input',{placeholder:ph,oninput:e=>fn(e.target.value.toLowerCase()),style:{marginBottom:'8px'}});
 
 // ---- sessions drawer ----
+O.pinnedSessions=()=>O.store.get('pinned',[]);
+O.isPinned=id=>O.pinnedSessions().includes(id);
+O.togglePin=id=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i>=0)l.splice(i,1);else l.push(id);O.store.set('pinned',l);bus.emit('sessions');};
 O.openSessions=()=>{
   const list=h('div'),q=search(O.tr('Search sessions...','Поиск по сессиям...'),()=>draw());
   const navItem=(ic,label,fn)=>h('button',{class:'drawer-nav-item',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
@@ -17,11 +20,12 @@ O.openSessions=()=>{
   const s=O.sheet(O.tr('Navigation & Sessions','Навигация и сессии'),h('div',null,nav,newBtn,h('div',{style:{height:'12px'}}),q,list),{drawer:true});
   function draw(){list.textContent='';const f=q.value.toLowerCase();
     const items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f));
+    items.sort((a,b)=>{const pa=O.isPinned(a.id)?0:1,pb=O.isPinned(b.id)?0:1;if(pa!==pb)return pa-pb;return (b.time&&b.time.updated||0)-(a.time&&a.time.updated||0)});
     if(!items.length)list.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('No sessions yet','Сессий пока нет')));
-    items.forEach(x=>{const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary;
+    items.forEach(x=>{const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,pin=O.isPinned(x.id);
       list.append(h('div',{class:'settings-row'+(x.id===S.sid?' on':'')},
         h('button',{class:'settings-row-text',onclick:()=>{s.close();O.openSession(x.id)}},
-          h('b',null,O.sessionTitle(x)),
+          h('b',null,(pin?'📌 ':'')+O.sessionTitle(x)),
           h('span',null,O.ago(x.time.updated)+(sm&&(sm.additions||sm.deletions)?'  +'+sm.additions+' -'+sm.deletions:''))),
         b?h('span',{class:'spin',style:{flex:'none'}}):null,h('button',{class:'ibtn s',style:{flex:'none'},onclick:()=>sessActions(x)},O.icon('dots'))))})}
   draw();bus.on('sessions',()=>{if(s.root.isConnected)draw()})};
@@ -35,6 +39,7 @@ async function restartApp(){
   try{OC.hardRestart()}catch(e){try{OC.restartServer()}catch(_){}}
 }
 function sessActions(x){O.actions(O.sessionTitle(x),[
+  {label:O.isPinned(x.id)?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'star',fn:()=>{O.togglePin(x.id)}},
   {label:O.tr('Rename','Переименовать'),icon:'edit',fn:async()=>{const v=await O.ask(O.tr('Rename session','Переименование сессии'),null,O.sessionTitle(x));if(v)try{await api('PATCH','/session/'+x.id,{title:v})}catch(e){O.toast(e.message)}}},
   {label:x.share?O.tr('Stop sharing','Отключить шаринг'):O.tr('Share','Поделиться'),icon:'share',fn:async()=>{try{if(x.share){await api('DELETE','/session/'+x.id+'/share')}else{const r=await api('POST','/session/'+x.id+'/share',{});if(r.share){O.native.copy(r.share.url);O.native.share(r.share.url)}}}catch(e){O.toast(e.message)}}},
   {label:O.tr('Fork','Форк'),icon:'branch',fn:async()=>{try{const r=await api('POST','/session/'+x.id+'/fork',{});await O.loadSessions();O.openSession(r.id)}catch(e){O.toast(e.message)}}},
@@ -174,28 +179,15 @@ O.openModels=()=>{
 O.openAllModelsCatalog=()=>O.openModels();
 
 O.openAgents=()=>{const ags=O.primaryAgents();
-  const mm=O.mmList();
-  const mmCard=h('div',{class:'group-card'});
-  if(!mm.length)mmCard.append(h('div',{class:'mut',style:{padding:'12px 14px'}},O.tr('No multimodal agents yet — create one in Settings → Multimodality.','Мультимодальных агентов пока нет — создайте в Настройках → Мультимодальность.')));
-  mm.forEach(a=>{const on=O.mmActiveId()===a.id;
-    mmCard.append(h('button',{class:'model-row'+(on?' on':''),onclick:()=>{O.mmSetActive(on?null:a.id);s.close();O.toast(on?O.tr('Multimodal agent off','Мультимодальный агент выключен'):(O.tr('Multimodal agent on: ','Мультимодальный агент включён: ')+a.name),2000)}},
-      h('div',{class:'model-row-left'},
-        h('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},
-          h('span',{class:'model-row-title'},a.name),
-          h('span',{class:'badge-model badge-free'},'MM')),
-        h('span',{class:'model-row-sub'},O.tr('Lead: ','Главная: ')+(a.main?(O.modelInfo(a.main.providerID,a.main.modelID)||{}).name||a.main.modelID:'—')+' · '+a.roles.length+' '+O.tr('role(s)','рол(ей)'))),
-      on?O.icon('check','model-check'):null))});
   const card=h('div',{class:'group-card'},ags.map(a=>h('button',{class:'model-row',onclick:()=>{O.setAgent(a.name);s.close()}},
     h('div',{class:'model-row-left'},
       h('span',{class:'model-row-title'},a.name.charAt(0).toUpperCase()+a.name.slice(1)),
       h('span',{class:'model-row-sub'},a.description||'')),
     a.name===S.agent&&!O.mmActiveId()?O.icon('check','model-check'):null)));
   const s=O.sheet(O.tr('Agents & Modes','Режимы и агенты'),h('div',null,
-    h('div',{class:'settings-section-title',style:{margin:'2px 8px 6px'}},O.tr('Multimodal agents','Мультимодальные агенты')),
-    mmCard,
-    h('div',{class:'settings-section-title',style:{margin:'12px 8px 6px'}},O.tr('Standard agents','Обычные агенты')),
+    h('div',{class:'settings-section-title',style:{margin:'2px 8px 6px'}},O.tr('Standard agents','Обычные агенты')),
     card,
-    h('div',{class:'model-disclaimer'},O.tr('Add multimodal agents in Settings → Multimodality. Custom agents and rules — in Settings → Agents & Rules.','Мультимодальные агенты — в Настройках → Мультимодальность. Своих агентов и правила — в Настройки → Агенты и правила.'))),{hud:true})};
+    h('div',{class:'model-disclaimer'},O.tr('Multimodal agents are switched with the MM chip in the chat input. Custom agents and rules — in Settings → Agents & Rules.','Мультимодальные агенты переключаются чипом MM в поле ввода чата. Своих агентов и правила — в Настройки → Агенты и правила.'))),{hud:true})};
 
 // ---- connect providers (/connect) ----
 const POP=['opencode','anthropic','openai','github-copilot','google','openrouter','xai','deepseek','groq','mistral','together','fireworks','cerebras','nvidia','huggingface'];

@@ -591,7 +591,8 @@ a:hover {
   min-width: 0;
 }
 .hud-pill.model-pill span,
-.hud-pill.agent-pill span {
+.hud-pill.agent-pill span,
+.hud-pill.mm-pill span {
   display: inline-block;
   min-width: 0;
   overflow: hidden;
@@ -599,6 +600,14 @@ a:hover {
   white-space: nowrap;
   line-height: 1;
   vertical-align: middle;
+}
+.hud-pill.mm-pill {
+  max-width: min(30vw, 130px);
+  min-width: 0;
+}
+.hud-pill.mm-pill.mm-on {
+  border-color: var(--acc2);
+  color: var(--acc2);
 }
 .hud-pill .ic {
   width: 14px;
