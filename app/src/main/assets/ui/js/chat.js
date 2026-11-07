@@ -3,6 +3,8 @@ const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
 let atts=[],mentions=[],stick=true,revKey='',trail=[];
+let pendingHead=[],loadingOlder=false;
+const RENDER_TAIL=28, RENDER_CHUNK=24;
 O.rel=p=>{p=String(p||'');return S.dir&&p.startsWith(S.dir+'/')?p.slice(S.dir.length+1):p};
 const cur=()=>S.sessions.find(x=>x.id===S.sid)||O.child(S.sid);
 const modelStr=()=>S.model?S.model.providerID+'/'+S.model.modelID:undefined;
@@ -10,7 +12,7 @@ const busy=()=>{const s=S.status[S.sid];return !!s&&s.type!=='idle'};
 
 O.chatInit=root=>{
   chatRoot=root;
-  msgsEl=h('div',{id:'msgs',class:'sel',onscroll:()=>{stick=nearBottom();jumpEl.classList.toggle('hide',stick)}});
+  msgsEl=h('div',{id:'msgs',class:'sel',onscroll:()=>{stick=nearBottom();jumpEl.classList.toggle('hide',stick);maybeLoadOlder()}});
   jumpEl=h('button',{id:'jump',class:'hide',onclick:()=>scrollEnd(true)},O.icon('chevD'));
   revEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
   todoEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
@@ -61,8 +63,32 @@ const revisionKey=()=>{const s=cur();return s&&s.revert?s.revert.messageID:''};
 function renderAll(){
   msgsEl.innerHTML='';msgEls.clear();partEls.clear();revKey=revisionKey();
   const list=S.sid?O.visibleMsgs(S.sid):[];
-  if(!list.length)showEmpty();else{if(chatRoot)chatRoot.classList.remove('is-empty');const fr=document.createDocumentFragment();list.forEach(m=>{const e=buildMsg(m);fr.append(e)});msgsEl.append(fr)}
+  if(!list.length){pendingHead=[];showEmpty()}
+  else{
+    if(chatRoot)chatRoot.classList.remove('is-empty');
+    const start=Math.max(0,list.length-RENDER_TAIL);
+    pendingHead=list.slice(0,start);
+    const fr=document.createDocumentFragment();
+    for(let i=start;i<list.length;i++)fr.append(buildMsg(list[i]));
+    msgsEl.append(fr);
+  }
   scrollEnd(true);renderDock();renderStatus();renderRevert();renderTodos();updateSend();updateChips()}
+
+function maybeLoadOlder(){
+  if(loadingOlder||!pendingHead.length)return;
+  if(msgsEl.scrollTop>220)return;
+  loadingOlder=true;
+  const prevH=msgsEl.scrollHeight,prevTop=msgsEl.scrollTop;
+  const start=Math.max(0,pendingHead.length-RENDER_CHUNK);
+  const chunk=pendingHead.slice(start);
+  pendingHead=pendingHead.slice(0,start);
+  const fr=document.createDocumentFragment();
+  chunk.forEach(m=>fr.append(buildMsg(m)));
+  const first=msgsEl.firstChild;
+  if(first)msgsEl.insertBefore(fr,first);else msgsEl.append(fr);
+  requestAnimationFrame(()=>{msgsEl.scrollTop=prevTop+(msgsEl.scrollHeight-prevH);loadingOlder=false});
+  if(pendingHead.length===0)loadingOlder=false;
+}
 function showEmpty(){
   if(chatRoot)chatRoot.classList.add('is-empty');
   const wm=h('div',{class:'watermark-box'},O.wordmark('100%','auto'));

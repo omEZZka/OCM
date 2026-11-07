@@ -263,6 +263,7 @@ O.openSession=async(sid,fresh)=>{
   if(!s.list.length){const c=await O.kv.get('msgs:'+sid);if(c)c.forEach(m=>{s.list.push(m);s.idx.set(m.info.id,m)})}
   bus.emit('open',sid);
   if(fresh)return;
+  const prevCount=s.list.length,prevLast=s.list.length?s.list[s.list.length-1].info.id:'';
   try{const arr=await api('GET','/session/'+sid+'/message',null,{timeout:120000});
     s.list=[];s.idx=new Map();for(const m of arr){const x={info:m.info,parts:m.parts};s.list.push(x);s.idx.set(m.info.id,x)}
     if(!sesSaved){
@@ -273,7 +274,10 @@ O.openSession=async(sid,fresh)=>{
         bus.emit('meta');
       }
     }
-    S.offline=false;bus.emit('open',sid);saveMsgs(sid)}catch(e){S.offline=true;bus.emit('conn')}
+    S.offline=false;
+    const newLast=s.list.length?s.list[s.list.length-1].info.id:'';
+    if(s.list.length!==prevCount||newLast!==prevLast)bus.emit('open',sid);
+    saveMsgs(sid)}catch(e){S.offline=true;bus.emit('conn')}
   api('GET','/session/'+sid+'/todo').then(t=>{S.todos[sid]=t;bus.emit('todo',sid)}).catch(()=>{});
   api('GET','/session/'+sid+'/diff').then(d=>{S.diffs[sid]=d;bus.emit('diff',sid)}).catch(()=>{});
   O.loadPending()};
