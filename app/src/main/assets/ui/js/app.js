@@ -15,7 +15,7 @@ function build(){
   T.tokensVal=h('span',{class:'top-tokens-val'},'0 tok');
   T.tokens=h('button',{class:'top-tokens-btn',style:{display:'none'},title:O.tr('Session Tokens / Context','Токены сессии / Контекст'),onclick:()=>O.openTokensModal()},h('span',{class:'tok-bolt',html:BOLT_SVG}),T.tokensVal);
   const topLeft=h('div',{class:'top-left-box'},T.menu,T.tokens);
-  T.mm=h('button',{class:'top-mm-btn hide',title:O.tr('Multimodal agents','Мультимодальные агенты'),onclick:()=>O.openMultimodalPicker()},O.icon('bot'),h('span',{class:'top-mm-txt'},'MM'));
+  T.mm=h('button',{class:'top-mm-btn',title:O.tr('Multimodal agents','Мультимодальные агенты'),onclick:()=>O.openMultimodalPicker()},O.icon('bot'),h('span',{class:'top-mm-txt'},'MM'));
   T.status=h('button',{class:'top-status-btn',title:O.tr('Server & MCP Status','Статус сервера и MCP'),onclick:()=>O.openStatus()},O.icon('sliders'));
   const topRight=h('div',{class:'top-right-box'},T.mm,T.status);
   const top=h('div',{id:'top'},topLeft,topRight);
@@ -146,10 +146,8 @@ O.openTokensModal=()=>{
 function updateTop(){
   if(!built)return;
   if(T.tokensVal){
-    const msgs=S.sid?O.visibleMsgs(S.sid):[];
-    const hasStartedChat=!!(S.sid&&msgs.length>0);
-    if(T.tokens)T.tokens.style.display=hasStartedChat?'inline-flex':'none';
     const tok=O.calcSessionTokens(S.sid);
+    if(T.tokens)T.tokens.style.display='inline-flex';
     const txt=tok.total>0?(O.fmtK(tok.total)+' tok'):'0 tok';
     const pct=tok.pct!=null?(' · '+tok.pct+'%'):'';
     T.tokensVal.textContent=txt+pct;
@@ -163,9 +161,7 @@ function updateTop(){
 
 function updateTopMm(){
   if(!T.mm)return;
-  const list=O.mmList?O.mmList():[];
   const mmA=O.mmActive&&O.mmActive();
-  T.mm.classList.toggle('hide',!list.length);
   T.mm.classList.toggle('active',!!mmA);
   const sp=T.mm.querySelector('.top-mm-txt');
   if(sp)sp.textContent=mmA?mmA.name:'MM';
