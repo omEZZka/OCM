@@ -33,6 +33,23 @@ O.mmPickModel=(cur,cb,opts)=>{
     let items=filterText?all.filter(x=>(x.name+' '+x.mid+' '+(x.pname||x.pid)).toLowerCase().includes(filterText)):all;
     const ck=mStr(cur);
     items=O.sortModelsByProvider(items);
+
+    // Pinned models at top (unless filter active)
+    if(!filterText){
+      const pinnedKeys=O.pinnedModels();
+      const pinned=pinnedKeys.map(k=>items.find(x=>x.pid+'/'+x.mid===k)).filter(Boolean);
+      if(pinned.length){
+        const card=h('div',{class:'group-card'});
+        pinned.forEach(x=>{const isSel=(x.pid+'/'+x.mid)===ck;
+          card.append(h('button',{class:'model-row'+(isSel?' on':''),onclick:()=>{s.close();cb({providerID:x.pid,modelID:x.mid})}},
+            h('div',{class:'model-row-left'},
+              h('span',{class:'model-row-title'},x.name||x.mid),
+              h('span',{class:'model-row-sub'},(O.isModelFree(x)?O.tr('Free','Бесплатно'):O.tr('Paid','Платная')))),
+            isSel?O.icon('check','model-check'):null))});
+        listEl.append(h('div',{class:'model-group-head'},h('span',null,O.tr('Pinned','Закрепленные'))),card);
+      }
+    }
+
     const groups=[];const byPid=new Map();
     items.forEach(x=>{let g=byPid.get(x.pid);if(!g){g={pid:x.pid,pname:x.pname||x.pid,items:[]};byPid.set(x.pid,g);groups.push(g)}g.items.push(x)});
     groups.forEach(g=>{

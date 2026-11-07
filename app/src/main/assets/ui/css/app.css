@@ -1062,6 +1062,28 @@ a:hover {
   color: #fbbf24 !important;
   opacity: 0.9;
 }
+
+.drag-handle {
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+}
+.drag-handle:hover {
+  background: var(--bg3);
+  color: var(--fg);
+}
+.settings-row.dragging {
+  opacity: 0.5;
+  background: var(--card-hover);
+  border-color: var(--acc2);
+}
+.settings-row.drag-over {
+  border-top: 2px solid var(--acc2);
+}
 .pin-ic svg {
   width: 15px;
   height: 15px;

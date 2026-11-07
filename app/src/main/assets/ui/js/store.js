@@ -3,7 +3,7 @@ const O=window.OCM,api=O.api;
 const bus=O.bus={h:{},on(n,f){(this.h[n]=this.h[n]||[]).push(f)},emit(n,...a){(this.h[n]||[]).forEach(f=>{try{f(...a)}catch(e){console.error(n,e)}})}};
 const S=O.S={dir:'',sessions:[],sid:null,status:{},perms:[],questions:[],todos:{},diffs:{},
   providers:[],agents:[],commands:[],cfg:{},agent:'build',model:null,variant:null,mcp:{},lsp:[],branch:'',
-  offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14},O.store.get('opts',{}))};
+  offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false},O.store.get('opts',{}))};
 O.saveOpts=()=>{O.store.set('opts',S.opts);document.documentElement.dataset.theme=S.opts.theme;document.documentElement.style.setProperty('--fs',S.opts.fs+'px')};
 
 // ---- IndexedDB key/value cache (offline reading) ----
@@ -168,6 +168,13 @@ O.isModelPinned=k=>O.pinnedModels().includes(k);
 O.toggleModelPin=k=>{const l=O.pinnedModels();const i=l.indexOf(k);if(i>=0)l.splice(i,1);else l.push(k);O.store.set('pinnedModels',l);bus.emit('meta')};
 O.recentModels=()=>O.store.get('recentModels',[]);
 O.pushRecentModel=k=>{if(!k)return;const l=O.recentModels().filter(x=>x!==k);l.unshift(k);O.store.set('recentModels',l.slice(0,8));};
+O.sessionOrder=()=>O.store.get('sessionOrder',[]);
+O.setSessionOrder=arr=>{O.store.set('sessionOrder',arr);bus.emit('sessions')};
+O.moveSessionInOrder=(id,toIndex)=>{const o=O.sessionOrder();const i=o.indexOf(id);if(i<0)return;o.splice(i,1);o.splice(toIndex,0,id);O.setSessionOrder(o)};
+// Draft persistence per session
+O.getDraft=sid=>O.store.get('draft.'+sid,'');
+O.setDraft=(sid,text)=>{if(!sid)return;O.store.set('draft.'+sid,text)};
+O.clearDraft=sid=>{if(!sid)return;O.store.remove('draft.'+sid)};
 // Alphabetical sort within each provider: pinned float to the top, then providers A→Z, then models A→Z.
 O.sortModelsByProvider=items=>{
   const pn=x=>String(x.pname||x.pid||'').toLowerCase();
@@ -311,4 +318,70 @@ O.replyPermission=async(p,r)=>{
   const tries=[()=>api('POST','/permission/'+p.id+'/reply',{reply:r}),()=>api('POST','/session/'+p.sessionID+'/permissions/'+p.id,{response:r}),()=>api('POST','/api/session/'+p.sessionID+'/permission/'+p.id+'/reply',{reply:r})];
   for(const t of tries){try{await t();S.perms=S.perms.filter(x=>x.id!==p.id);bus.emit('perm');return}catch(e){if(e.status!==404&&e.status!==405&&e.status!==400)throw e}}
   throw new Error('Ответ на разрешение не поддерживается этой версией сервера')};
+
+// ---- Plugin system ----
+O.plugins=O.store.get('customPlugins',[]);
+O.enabledPlugins=()=>O.plugins.filter(p=>p.enabled);
+O.loadPlugins=async()=>{
+  for(const p of O.enabledPlugins()){
+    if(p.code){
+      try{
+        const fn=new Function('O','S','api','bus','h','return '+p.code);
+        const plugin=fn(O,O.S,O.api,O.bus,O.h);
+        if(plugin&&typeof plugin==='object'){
+          p._instance=plugin;
+          if(plugin.onLoad)plugin.onLoad(O);
+        }
+      }catch(e){console.error('Plugin load error:',p.name,e)}
+    }
+  }
+};
+O.addPlugin=(name,code,enabled=true)=>{
+  const id='plug_'+Date.now().toString(36);
+  const p={id,name,code,enabled,createdAt:Date.now()};
+  O.plugins.push(p);
+  O.store.set('customPlugins',O.plugins);
+  if(enabled){
+    try{
+      const fn=new Function('O','S','api','bus','h','return '+code);
+      const plugin=fn(O,O.S,O.api,O.bus,O.h);
+      if(plugin&&typeof plugin==='object'){
+        p._instance=plugin;
+        if(plugin.onLoad)plugin.onLoad(O);
+      }
+    }catch(e){console.error('Plugin add error:',e)}
+  }
+  bus.emit('plugins');
+};
+O.removePlugin=id=>{
+  const p=O.plugins.find(x=>x.id===id);
+  if(p&&p._instance&&p._instance.onUnload)p._instance.onUnload(O);
+  O.plugins=O.plugins.filter(x=>x.id!==id);
+  O.store.set('customPlugins',O.plugins);
+  bus.emit('plugins');
+};
+O.togglePlugin=id=>{
+  const p=O.plugins.find(x=>x.id===id);
+  if(p){p.enabled=!p.enabled;O.store.set('customPlugins',O.plugins);
+    if(p.enabled&&p.code){
+      try{
+        const fn=new Function('O','S','api','bus','h','return '+p.code);
+        p._instance=fn(O,O.S,O.api,O.bus,O.h);
+        if(p._instance.onLoad)p._instance.onLoad(O);
+      }catch(e){console.error('Plugin enable error:',e)}
+    }else if(p._instance&&p._instance.onUnload){
+      p._instance.onUnload(O);
+      p._instance=null;
+    }
+    bus.emit('plugins');
+  }
+};
+O.runHook=(name,...args)=>{
+  for(const p of O.enabledPlugins()){
+    if(p._instance&&typeof p._instance[name]==='function'){
+      try{p._instance[name](...args)}catch(e){console.error('Hook error:',p.name,name,e)}
+    }
+  }
+};
+
 })();

@@ -43,6 +43,13 @@ function sessActions(x){O.actions(O.sessionTitle(x),[
   {label:O.tr('Rename','Переименовать'),icon:'edit',fn:async()=>{const v=await O.ask(O.tr('Rename session','Переименование сессии'),null,O.sessionTitle(x));if(v)try{await api('PATCH','/session/'+x.id,{title:v})}catch(e){O.toast(e.message)}}},
   {label:x.share?O.tr('Stop sharing','Отключить шаринг'):O.tr('Share','Поделиться'),icon:'share',fn:async()=>{try{if(x.share){await api('DELETE','/session/'+x.id+'/share')}else{const r=await api('POST','/session/'+x.id+'/share',{});if(r.share){O.native.copy(r.share.url);O.native.share(r.share.url)}}}catch(e){O.toast(e.message)}}},
   {label:O.tr('Fork','Форк'),icon:'branch',fn:async()=>{try{const r=await api('POST','/session/'+x.id+'/fork',{});await O.loadSessions();O.openSession(r.id)}catch(e){O.toast(e.message)}}},
+  {label:O.tr('Compact context','Сжать контекст'),icon:'refresh',fn:async()=>{
+    if(!S.model)return O.toast(O.tr('No model selected','Модель не выбрана'));
+    const doCompact=await O.confirm(O.tr('Compact session?','Сжать сессию?'),O.tr('This will summarize the conversation to free up context.','Это сожмёт диалог для освобождения контекста.'),O.tr('Compact','Сжать'));
+    if(doCompact){
+      try{await api('POST','/session/'+x.id+'/summarize',{providerID:S.model.providerID,modelID:S.model.modelID},{timeout:600000});O.toast(O.tr('Session compacted','Сессия сжата'),1500)}catch(e){O.toast(e.message)}
+    }
+  }},
   {label:O.tr('Delete','Удалить'),icon:'trash',danger:true,fn:async()=>{if(await O.confirm(O.tr('Delete session?','Удалить сессию?'),O.sessionTitle(x),O.tr('Delete','Удалить'),true))try{await api('DELETE','/session/'+x.id);S.sessions=S.sessions.filter(y=>y.id!==x.id);if(S.sid===x.id)O.openSession(S.sessions[0]&&S.sessions[0].id||null);bus.emit('sessions')}catch(e){O.toast(e.message)}}}])}
 
 // ---- projects + folder browser ----
@@ -183,6 +190,17 @@ O.openModels=()=>{
       O.longPress(row,()=>modelActions(x,()=>draw()));
       return row;
     };
+
+        // Pinned models — always at the very top (unless a filter is active).
+    if(!filterText){
+      const pinnedKeys=O.pinnedModels();
+      const pinned=pinnedKeys.map(k=>items.find(x=>x.pid+'/'+x.mid===k)).filter(Boolean);
+      if(pinned.length){
+        const card=h('div',{class:'group-card'});
+        pinned.forEach(x=>card.append(rowFor(x)));
+        listEl.append(h('div',{class:'model-group-head'},h('span',null,O.tr('Pinned','Закрепленные'))),card);
+      }
+    }
 
     // Recently used models float to the very top (unless a filter is active).
     if(!filterText){

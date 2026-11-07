@@ -35,7 +35,7 @@ O.chatInit=root=>{
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,jumpEl);
   root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,comp);
   bus.on('open',()=>{renderAll()});
-  bus.on('msg',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd()});
+  bus.on('msg',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd();O.runHook('onReceive',{message:m,sessionID:sid})});
   bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd()});
   bus.on('msg-removed',(sid,id)=>{const e=msgEls.get(id);if(e){e.remove();msgEls.delete(id)}});
   bus.on('part-removed',(sid,m,pid)=>{const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
@@ -65,6 +65,7 @@ const revisionKey=()=>{const s=cur();return s&&s.revert?s.revert.messageID:''};
 function renderAll(){
   msgsEl.innerHTML='';msgEls.clear();partEls.clear();revKey=revisionKey();
   const list=S.sid?O.visibleMsgs(S.sid):[];
+  if(S.sid){const draft=O.getDraft(S.sid);if(draft&&!ta.value){ta.value=draft;autosize();updateSend()}}
   if(!list.length){pendingHead=[];showEmpty()}
   else{
     if(chatRoot)chatRoot.classList.remove('is-empty');
@@ -544,7 +545,9 @@ function hidePop(){popEl.classList.add('hide');popEl.textContent=''}
 function showPop(items){popEl.textContent='';if(!items.length){hidePop();return}popEl.classList.remove('hide');
   items.slice(0,40).forEach(it=>popEl.append(h('button',{class:'it',style:{width:'100%',textAlign:'left'},onclick:it.pick},it.icon?it.icon:null,h('b',null,it.t),h('span',{class:'d grow'},it.d||''))))}
 let atTimer;
+let draftTimer;
 function onInput(){autosize();updateSend();const v=ta.value,pos=ta.selectionStart||0,before=v.slice(0,pos);
+  if(S.sid){clearTimeout(draftTimer);draftTimer=setTimeout(()=>O.setDraft(S.sid,v),300)}
   const sm=/^\/(\S*)$/.exec(before);
   if(sm){const q=sm[1].toLowerCase();
     const srv=(S.commands||[]).filter(c=>!BUILTINS.some(b=>b.n===c.name)).map(c=>({t:'/'+c.name,d:c.description||'Пользовательская команда',icon:O.icon('slash'),f:c.name,pick:()=>{ta.value='/'+c.name+' ';ta.focus();onInput()}}));
@@ -589,6 +592,7 @@ async function onSend(){
   mentions.filter(m=>text.includes(m.tok)).forEach(m=>{const p=JSON.parse(JSON.stringify(m.part));if(p.source&&p.source.text){p.source.text.start=text.indexOf(m.tok);p.source.text.end=p.source.text.start+m.tok.length}parts.push(p)});
   atts.forEach(a=>parts.push(a));
   if(O.mmActive()&&O.mmSend){clear();try{await O.mmSend(text,parts)}catch(e){O.toast(e.message||String(e),4000)}return}
+  O.runHook('onSend',{text,parts,model:S.model,agent:S.agent});
   const mid=O.mid();clear();
   try{const sid=await sess();
     const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:S.model});m.local=true;
@@ -604,6 +608,6 @@ async function onSend(){
     }
     ta.value=text;onInput();
   }}
-function clear(){ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend()}
+function clear(){if(S.sid)O.clearDraft(S.sid);ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
 O.chat={renderAll,sess,focus:()=>ta&&ta.focus()};
 })();

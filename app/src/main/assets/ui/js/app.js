@@ -18,9 +18,13 @@ function build(){
   T.title=h('button',{class:'top-title',title:O.tr('Sessions','Сессии'),onclick:()=>O.openSessions()},h('span',{class:'top-title-txt'},O.tr('OpenCode','OpenCode')),h('span',{class:'top-title-dot hide'}));
   O.longPress(T.title,()=>{
     const s=S.sid&&S.sessions.find(x=>x.id===S.sid);if(!s)return;
-    O.ask(O.tr('Rename session','Переименование сессии'),null,O.sessionTitle(s)).then(v=>{
-      if(v)api('PATCH','/session/'+s.id,{title:v}).catch(e=>O.toast(e.message));
-    });
+    O.actions(O.sessionTitle(s),[
+      {label:O.tr('Rename','Переименовать'),icon:'edit',fn:()=>{O.ask(O.tr('Rename session','Переименование сессии'),null,O.sessionTitle(s)).then(v=>{if(v)api('PATCH','/session/'+s.id,{title:v}).catch(e=>O.toast(e.message))})}},
+      {label:O.tr('Duplicate','Дублировать'),icon:'copy',fn:async()=>{try{const r=await api('POST','/session/'+s.id+'/fork',{});await O.loadSessions();O.openSession(r.id);O.toast(O.tr('Session duplicated','Сессия дублирована'),1500)}catch(e){O.toast(e.message)}}},
+      {label:O.tr('Fork from here','Форк отсюда'),icon:'branch',fn:async()=>{try{const m=O.visibleMsgs(s.id).filter(x=>x.info.role==='user');if(!m.length)return O.toast(O.tr('No user messages to fork from','Нет сообщений для форка'));const last=m[m.length-1];const r=await api('POST','/session/'+s.id+'/fork',{messageID:last.info.id});await O.loadSessions();O.openSession(r.id);O.toast(O.tr('Forked from message','Форк от сообщения'),1500)}catch(e){O.toast(e.message)}}},
+      {label:s.share?O.tr('Stop sharing','Отключить шаринг'):O.tr('Share','Поделиться'),icon:'share',fn:async()=>{try{if(s.share){await api('DELETE','/session/'+s.id+'/share');O.toast(O.tr('Sharing stopped','Шаринг остановлен'))}else{const r=await api('POST','/session/'+s.id+'/share',{});if(r.share){O.native.copy(r.share.url);O.native.share(r.share.url);O.toast(O.tr('Link copied','Ссылка скопирована'),1500)}}}catch(e){O.toast(e.message)}}},
+      {label:O.tr('Delete','Удалить'),icon:'trash',danger:true,fn:async()=>{if(await O.confirm(O.tr('Delete session?','Удалить сессию?'),O.sessionTitle(s),O.tr('Delete','Удалить'),true))try{await api('DELETE','/session/'+s.id);S.sessions=S.sessions.filter(y=>y.id!==s.id);if(S.sid===s.id)O.openSession(S.sessions[0]&&S.sessions[0].id||null);bus.emit('sessions')}catch(e){O.toast(e.message)}}}
+    ]);
   });
   T.mm=h('button',{class:'top-mm-btn',title:O.tr('Multimodal agents','Мультимодальные агенты'),onclick:()=>O.openMultimodalPicker()},O.icon('bot'),h('span',{class:'top-mm-txt'},'MM'));
   T.status=h('button',{class:'top-status-btn',title:O.tr('Server & MCP Status','Статус сервера и MCP'),onclick:()=>O.openStatus()},O.icon('sliders'));
@@ -262,6 +266,41 @@ O.back=()=>{
   }
   return false;
 };
+
+function initKeyboardShortcuts(){
+  document.addEventListener('keydown',e=>{
+    if(e.target&&(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.isContentEditable)){
+      if(!(e.ctrlKey||e.metaKey))return;
+    }
+    const k=(e.key||'').toLowerCase();
+    if((e.ctrlKey||e.metaKey)){
+      if(k==='enter'){
+        e.preventDefault();
+        const sb=O.$('#send');
+        if(sb&&!sb.disabled)O.chat.focus(),setTimeout(()=>sb.click(),0);
+      }else if(k==='k'){
+        e.preventDefault();
+        ta=O.$('#composer textarea');
+        if(ta){ta.value='/';ta.dispatchEvent(new Event('input'));ta.focus()}
+      }else if(k==='m'){
+        e.preventDefault();O.openModels();
+      }else if(k==='t'&&e.shiftKey){
+        e.preventDefault();O.newSession();
+      }else if(k==='s'&&e.shiftKey){
+        e.preventDefault();O.openSessions();
+      }else if(k==='/'){
+        e.preventDefault();S.opts.thinking=!S.opts.thinking;O.saveOpts();O.chat.renderAll();
+      }
+    }else if(k==='escape'){
+      if(O.back())e.preventDefault();
+    }
+  });
+}
+document.addEventListener('DOMContentLoaded',()=>{
+  O.saveOpts();
+  O.bootRun();
+  initKeyboardShortcuts();
+});
 
 
 O.playChime=kind=>{

@@ -247,10 +247,55 @@ O.getBuiltinWidgets=function(){
         onclick:()=>O.dispatchAction('prompt',text)
       },h('span',{style:{fontSize:'13px',fontWeight:'600'}},label)))));
 
+  // Widget 4: Active Session
+  const ses=S.sid&&S.sessions.find(x=>x.id===S.sid);
+  const sessionBody=h('div',{class:'ocm-widget-body ocm-adaptive-widget'},
+    h('div',{class:'hud-metric-row'},
+      h('div',{class:'hud-metric',style:{gridColumn:'span 2'}},
+        h('div',{class:'hud-metric-lbl'},O.tr('Session','Сессия')),
+        h('b',{class:'hud-metric-val',style:{fontSize:'13px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',display:'block'}},ses?O.sessionTitle(ses):O.tr('No session','Нет сессии'))),
+      h('div',{class:'hud-metric'},
+        h('div',{class:'hud-metric-lbl'},O.tr('Model','Модель')),
+        h('b',{class:'hud-metric-val',style:{color:'#38bdf8',fontSize:'12px'}},S.model?S.model.providerID+'/'+S.model.modelID:O.tr('None','—'))),
+      h('div',{class:'hud-metric'},
+        h('div',{class:'hud-metric-lbl'},O.tr('Agent','Агент')),
+        h('b',{class:'hud-metric-val',style:{color:'#fbbf24',fontSize:'12px'}},S.agent||'build')),
+      h('div',{class:'hud-metric'},
+        h('div',{class:'hud-metric-lbl'},O.tr('Status','Статус')),
+        h('b',{class:'hud-metric-val',style:{color:isBusy?'#f87171':'#22c55e',fontSize:'12px'}},isBusy?O.tr('Busy','Работает'):O.tr('Idle','Свободен')))),
+    h('div',{class:'widget-actions-grid'},
+      h('button',{class:'btn-widget-action',onclick:()=>O.openSessions()},O.icon('list'),O.tr('Sessions','Сессии')),
+      h('button',{class:'btn-widget-action',onclick:()=>O.openModels()},O.icon('cpu'),O.tr('Model','Модель')),
+      h('button',{class:'btn-widget-action',onclick:()=>O.openAgents()},O.icon('bot'),O.tr('Agent','Агент'))));
+
+  // Widget 5: Token Monitor
+  const tok=O.calcSessionTokens?O.calcSessionTokens(S.sid):{total:0,input:0,output:0,cost:0};
+  const pct=tok.pct!=null?tok.pct+'%':'—';
+  const tokenBody=h('div',{class:'ocm-widget-body ocm-adaptive-widget'},
+    h('div',{class:'hud-metric-row'},
+      h('div',{class:'hud-metric'},
+        h('div',{class:'hud-metric-lbl'},O.tr('Total','Всего')),
+        h('b',{class:'hud-metric-val',style:{color:'#a78bfa'}},O.fmtK(tok.total))),
+      h('div',{class:'hud-metric'},
+        h('div',{class:'hud-metric-lbl'},O.tr('Input','Вход')),
+        h('b',{class:'hud-metric-val',style:{color:'#38bdf8'}},O.fmtK(tok.input))),
+      h('div',{class:'hud-metric'},
+        h('div',{class:'hud-metric-lbl'},O.tr('Output','Выход')),
+        h('b',{class:'hud-metric-val',style:{color:'#22c55e'}},O.fmtK(tok.output))),
+      h('div',{class:'hud-metric'},
+        h('div',{class:'hud-metric-lbl'},O.tr('Cost','Стоимость')),
+        h('b',{class:'hud-metric-val',style:{color:'#fbbf24'}},tok.cost>0?'$'+tok.cost.toFixed(4):'—'))),
+    h('div',{class:'widget-actions-grid'},
+      h('button',{class:'btn-widget-action',onclick:()=>O.openTokensModal()},O.icon('cpu'),O.tr('Details','Подробнее')),
+      h('button',{class:'btn-widget-action',onclick:()=>O.openModels()},O.icon('cpu'),O.tr('Model','Модель')),
+      h('button',{class:'btn-widget-action',onclick:()=>O.openSettings()},O.icon('sliders'),O.tr('Settings','Настройки'))));
+
   return [
     {id:'core_monitor',title:O.tr('Core & Model Monitor','Монитор рантайма и модели'),icon:'cpu',body:monitorBody},
     {id:'workspace_git',title:O.tr('Workspace & Git','Рабочее пространство & Git'),icon:'branch',body:workspaceBody},
-    {id:'prompt_scratchpad',title:O.tr('Developer Snippets','Быстрые сниппеты разработки'),icon:'terminal',body:snipBody}
+    {id:'prompt_scratchpad',title:O.tr('Developer Snippets','Быстрые сниппеты разработки'),icon:'terminal',body:snipBody},
+    {id:'active_session',title:O.tr('Active Session','Активная сессия'),icon:'chat',body:sessionBody},
+    {id:'token_monitor',title:O.tr('Token Monitor','Монитор токенов'),icon:'cpu',body:tokenBody}
   ];
 };
 

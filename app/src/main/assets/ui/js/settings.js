@@ -1170,6 +1170,9 @@ function openCustomPlugins(){
   const addBtn=h('button',{class:'btn pri wide',style:{marginTop:'16px'},onclick:()=>{openUploadPluginModal(()=>{draw()})}},
     O.icon('plus'),O.tr('Upload Custom Plugin','Опубликовать свой плагин'));
 
+  const localBtn=h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{openLocalPluginEditor(()=>{draw()})}},
+    O.icon('cpu'),O.tr('Local Plugin Editor (hooks: onSend/onReceive)','Локальный редактор плагинов (хуки: onSend/onReceive)'));
+
   const syncRow=h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'12px',padding:'6px 2px'}},
     h('div',{class:'mut s'},'Облачный каталог сообщества: для всех пользователей'),
     h('div',{style:{display:'flex',gap:'8px'}},
@@ -1181,7 +1184,8 @@ function openCustomPlugins(){
     h('div',{class:'note',style:{marginBottom:'12px'}},O.tr('Community plugins are shared with all users. All uploaded plugins are available across all devices.','Общий каталог плагинов сообщества: все загруженные плагины видны всем людям на любых устройствах.')),
     syncRow,
     list,
-    addBtn);
+    addBtn,
+    localBtn);
   draw();
 }
 
@@ -1254,6 +1258,69 @@ function openUploadPluginModal(onDone){
     ),
     h('div',{class:'field'},h('label',null,'Исходный код плагина'),codeTa),
     saveBtn),{hud:true,full:true});
+}
+
+
+function openLocalPluginEditor(onDone){
+  const plugins=O.plugins||[];
+  const list=h('div');
+  function doDelete(idx){
+    plugins.splice(idx,1);
+    O.store.set('customPlugins',plugins);
+    refresh();
+  }
+  const refresh=()=>{
+    list.textContent='';
+    if(!plugins.length){
+      list.append(h('div',{class:'mut',style:{padding:'24px 16px',textAlign:'center'}},'Локальных плагинов нет. Нажмите «Создать плагин» ниже.'));
+    }else{
+      plugins.forEach((p,i)=>{
+        const isEnabled=p.enabled;
+        const card=h('div',{class:'hud-dock-card',style:{padding:'12px',margin:'8px 0',display:'flex',flexDirection:'column',gap:'8px'}},
+          h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},
+            h('div',null,
+              h('b',{style:{color:'#fff',fontSize:'14px'}},p.name),
+              h('span',{class:'mut s',style:{marginLeft:'6px'}},'v'+(p.version||'1.0')),
+              h('span',{style:{marginLeft:'6px',background:'rgba(56,189,248,0.15)',color:'#38bdf8',padding:'2px 6px',borderRadius:'4px',fontSize:'11px'}},isEnabled?'Включён':'Выключен')),
+            h('div',{style:{display:'flex',gap:'6px'}},
+              h('button',{class:'btn sm '+(isEnabled?'':'pri'),onclick:()=>{p.enabled=!p.enabled;O.store.set('customPlugins',plugins);refresh();O.toast(p.enabled?'Плагин включён':'Плагин выключён',1000)}},p.enabled?O.tr('Disable','Выключить'):O.tr('Enable','Включить')),
+              h('button',{class:'btn sm',onclick:()=>{editPlugin(i);refresh()}},O.icon('edit'),O.tr('Edit','Редактировать')),
+              h('button',{class:'btn sm dng',onclick:()=>{O.confirm('Удалить плагин '+p.name+'?',null,'Удалить',true).then(function(ok){if(ok)doDelete(i)})}},O.icon('trash')))),
+          h('div',{class:'mut s'},p.desc||'(без описания)'),
+          h('div',{class:'editor',style:{maxHeight:'200px',overflow:'auto',fontSize:'11px',background:'#0d0d0f',padding:'8px',borderRadius:'6px',fontFamily:'monospace'}},p.code||'// plugin code here'));
+        list.append(card);
+      });
+    }
+    list.append(
+      h('button',{class:'btn pri wide',style:{marginTop:'16px'},onclick:()=>{editPlugin(-1)}},O.icon('plus'),O.tr('Create Plugin','Создать плагин'))
+    );
+  };
+  const editPlugin=idx=>{
+    const isNew=idx<0;
+    const p=isNew?{id:'plug_'+Date.now().toString(36),name:'',code:'',desc:'',enabled:true}:plugins[idx];
+    const nameInp=h('input',{placeholder:'Название плагина',value:p.name||''});
+    const descInp=h('input',{placeholder:'Описание',value:p.desc||''});
+    const codeTa=h('textarea',{class:'editor',rows:12,placeholder:'// Hooks available: onSend({text,parts,model,agent}), onReceive({message,sessionID}), onLoad(O), onUnload(O)'});
+    codeTa.value=p.code||'export default {\n  name: "'+p.name+'",\n  onSend: ({text,parts,model,agent}) => {\n    console.log("Sending:", text);\n  },\n  onReceive: ({message,sessionID}) => {\n    console.log("Received:", message);\n  }\n};';
+    const saveBtn=h('button',{class:'btn pri wide',style:{marginTop:'12px'},onclick:()=>{
+      const name=nameInp.value.trim();
+      if(!name)return O.toast('Введите название');
+      p.name=name;p.desc=descInp.value.trim();p.code=codeTa.value.trim();p.enabled=p.enabled!==false;
+      if(isNew)plugins.push(p);else plugins[idx]=p;
+      O.store.set('customPlugins',plugins);
+      refresh();
+      O.toast(isNew?O.tr('Plugin created','Плагин создан'):O.tr('Plugin saved','Плагин сохранён'),1200);
+      editModal.close();
+    }},O.icon('check'),O.tr('Save','Сохранить'));
+    const editModal=O.sheet(isNew?O.tr('Create Plugin','Создать плагин'):O.tr('Edit Plugin','Редактировать плагин'),h('div',null,
+      h('div',{class:'field'},h('label',null,'Название'),nameInp),
+      h('div',{class:'field'},h('label',null,'Описание'),descInp),
+      h('div',{class:'field'},h('label',null,'Код плагина (ES Modules)'),codeTa),
+      saveBtn),{full:true});
+  };
+  const s=O.sheet(O.tr('Local Plugin Editor','Локальный редактор плагинов'),list,{full:true});
+  refresh();
+  if(onDone)onDone();
 }
 
 // Background auto-sync for all community items on app start
