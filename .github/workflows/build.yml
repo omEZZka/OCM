@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION_NAME: "2.0.9"
+  VERSION_NAME: "2.0.10"
 
 jobs:
   build:

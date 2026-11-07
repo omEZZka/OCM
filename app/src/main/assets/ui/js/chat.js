@@ -1,6 +1,6 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
-let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot;
+let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
 let atts=[],mentions=[],stick=true,revKey='',trail=[];
 let pendingHead=[],loadingOlder=false;
@@ -17,6 +17,7 @@ O.chatInit=root=>{
   revEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
   todoEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
   dockEl=h('div',{id:'dock'});statusEl=h('div',{class:'status-line hide'});
+  mmProgressEl=h('div',{id:'mm-progress',class:'hide'});
   popEl=h('div',{id:'pop',class:'hide'});attsEl=h('div',{class:'atts hide'});
   nokeyEl=h('div',{class:'nokey hide'},h('span',{class:'grow'},O.tr('No models connected.','Модели не подключены.')),h('button',{class:'btn sm',onclick:()=>O.openConnect()},O.icon('key'),O.tr('Connect','Подключить')));
   ta=h('textarea',{rows:1,placeholder:O.tr('Chat with OpenCode...','Чат с OpenCode...'),oninput:onInput,onclick:onInput,onkeyup:e=>{if(e.key.length>1)onInput()}});
@@ -32,7 +33,7 @@ O.chatInit=root=>{
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,jumpEl);
-  root.append(wrap,revEl,todoEl,statusEl,dockEl,comp);
+  root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,comp);
   bus.on('open',()=>{renderAll()});
   bus.on('msg',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd()});
   bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd()});
@@ -42,6 +43,7 @@ O.chatInit=root=>{
   bus.on('perm',renderDock);bus.on('todo',sid=>{if(sid===S.sid)renderTodos()});
   bus.on('session',()=>{const k=revisionKey();if(k!==revKey)renderAll();else renderRevert()});
   bus.on('sessions',()=>{renderRevert()});
+  bus.on('mm:progress',renderMmProgress);
   bus.on('meta',updateChips);bus.on('conn',updateChips);
   bus.on('serror',p=>{if(p&&(!p.sessionID||p.sessionID===S.sid)){const e=p.error;const t=e&&(e.data&&e.data.message||e.name);if(t&&e.name!=='MessageAbortedError'){
     if(/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|balance|funds|\b429\b/i.test(String(t))){
@@ -303,6 +305,22 @@ function renderTodos(){const t=(S.todos[S.sid]||[]);todoEl.textContent='';
   todoEl.classList.remove('hide');const done=t.filter(x=>x.status==='completed').length;
   const list=h('div',{class:'hide',style:{marginTop:'6px'}},t.map(x=>h('div',{class:'todo-i'+(x.status==='completed'?' done':'')},O.icon(x.status==='completed'?'check':'chevR'),x.content)));
   todoEl.append(h('div',{class:'card',style:{padding:'8px 12px'}},h('button',{style:{display:'flex',alignItems:'center',gap:'8px',width:'100%'},onclick:()=>list.classList.toggle('hide')},O.icon('list'),h('b',{class:'grow',style:{textAlign:'left'}},'Задачи '+done+'/'+t.length),O.icon('chevD')),list))}
+function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
+  if(!r){mmProgressEl.classList.add('hide');return}
+  const active=r.currentRole||r.phase;
+  if(!active){mmProgressEl.classList.add('hide');return}
+  mmProgressEl.classList.remove('hide');
+  const started=r.phaseStart||r.started||Date.now();
+  const elapsed=((Date.now()-started)/1000).toFixed(0);
+  const phase=r.phase||'role';
+  const phaseLabel={plan:'Планирование',role:'Работает роль',synth:'Синтез',idle:'Ожидание'}[phase]||phase;
+  mmProgressEl.append(h('div',{class:'mm-progress-bar'},
+    h('div',{class:'mm-progress-info'},
+      h('span',{class:'mm-progress-role'},active),
+      h('span',{class:'mm-progress-phase'},phaseLabel),
+      h('span',{class:'mm-progress-time'},elapsed+'s')),
+    h('div',{class:'mm-progress-track'},
+      h('div',{class:'mm-progress-fill',style:{width:phase==='role'||phase==='synth'?'100%':'0%'}}))))}
 function renderStatus(){const s=S.status[S.sid];statusEl.textContent='';
   if(!s||s.type==='idle'){statusEl.classList.add('hide');return}
   statusEl.classList.remove('hide');statusEl.append(h('span',{class:'spin'}),h('span',null,s.type==='retry'?('Повтор (попытка '+s.attempt+')'+(s.message?': '+s.message:'')):'Выполняется'))}

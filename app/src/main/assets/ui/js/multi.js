@@ -251,7 +251,8 @@ O.mmSend=async(text,parts)=>{
   const leadBackup=mm.backup||null;
   if(!leadMain){O.toast(O.tr('No model selected — pick a model or set the lead model','Модель не выбрана — выберите модель или задайте главную'),3000);return true}
   const sid=await O.chat.sess();
-  const run=O.mm.run={sid,abort:false};
+  const run=O.mm.run={sid,abort:false,started:Date.now(),phase:'plan',phaseStart:Date.now()};
+  const emit=()=>bus.emit('mm:progress');
   const fileNames=parts.filter(p=>p.type==='file').map(p=>p.filename||'').filter(Boolean);
   const userText=text+(fileNames.length?'\n(прикреплённые файлы: '+fileNames.join(', ')+')':'');
   // optimistic user bubble
@@ -268,6 +269,7 @@ O.mmSend=async(text,parts)=>{
     const leadModels=[leadMain,leadBackup].filter(Boolean);
     let plan=null,planText='',leadUsed=null;
     for(const lead of leadModels){
+      run.phase='plan';run.phaseStart=Date.now();emit();
       await post({messageID:O.mid(),model:lead,parts:[{type:'text',text:planInstr}]});
       await mmWaitIdle([sid],run);
       if(run.abort)throw new Error('aborted');
@@ -294,11 +296,13 @@ O.mmSend=async(text,parts)=>{
       }catch(e){jobs.push({sid:null,role:t.role,task:t.task,err:e.message||String(e)})}
     }
     // step 3: wait for all roles
+    run.phase='role';run.phaseStart=Date.now();emit();
     await mmWaitIdle(jobs.filter(j=>j.sid).map(j=>j.sid),run);
     if(run.abort)throw new Error('aborted');
     // step 3.5: fallback per failed role — up to 3 backup models each (sequentially)
     for(let x=0;x<jobs.length;x++){
       const j=jobs[x];if(!j.sid)continue;
+      run.currentRole=j.role.name;emit();
       let err=false;try{const st=await api('GET','/session/status',null,{timeout:6000});err=!!(st[j.sid]&&st[j.sid].type==='error')}catch(e){}
       if(!err)continue;
       let t='';try{t=await mmLastAssistant(j.sid)}catch(e){}
@@ -307,6 +311,7 @@ O.mmSend=async(text,parts)=>{
       let done=false;
       for(const model of bups){
         if(run.abort)break;
+        run.currentRole=j.role.name+' (retry)';emit();
         try{
           const cs2=await api('POST','/session',{parentID:sid,title:mm.name+' · '+j.role.name+' · '+O.tr('retry','повтор')});
           const rtext='Ты — «'+j.role.name+'» в команде «'+mm.name+'».\n'+(j.role.prompt||'')+
@@ -321,6 +326,7 @@ O.mmSend=async(text,parts)=>{
       if(!done){try{await api('DELETE','/session/'+j.sid,{})}catch(e){}jobs[x]={sid:null,role:j.role,err:O.tr('primary and backup models failed','основная и запасные модели не сработали')}}
     }
     // step 4: final synthesis by the lead model
+    run.phase='synth';run.phaseStart=Date.now();run.currentRole='Синтез';emit();
     const results=[];
     for(const j of jobs){
       if(!j.sid){results.push('['+j.role.name+']: (ошибка запуска: '+(j.err||'нет ответа')+')');continue}
@@ -331,8 +337,10 @@ O.mmSend=async(text,parts)=>{
       '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ для пользователя: что сделано и итог. Без служебных пометок.';
     await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:finInstr}]});
     O.mm.run=null;
+    emit();
   }catch(e){
     O.mm.run=null;
+    emit();
     if(!/aborted/i.test(e.message||''))O.toast(O.tr('Multimodal agent: ','Мультимодальный агент: ')+(e.message||e),4000);
   }
   return true;
