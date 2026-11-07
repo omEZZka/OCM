@@ -166,6 +166,19 @@ O.primaryAgents=()=>S.agents.filter(a=>a.mode!=='subagent'&&!a.hidden);
 O.pinnedModels=()=>O.store.get('pinnedModels',[]);
 O.isModelPinned=k=>O.pinnedModels().includes(k);
 O.toggleModelPin=k=>{const l=O.pinnedModels();const i=l.indexOf(k);if(i>=0)l.splice(i,1);else l.push(k);O.store.set('pinnedModels',l);bus.emit('meta')};
+O.recentModels=()=>O.store.get('recentModels',[]);
+O.pushRecentModel=k=>{if(!k)return;const l=O.recentModels().filter(x=>x!==k);l.unshift(k);O.store.set('recentModels',l.slice(0,8));};
+// Alphabetical sort within each provider: pinned float to the top, then providers A→Z, then models A→Z.
+O.sortModelsByProvider=items=>{
+  const pn=x=>String(x.pname||x.pid||'').toLowerCase();
+  return [...items].sort((a,b)=>{
+    const ap=O.isModelPinned(a.pid+'/'+a.mid)?0:1,bp=O.isModelPinned(b.pid+'/'+b.mid)?0:1;
+    if(ap!==bp)return ap-bp;
+    const c=pn(a).localeCompare(pn(b))||String(a.pid||'').localeCompare(String(b.pid||''));
+    if(c)return c;
+    return String(a.name||a.mid).localeCompare(String(b.name||b.mid));
+  });
+};
 O.hiddenModels=()=>O.store.get('hiddenModels',[]);
 O.isModelHidden=k=>O.hiddenModels().includes(k);
 O.hideModel=k=>{const l=O.hiddenModels();if(!l.includes(k))l.push(k);O.store.set('hiddenModels',l);bus.emit('meta')};
@@ -219,6 +232,7 @@ O.setModel=(pid,mid)=>{
   S.model={providerID:pid,modelID:mid};
   O.store.set('model.'+S.agent,S.model);
   if(S.sid)O.store.set('session.model.'+S.sid,S.model);
+  O.pushRecentModel(pid+'/'+mid);
   O.pickDefaults();
   if(O.updateReadmeForModel) O.updateReadmeForModel(mid);
   bus.emit('meta');

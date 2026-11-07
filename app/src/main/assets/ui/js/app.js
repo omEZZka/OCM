@@ -15,9 +15,16 @@ function build(){
   T.tokensVal=h('span',{class:'top-tokens-val'},'0 tok');
   T.tokens=h('button',{class:'top-tokens-btn',style:{display:'none'},title:O.tr('Session Tokens / Context','Токены сессии / Контекст'),onclick:()=>O.openTokensModal()},h('span',{class:'tok-bolt',html:BOLT_SVG}),T.tokensVal);
   const topLeft=h('div',{class:'top-left-box'},T.menu,T.tokens);
+  T.title=h('button',{class:'top-title',title:O.tr('Sessions','Сессии'),onclick:()=>O.openSessions()},h('span',{class:'top-title-txt'},O.tr('OpenCode','OpenCode')),h('span',{class:'top-title-dot hide'}));
+  O.longPress(T.title,()=>{
+    const s=S.sid&&S.sessions.find(x=>x.id===S.sid);if(!s)return;
+    O.ask(O.tr('Rename session','Переименование сессии'),null,O.sessionTitle(s)).then(v=>{
+      if(v)api('PATCH','/session/'+s.id,{title:v}).catch(e=>O.toast(e.message));
+    });
+  });
   T.mm=h('button',{class:'top-mm-btn',title:O.tr('Multimodal agents','Мультимодальные агенты'),onclick:()=>O.openMultimodalPicker()},O.icon('bot'),h('span',{class:'top-mm-txt'},'MM'));
   T.status=h('button',{class:'top-status-btn',title:O.tr('Server & MCP Status','Статус сервера и MCP'),onclick:()=>O.openStatus()},O.icon('sliders'));
-  const topRight=h('div',{class:'top-right-box'},T.mm,T.status);
+  const topRight=h('div',{class:'top-right-box'},T.title,T.mm,T.status);
   const top=h('div',{id:'top'},topLeft,topRight);
 
   T.banner=h('div',{id:'banner',class:'hide'});
@@ -58,7 +65,7 @@ function build(){
   O.changesInit(SP.changes);
 
   addEventListener('resize',O.debounce(layout,100));
-  ['open','session','sessions','msg','vcs','dir','meta','diff'].forEach(e=>bus.on(e,O.debounce(updateTop,120)));
+  ['open','session','sessions','msg','vcs','dir','meta','diff','status','idle'].forEach(e=>bus.on(e,O.debounce(updateTop,120)));
   bus.on('mm',O.debounce(updateTop,60));
   bus.on('conn',updateBanner);
   bus.on('statuspanel',refreshStatus);
@@ -156,7 +163,24 @@ function updateTop(){
   const v=Object.values(S.mcp||{});
   const hasErr=v.some(x=>x.status==='failed'||x.status==='needs_auth');
   if(T.status)T.status.classList.toggle('active',hasErr);
+  updateTopTitle();
   updateTopMm();
+}
+
+function updateTopTitle(){
+  if(!T.title)return;
+  const sp=T.title.querySelector('.top-title-txt');
+  if(!sp)return;
+  const s=S.sid&&S.sessions.find(x=>x.id===S.sid);
+  const t=s?O.sessionTitle(s):O.tr('OpenCode','OpenCode');
+  sp.textContent=t;
+  T.title.classList.toggle('empty',!s);
+  const dot=T.title.querySelector('.top-title-dot');
+  if(dot){
+    const st=S.status[S.sid];
+    const busy=!!st&&st.type!=='idle';
+    dot.classList.toggle('hide',!busy);
+  }
 }
 
 function updateTopMm(){

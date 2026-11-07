@@ -144,17 +144,9 @@ O.openModels=()=>{
     }
 
     const activeKey=S.model?(S.model.providerID+'/'+S.model.modelID):'';
-    items.sort((a,b)=>{
-      const ap=O.isModelPinned(a.pid+'/'+a.mid)?0:1,bp=O.isModelPinned(b.pid+'/'+b.mid)?0:1;
-      if(ap!==bp)return ap-bp;
-      const aOn=(a.pid+'/'+a.mid)===activeKey;
-      const bOn=(b.pid+'/'+b.mid)===activeKey;
-      if(aOn!==bOn)return aOn?-1:1;
-      return (a.name||a.mid).localeCompare(b.name||b.mid);
-    });
+    items=O.sortModelsByProvider(items);
 
-    const groupCard=h('div',{class:'group-card'});
-    items.forEach(x=>{
+    const rowFor=x=>{
       const key=x.pid+'/'+x.mid;
       const isSel=activeKey===key;
       const isPinned=O.isModelPinned(key);
@@ -164,7 +156,6 @@ O.openModels=()=>{
       );
 
       const ctx=x.m&&x.m.limit&&x.m.limit.context,parts=[];
-      parts.push(x.pname||x.pid);
       if(ctx)parts.push(O.fmtK(ctx)+' context');
       if(x.m&&(x.m.modalities&&x.m.modalities.includes('image')||x.m.attachment!==false))parts.push('images');
       if(x.m&&(x.m.reasoning||x.m.variants))parts.push('reasoning');
@@ -185,14 +176,39 @@ O.openModels=()=>{
             h('span',{class:'model-row-title'},x.name||x.mid),
             badge
           ),
-          h('span',{class:'model-row-sub'},sub)
+          sub?h('span',{class:'model-row-sub'},sub):null
         ),
         isSel?O.icon('check','model-check'):null
       );
       O.longPress(row,()=>modelActions(x,()=>draw()));
-      groupCard.append(row);
+      return row;
+    };
+
+    // Recently used models float to the very top (unless a filter is active).
+    if(!filterText){
+      const recentKeys=O.recentModels();
+      const recent=recentKeys.map(k=>items.find(x=>x.pid+'/'+x.mid===k)).filter(Boolean);
+      if(recent.length){
+        const card=h('div',{class:'group-card'});
+        recent.forEach(x=>card.append(rowFor(x)));
+        listEl.append(h('div',{class:'model-group-head'},h('span',null,O.tr('Recent','Недавние'))),card);
+      }
+    }
+
+    const groups=[];
+    const byPid=new Map();
+    items.forEach(x=>{
+      let g=byPid.get(x.pid);
+      if(!g){g={pid:x.pid,pname:x.pname||x.pid,items:[]};byPid.set(x.pid,g);groups.push(g)}
+      g.items.push(x);
     });
-    listEl.append(groupCard);
+
+    groups.forEach(g=>{
+      const head=h('div',{class:'model-group-head'},h('span',null,g.pname));
+      const groupCard=h('div',{class:'group-card'});
+      g.items.forEach(x=>groupCard.append(rowFor(x)));
+      listEl.append(head,groupCard);
+    });
     hiddenRow();
   }
   draw();

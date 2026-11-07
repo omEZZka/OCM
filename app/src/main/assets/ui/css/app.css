@@ -387,6 +387,53 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-end;
+}
+.top-title {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 42vw;
+  height: 40px;
+  padding: 0 6px;
+  color: var(--fg);
+  font-size: 14.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  border-radius: 12px;
+  transition: background 0.15s;
+}
+.top-title:active {
+  background: var(--bg3);
+}
+.top-title.empty {
+  color: var(--mut);
+  font-weight: 600;
+}
+.top-title .top-title-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.top-title-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.6);
+  animation: topdot 1.4s ease-out infinite;
+}
+@keyframes topdot {
+  0% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.55); }
+  70% { box-shadow: 0 0 0 6px rgba(56, 189, 248, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+}
+#app[data-mode=wide] .top-title {
+  max-width: 30vw;
 }
 .top-mm-btn {
   display: inline-flex;
@@ -815,6 +862,21 @@ a:hover {
   border-radius: 20px;
   overflow: hidden;
   margin-bottom: 12px;
+}
+
+.model-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 8px 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mut);
+}
+.model-group-head:first-child {
+  padding-top: 4px;
 }
 
 .model-row {
