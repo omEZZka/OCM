@@ -15,8 +15,10 @@ function build(){
   T.tokensVal=h('span',{class:'top-tokens-val'},'0 tok');
   T.tokens=h('button',{class:'top-tokens-btn',style:{display:'none'},title:O.tr('Session Tokens / Context','Токены сессии / Контекст'),onclick:()=>O.openTokensModal()},h('span',{class:'tok-bolt',html:BOLT_SVG}),T.tokensVal);
   const topLeft=h('div',{class:'top-left-box'},T.menu,T.tokens);
+  T.mm=h('button',{class:'top-mm-btn hide',title:O.tr('Multimodal agents','Мультимодальные агенты'),onclick:()=>O.openMultimodalPicker()},O.icon('bot'),h('span',{class:'top-mm-txt'},'MM'));
   T.status=h('button',{class:'top-status-btn',title:O.tr('Server & MCP Status','Статус сервера и MCP'),onclick:()=>O.openStatus()},O.icon('sliders'));
-  const top=h('div',{id:'top'},topLeft,T.status);
+  const topRight=h('div',{class:'top-right-box'},T.mm,T.status);
+  const top=h('div',{id:'top'},topLeft,topRight);
 
   T.banner=h('div',{id:'banner',class:'hide'});
 
@@ -57,6 +59,7 @@ function build(){
 
   addEventListener('resize',O.debounce(layout,100));
   ['open','session','sessions','msg','vcs','dir','meta','diff'].forEach(e=>bus.on(e,O.debounce(updateTop,120)));
+  bus.on('mm',O.debounce(updateTop,60));
   bus.on('conn',updateBanner);
   bus.on('statuspanel',refreshStatus);
   layout();
@@ -155,6 +158,17 @@ function updateTop(){
   const v=Object.values(S.mcp||{});
   const hasErr=v.some(x=>x.status==='failed'||x.status==='needs_auth');
   if(T.status)T.status.classList.toggle('active',hasErr);
+  updateTopMm();
+}
+
+function updateTopMm(){
+  if(!T.mm)return;
+  const list=O.mmList?O.mmList():[];
+  const mmA=O.mmActive&&O.mmActive();
+  T.mm.classList.toggle('hide',!list.length);
+  T.mm.classList.toggle('active',!!mmA);
+  const sp=T.mm.querySelector('.top-mm-txt');
+  if(sp)sp.textContent=mmA?mmA.name:'MM';
 }
 
 function updateBanner(){

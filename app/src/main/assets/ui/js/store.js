@@ -163,6 +163,13 @@ O.isModelFree=x=>{
   return false;
 };
 O.primaryAgents=()=>S.agents.filter(a=>a.mode!=='subagent'&&!a.hidden);
+O.pinnedModels=()=>O.store.get('pinnedModels',[]);
+O.isModelPinned=k=>O.pinnedModels().includes(k);
+O.toggleModelPin=k=>{const l=O.pinnedModels();const i=l.indexOf(k);if(i>=0)l.splice(i,1);else l.push(k);O.store.set('pinnedModels',l);bus.emit('meta')};
+O.hiddenModels=()=>O.store.get('hiddenModels',[]);
+O.isModelHidden=k=>O.hiddenModels().includes(k);
+O.hideModel=k=>{const l=O.hiddenModels();if(!l.includes(k))l.push(k);O.store.set('hiddenModels',l);bus.emit('meta')};
+O.unhideModel=k=>{O.store.set('hiddenModels',O.hiddenModels().filter(x=>x!==k));bus.emit('meta')};
 O.modelInfo=(pid,mid)=>{
   const p=S.providers.find(x=>x.id===pid);
   if(p&&p.models&&p.models[mid])return p.models[mid];

@@ -24,7 +24,17 @@ O.stripAnsi=s=>String(s||'')
   .replace(/\x1b[@-Z\\-_]/g,'')
   .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g,'');
 O.debounce=(f,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),ms)}};
-O.store={get(k,d){try{const v=localStorage.getItem('ocm.'+k);return v==null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem('ocm.'+k,JSON.stringify(v))}catch{}}};
+O.longPress=(el,fn,ms)=>{ms=ms||480;let t=null;
+  const start=e=>{if(e&&e.button!=null&&e.button!==0)return;el._lpFired=false;clearTimeout(t);t=setTimeout(()=>{t=null;el._lpFired=true;fn(e)},ms)};
+  const cancel=()=>{if(t){clearTimeout(t);t=null}};
+  el.addEventListener('touchstart',start,{passive:true});
+  el.addEventListener('touchend',cancel);
+  el.addEventListener('touchmove',cancel,{passive:true});
+  el.addEventListener('touchcancel',cancel);
+  el.addEventListener('mousedown',start);
+  el.addEventListener('mouseup',cancel);
+  el.addEventListener('mouseleave',cancel);
+  return el};O.store={get(k,d){try{const v=localStorage.getItem('ocm.'+k);return v==null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem('ocm.'+k,JSON.stringify(v))}catch{}}};
 let last=0,ctr=0;
 O.mid=()=>{const n=Date.now();if(n!==last){last=n;ctr=0}ctr++;
   const hex=(BigInt(n)*0x1000n+BigInt(ctr)).toString(16).padStart(12,'0').slice(-12);

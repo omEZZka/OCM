@@ -383,6 +383,37 @@ a:hover {
   transform: scale(0.92);
 }
 
+.top-right-box {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.top-mm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 40px;
+  padding: 0 12px;
+  color: var(--mut);
+  border-radius: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: color 0.15s, background 0.15s;
+}
+.top-mm-btn .top-mm-txt {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.top-mm-btn:active, .top-mm-btn.active {
+  color: var(--fg);
+  background: var(--bg3);
+}
+.top-mm-btn.active {
+  color: #38bdf8;
+}
+
 #banner {
   background: #18181b;
   color: #a1a1aa;
@@ -961,6 +992,17 @@ a:hover {
 .settings-row.on .settings-row-icon,
 .settings-row.on svg {
   color: var(--acc2);
+}
+.pin-ic {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: #fbbf24 !important;
+  opacity: 0.9;
+}
+.pin-ic svg {
+  width: 15px;
+  height: 15px;
 }
 .settings-row-icon {
   width: 32px;

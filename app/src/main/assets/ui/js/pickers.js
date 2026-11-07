@@ -25,7 +25,7 @@ O.openSessions=()=>{
     items.forEach(x=>{const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,pin=O.isPinned(x.id);
       list.append(h('div',{class:'settings-row'+(x.id===S.sid?' on':'')},
         h('button',{class:'settings-row-text',onclick:()=>{s.close();O.openSession(x.id)}},
-          h('b',null,(pin?'📌 ':'')+O.sessionTitle(x)),
+          h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},pin?O.icon('pin','pin-ic'):null,h('span',null,O.sessionTitle(x))),
           h('span',null,O.ago(x.time.updated)+(sm&&(sm.additions||sm.deletions)?'  +'+sm.additions+' -'+sm.deletions:''))),
         b?h('span',{class:'spin',style:{flex:'none'}}):null,h('button',{class:'ibtn s',style:{flex:'none'},onclick:()=>sessActions(x)},O.icon('dots'))))})}
   draw();bus.on('sessions',()=>{if(s.root.isConnected)draw()})};
@@ -101,6 +101,17 @@ O.openModels=()=>{
   const container=h('div',null,q,listEl,h('div',{style:{height:'10px'}}),swRow,effortCard,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
 
+  function hiddenRow(){
+    const hid=O.hiddenModels();
+    const old=container.querySelector('.hidden-models-btn');
+    if(old)old.remove();
+    if(!hid.length)return;
+    const b=h('button',{class:'btn wide hidden-models-btn',style:{marginTop:'8px'},onclick:()=>{
+      O.actions(O.tr('Deleted models','Удалённые модели'),hid.map(k=>({label:k,icon:'pin',fn:()=>{O.unhideModel(k);draw()}})));
+    }},O.icon('trash'),O.tr('Restore deleted models','Восстановить удалённые модели ('+hid.length+')'));
+    container.append(b);
+  }
+
   function draw(){
     listEl.textContent='';
     const all=O.allModels();
@@ -109,6 +120,7 @@ O.openModels=()=>{
         h('p',null,O.tr('No models available. Check runtime or connect a provider.','Моделей пока нет. Дождитесь запуска сервера или подключите провайдера.')),
         h('button',{class:'btn pri sm',style:{marginTop:'8px'},onclick:()=>{s.close();O.openConnect()}},O.icon('key'),O.tr('Connect provider','Подключить'))
       ));
+      hiddenRow();
       return;
     }
 
@@ -116,6 +128,7 @@ O.openModels=()=>{
     if(onlyFree){
       items=items.filter(x=>O.isModelFree(x));
     }
+    items=items.filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
     if(filterText){
       const f=filterText.toLowerCase();
       items=items.filter(x=>(x.name+' '+x.mid+' '+(x.pname||x.pid)).toLowerCase().includes(f));
@@ -126,11 +139,14 @@ O.openModels=()=>{
         onlyFree
           ?O.tr('No free models found matching filter. Try disabling "Only free models" below.','Бесплатных моделей по фильтру не найдено. Попробуйте отключить пункт «Только бесплатные модели» ниже.')
           :O.tr('No models match filter.','Модели не найдены.')));
+      hiddenRow();
       return;
     }
 
     const activeKey=S.model?(S.model.providerID+'/'+S.model.modelID):'';
     items.sort((a,b)=>{
+      const ap=O.isModelPinned(a.pid+'/'+a.mid)?0:1,bp=O.isModelPinned(b.pid+'/'+b.mid)?0:1;
+      if(ap!==bp)return ap-bp;
       const aOn=(a.pid+'/'+a.mid)===activeKey;
       const bOn=(b.pid+'/'+b.mid)===activeKey;
       if(aOn!==bOn)return aOn?-1:1;
@@ -139,7 +155,9 @@ O.openModels=()=>{
 
     const groupCard=h('div',{class:'group-card'});
     items.forEach(x=>{
-      const isSel=activeKey===(x.pid+'/'+x.mid);
+      const key=x.pid+'/'+x.mid;
+      const isSel=activeKey===key;
+      const isPinned=O.isModelPinned(key);
       const isFree=O.isModelFree(x);
       const badge=h('span',{class:'badge-model '+(isFree?'badge-free':'badge-paid')},
         isFree?O.tr('Free','Бесплатно'):O.tr('Paid','Платная')
@@ -156,12 +174,14 @@ O.openModels=()=>{
       const sub=parts.join(' · ');
 
       const row=h('button',{class:'model-row'+(isSel?' on':''),onclick:()=>{
+        if(row._lpFired){row._lpFired=false;return}
         O.setModel(x.pid,x.mid);
         s.close();
         O.toast(O.tr('Selected: ','Выбрана: ')+(x.name||x.mid),1500);
       }},
         h('div',{class:'model-row-left'},
           h('div',{style:{display:'flex',alignItems:'center',gap:'6px',flexWrap:'wrap'}},
+            isPinned?O.icon('pin','pin-ic'):null,
             h('span',{class:'model-row-title'},x.name||x.mid),
             badge
           ),
@@ -169,12 +189,37 @@ O.openModels=()=>{
         ),
         isSel?O.icon('check','model-check'):null
       );
+      O.longPress(row,()=>modelActions(x,()=>draw()));
       groupCard.append(row);
     });
     listEl.append(groupCard);
+    hiddenRow();
   }
   draw();
 };
+
+function modelActions(x,redraw){
+  const key=x.pid+'/'+x.mid;
+  const pinned=O.isModelPinned(key);
+  O.actions(x.name||x.mid,[
+    {label:pinned?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'pin',fn:()=>{O.toggleModelPin(key);redraw()}},
+    {label:O.tr('Start chat in another session','Начать диалог в другой сессии'),icon:'plus',fn:async()=>{
+      try{
+        const ses=await O.newSession();
+        O.setModel(x.pid,x.mid);
+        O.setTab('chat');
+        O.toast(O.tr('New session with ','Новая сессия с ')+(x.name||x.mid),1800);
+      }catch(e){O.toast(e.message)}
+    }},
+    {label:O.tr('Delete model','Удалить модель'),icon:'trash',danger:true,fn:async()=>{
+      if(await O.confirm(O.tr('Delete model?','Удалить модель?'),(x.name||x.mid)+' — '+O.tr('will be hidden from the model list','будет скрыта из списка моделей'),O.tr('Delete','Удалить'),true)){
+        O.hideModel(key);
+        if(S.model&&(S.model.providerID+'/'+S.model.modelID)===key){const rest=O.allModels().filter(m=>!O.isModelHidden(m.pid+'/'+m.mid)&&m.pid+'/'+m.mid!==key);if(rest.length)O.setModel(rest[0].pid,rest[0].mid)}
+        redraw();
+      }
+    }}
+  ]);
+}
 
 O.openAllModelsCatalog=()=>O.openModels();
 

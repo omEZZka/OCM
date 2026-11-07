@@ -15,8 +15,11 @@ const mStr=m=>m?(m.providerID+'/'+m.modelID):'';
 const mName=m=>{if(!m)return'';const mi=O.modelInfo(m.providerID,m.modelID);return mi?(mi.name||m.modelID):m.modelID};
 
 // ---- model picker (does not touch global S.model) ----
+O.mmFreeOnly=()=>O.store.get('onlyFreeModels',true);
+O.mmSetFreeOnly=v=>{O.store.set('onlyFreeModels',!!v);bus.emit('mm');bus.emit('meta')};
 O.mmPickModel=(cur,cb,opts)=>{
   opts=opts||{};
+  const freeOnly=opts.freeOnly!=null?opts.freeOnly:O.mmFreeOnly();
   let filterText='';
   const listEl=h('div');
   const q=h('input',{placeholder:O.tr('Search models...','Поиск моделей...'),oninput:e=>{filterText=e.target.value.toLowerCase();draw()},style:{marginBottom:'8px'}});
@@ -24,8 +27,9 @@ O.mmPickModel=(cur,cb,opts)=>{
   function draw(){
     listEl.textContent='';
     let all=O.allModels();
-    if(opts.freeOnly)all=all.filter(x=>O.isModelFree(x));
-    if(!all.length){listEl.append(h('div',{class:'mut',style:{padding:'24px 16px',textAlign:'center'}},opts.freeOnly?O.tr('No free models available.','Бесплатных моделей нет.'):O.tr('No models available. Connect a provider first.','Моделей пока нет. Сначала подключите провайдера.')));return}
+    if(freeOnly)all=all.filter(x=>O.isModelFree(x));
+    all=all.filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
+    if(!all.length){listEl.append(h('div',{class:'mut',style:{padding:'24px 16px',textAlign:'center'}},freeOnly?O.tr('No free models available.','Бесплатных моделей нет.'):O.tr('No models available. Connect a provider first.','Моделей пока нет. Сначала подключите провайдера.')));return}
     let items=filterText?all.filter(x=>(x.name+' '+x.mid+' '+(x.pname||x.pid)).toLowerCase().includes(filterText)):all;
     const ck=mStr(cur);
     items.sort((a,b)=>{const aOn=(a.pid+'/'+a.mid)===ck,bOn=(b.pid+'/'+b.mid)===ck;return aOn!==bOn?(aOn?-1:1):(a.name||a.mid).localeCompare(b.name||b.mid)});
@@ -83,7 +87,7 @@ O.openMultimodal=()=>{
         card.append(h('div',{class:'settings-row'+(on?' on':'')},
           h('button',{class:'settings-row-text',style:{textAlign:'left'},onclick:()=>O.mmEditor(a,redraw)},
             h('b',null,a.name),
-            h('span',null,O.tr('Lead: ','Главная: ')+(a.main?mName(a.main):O.tr('active session model','модель активной сессии'))+' · '+a.roles.length+' '+O.tr('role(s)','рол(ей)')+(a.freeOnly?' · '+O.tr('free only','только бесплатные'):''))),
+            h('span',null,O.tr('Lead: ','Главная: ')+(a.main?mName(a.main):O.tr('active session model','модель активной сессии'))+' · '+a.roles.length+' '+O.tr('role(s)','рол(ей)'))),
           h('button',{class:'ibtn s',onclick:()=>{O.mmSetActive(on?null:a.id);redraw()}},on?O.icon('check','ok'):O.icon('play'))));
       });
       body.append(card);
@@ -99,10 +103,10 @@ O.openMultimodal=()=>{
 // ---- editor ----
 O.mmEditor=(a,done)=>{
   const isNew=!a;
-  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,backup:null,freeOnly:false,roles:[]};
+  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,backup:null,roles:[]};
   a.roles=Array.isArray(a.roles)?a.roles:[];
   if(!a.backup)a.backup=null;
-  const pickOpts=()=>({freeOnly:a.freeOnly});
+  const pickOpts=()=>({});
   const body=h('div');
   const s=O.sheet(isNew?O.tr('New multimodal agent','Новый мультимодальный агент'):O.tr('Edit multimodal agent','Редактирование агента'),body,{full:true});
   const nameInp=h('input',{type:'text',placeholder:O.tr('Agent name, e.g. Translation team','Название, например Команда перевода'),value:a.name||''});
@@ -116,8 +120,7 @@ O.mmEditor=(a,done)=>{
     h('div',{class:'settings-row-text'},h('b',null,O.tr('Backup lead model','Запасная главная модель')),
       h('span',{id:'mm-backup-sub'},a.backup?mName(a.backup):O.tr('Used when the lead model fails','Включается, если главная модель дала сбой'))),
     O.icon('chevR'));
-  const freeRow=O.toggleRow('star',O.tr('Only free models','Только бесплатные модели'),O.tr('Hide paid models in every picker','Скрывать платные модели во всех выборах'),!!a.freeOnly,v=>{a.freeOnly=v;draw()});
-  a.freeOnly=!!a.freeOnly;
+  const freeRow=O.toggleRow('star',O.tr('Only free models','Только бесплатные модели'),O.tr('Hide paid models in every picker (agents, roles, subagents)','Скрывать платные модели во всех выборах (агенты, роли, субагенты)'),O.mmFreeOnly(),v=>{O.mmSetFreeOnly(v);draw()});
   const rolesEl=h('div');
   const draw=()=>{
     const sub=mainRow.querySelector('#mm-main-sub');if(sub)sub.textContent=a.main?mName(a.main):O.tr('Empty — uses the active session model','Пусто — берётся модель активной сессии');
