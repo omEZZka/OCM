@@ -444,9 +444,9 @@ O.openCustomProvider=parentSheet=>{
   let foundModels=[];const sel=new Set();
 
   const presets=h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'12px'}},
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='groq';nameInp.value='Groq';urlInp.value='https://api.groq.com/openai/v1'}},'⚡ Groq'),
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='openrouter';nameInp.value='OpenRouter';urlInp.value='https://openrouter.ai/api/v1'}},'🌐 OpenRouter'),
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='ollama';nameInp.value='Ollama (Local)';urlInp.value='http://127.0.0.1:11434/v1'}},'🦙 Ollama'),
+    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='groq';nameInp.value='Groq';urlInp.value='https://api.groq.com/openai/v1'}},O.icon('zap'),'Groq'),
+    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='openrouter';nameInp.value='OpenRouter';urlInp.value='https://openrouter.ai/api/v1'}},O.icon('globe'),'OpenRouter'),
+    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='ollama';nameInp.value='Ollama (Local)';urlInp.value='http://127.0.0.1:11434/v1'}},O.icon('llama'),'Ollama'),
     h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='together';nameInp.value='Together AI';urlInp.value='https://api.together.xyz/v1'}},'Together'));
 
   const probeBtn=h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:async()=>{

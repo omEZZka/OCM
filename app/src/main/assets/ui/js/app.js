@@ -75,6 +75,10 @@ function build(){
       if(d==='left')O.setTab('files');
       else if(d==='right')O.openSessions();
     });
+    O.swipe(P.files,d=>{
+      if(wide())return;
+      if(d==='right')O.setTab('chat');
+    });
   }
 
   addEventListener('resize',O.debounce(layout,100));

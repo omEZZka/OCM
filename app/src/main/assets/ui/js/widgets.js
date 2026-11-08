@@ -167,9 +167,10 @@ O.openPreview=function(relPath){
   const viewToggleBtn=h('button',{class:'ibtn s',title:O.tr('Switch Viewport (Mobile/Desktop)','Переключить масштаб (Мобильный/ПК)'),onclick:()=>{
     isMobile=!isMobile;
     frameWrap.classList.toggle('desktop-mode',!isMobile);
-    viewToggleBtn.textContent=isMobile?'📱':'💻';
+    viewToggleBtn.textContent='';
+    viewToggleBtn.append(O.icon(isMobile?'phone':'laptop'));
     O.toast(isMobile?O.tr('Mobile View (390px)','Мобильный вид (390px)'):O.tr('Desktop View (100%)','Широкий вид (100%)'),1000);
-  }},'📱');
+  }},O.icon('phone'));
   const refreshBtn=h('button',{class:'ibtn s',title:O.tr('Reload','Обновить'),onclick:()=>{
     try{
       if(O.native&&O.native.preparePreview)O.native.preparePreview(target);
@@ -234,18 +235,18 @@ O.getBuiltinWidgets=function(){
 
   // Widget 3: Quick Developer Snippets
   const snips=[
-    ['🐛 Баги','Найди потенциальные баги, ошибки типов и утечки памяти в текущем проекте.'],
-    ['⚡ Рефактор','Проведи рефакторинг кода: оптимизируй архитектуру и удали дублирование.'],
-    ['🧪 Тесты','Напиши подробные автоматические тесты с проверкой граничных условий.'],
-    ['📝 Доки','Создай или обнови техническую документацию в README.md.']
+    [O.icon('bug'),'Баги','Найди потенциальные баги, ошибки типов и утечки памяти в текущем проекте.'],
+    [O.icon('zap'),'Рефактор','Проведи рефакторинг кода: оптимизируй архитектуру и удали дублирование.'],
+    [O.icon('flask'),'Тесты','Напиши подробные автоматические тесты с проверкой граничных условий.'],
+    [O.icon('doc'),'Доки','Создай или обнови техническую документацию в README.md.']
   ];
   const snipBody=h('div',{class:'ocm-widget-body ocm-adaptive-widget'},
     h('div',{style:{display:'grid',gridTemplateColumns:'repeat(2, 1fr)',gap:'8px'}},
-      snips.map(([label,text])=>h('button',{
+      snips.map(([icon,label,text])=>h('button',{
         class:'btn-widget-action',
         style:{padding:'10px 8px',textAlign:'left',justifyContent:'flex-start'},
         onclick:()=>O.dispatchAction('prompt',text)
-      },h('span',{style:{fontSize:'13px',fontWeight:'600'}},label)))));
+      },icon,h('span',{style:{fontSize:'13px',fontWeight:'600'}},label)))));
 
   // Widget 4: Active Session
   const ses=S.sid&&S.sessions.find(x=>x.id===S.sid);
@@ -330,7 +331,7 @@ O.openWidgetsModal=function(){
 // Custom widget creator dialog
 O.openCustomWidgetCreator=function(){
   const ta=h('textarea',{class:'editor',style:{height:'160px'},placeholder:'<div class="ocm-widget" data-title="Мой кастомный виджет">\n  <p>Привет из OpenCode!</p>\n  <button data-action="new_chat">Новый чат</button>\n  <button data-action="open_app" data-target="telegram">Открыть Telegram</button>\n</div>'});
-  ta.value=`<div class="ocm-widget" data-title="Мой Инструмент">\n  <p style="color:#a1a1aa;margin-bottom:10px;">Быстрые действия на телефоне:</p>\n  <div style="display:flex;gap:8px;flex-wrap:wrap;">\n    <button class="btn sm pri" data-action="new_chat">💬 Новый чат</button>\n    <button class="btn sm" data-action="open_app" data-target="telegram">✈️ Telegram</button>\n    <button class="btn sm" data-action="preview">🌐 Предпросмотр</button>\n  </div>\n</div>`;
+  ta.value=`<div class="ocm-widget" data-title="Мой Инструмент">\n  <p style="color:#a1a1aa;margin-bottom:10px;">Быстрые действия на телефоне:</p>\n  <div style="display:flex;gap:8px;flex-wrap:wrap;">\n    <button class="btn sm pri" data-action="new_chat">Новый чат</button>\n    <button class="btn sm" data-action="open_app" data-target="telegram">Telegram</button>\n    <button class="btn sm" data-action="preview">Предпросмотр</button>\n  </div>\n</div>`;
   const previewBox=h('div',{class:'custom-widget-preview-area',style:{marginTop:'12px'}});
   const renderPrev=()=>{
     previewBox.innerHTML=ta.value;

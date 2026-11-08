@@ -95,7 +95,8 @@ const revisionKey=()=>{const s=cur();return s&&s.revert?s.revert.messageID:''};
 function renderAll(){
   msgsEl.innerHTML='';msgEls.clear();partEls.clear();revKey=revisionKey();
   const list=S.sid?O.visibleMsgs(S.sid):[];
-  if(S.sid){const draft=O.getDraft(S.sid);if(draft&&!ta.value){ta.value=draft;autosize();updateSend()}}
+  if(draftSid!==S.sid){draftSid=S.sid;clearTimeout(draftTimer);ta.value=S.sid?(O.getDraft(S.sid)||''):'';autosize();updateSend()}
+  else if(S.sid&&!ta.value){const draft=O.getDraft(S.sid);if(draft){ta.value=draft;autosize();updateSend()}}
   if(!list.length){pendingHead=[];showEmpty()}
   else{
     if(chatRoot)chatRoot.classList.remove('is-empty');
@@ -340,7 +341,9 @@ function renderTodos(){const t=(S.todos[S.sid]||[]);todoEl.textContent='';
   todoEl.classList.remove('hide');const done=t.filter(x=>x.status==='completed').length;
   const list=h('div',{class:'hide',style:{marginTop:'6px'}},t.map(x=>h('div',{class:'todo-i'+(x.status==='completed'?' done':'')},O.icon(x.status==='completed'?'check':'chevR'),x.content)));
   todoEl.append(h('div',{class:'card',style:{padding:'8px 12px'}},h('button',{style:{display:'flex',alignItems:'center',gap:'8px',width:'100%'},onclick:()=>list.classList.toggle('hide')},O.icon('list'),h('b',{class:'grow',style:{textAlign:'left'}},'Задачи '+done+'/'+t.length),O.icon('chevD')),list))}
+let mmTimer=null;
 function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
+  if(mmTimer){clearInterval(mmTimer);mmTimer=null}
   if(!r){mmProgressEl.classList.add('hide');return}
   const active=r.currentRole||r.phase;
   if(!active){mmProgressEl.classList.add('hide');return}
@@ -357,16 +360,24 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
     h('div',{class:'mm-progress-track'},
       h('div',{class:'mm-progress-fill',style:{width:phase==='role'||phase==='synth'?'100%':'0%'}}))));
   const ctrl=h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap',marginTop:'6px'}},
-    h('button',{class:'chip',onclick:()=>O.mmPause&&O.mmPause()},r.paused?'▶ '+O.tr('Resume','Продолжить'):'⏸ '+O.tr('Pause','Пауза')),
-    h('button',{class:'chip',onclick:()=>O.mmStop&&O.mmStop()},'⏹ '+O.tr('Stop all','Стоп')));
+    h('button',{class:'chip',onclick:()=>O.mmPause&&O.mmPause()},O.icon(r.paused?'play':'pause'),r.paused?O.tr('Resume','Продолжить'):O.tr('Pause','Пауза')),
+    h('button',{class:'chip',onclick:()=>O.mmStop&&O.mmStop()},O.icon('stop'),O.tr('Stop all','Стоп')));
   (r.jobs||[]).forEach(j=>{
     if(!j.sid)return;
     const done=!S.status[j.sid]||S.status[j.sid].type==='idle';
     const cur=r.currentRole&&(j.role.name===r.currentRole||j.role.name+' (retry)'===r.currentRole);
     ctrl.append(h('button',{class:'chip',title:O.tr('Stop this role','Остановить эту роль'),style:cur?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>O.mmStopRole&&O.mmStopRole(j.role.name)},
-      (done?'✓ ':cur?'◐ ':'• ')+(j.role.name||'')));
+      O.icon(done?'check':cur?'refresh':'dot'),(j.role.name||'')));
   });
   mmProgressEl.append(ctrl);
+  if(!r.paused){
+    const timeEl=mmProgressEl.querySelector('.mm-progress-time');
+    mmTimer=setInterval(()=>{
+      if(!O.mm.run){clearInterval(mmTimer);mmTimer=null;return}
+      if(timeEl&&timeEl.isConnected)timeEl.textContent=((Date.now()-started)/1000).toFixed(0)+'s';
+      else{clearInterval(mmTimer);mmTimer=null}
+    },1000);
+  }
 }
 function renderStatus(){const s=S.status[S.sid];statusEl.textContent='';
   if(!s||s.type==='idle'){statusEl.classList.add('hide');return}
@@ -478,7 +489,7 @@ O.showQuotaAccountModal=msg=>{
   }
   quotaModalOpen=true;
   const content=h('div',{style:{textAlign:'center',padding:'16px 8px 8px'}},
-    h('div',{style:{fontSize:'38px',marginBottom:'10px'}},'⚡'),
+    h('div',{style:{display:'flex',justifyContent:'center',marginBottom:'10px'}},O.icon('zap')),
     h('b',{style:{fontSize:'17px',display:'block',marginBottom:'8px'}},O.tr('Free Quota Limit Reached','Лимит бесплатной квоты исчерпан')),
     h('p',{class:'mut',style:{fontSize:'13.5px',lineHeight:'1.5',margin:'0 0 18px',textAlign:'center'}},
       O.tr(
@@ -592,6 +603,7 @@ function showPop(items){popEl.textContent='';if(!items.length){hidePop();return}
   items.slice(0,40).forEach(it=>popEl.append(h('button',{class:'it',style:{width:'100%',textAlign:'left'},onclick:it.pick},it.icon?it.icon:null,h('b',null,it.t),h('span',{class:'d grow'},it.d||''))))}
 let atTimer;
 let draftTimer;
+let draftSid=null;
 function onInput(){autosize();updateSend();const v=ta.value,pos=ta.selectionStart||0,before=v.slice(0,pos);
   if(S.sid){clearTimeout(draftTimer);draftTimer=setTimeout(()=>O.setDraft(S.sid,v),300)}
   const sm=/^\/(\S*)$/.exec(before);
@@ -679,6 +691,6 @@ async function onSend(){
     }
     ta.value=text;onInput();
   }}
-function clear(){clearTimeout(draftTimer);if(S.sid)O.clearDraft(S.sid);ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
+function clear(){clearTimeout(draftTimer);if(S.sid)O.clearDraft(S.sid);draftSid=S.sid;ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
 O.chat={renderAll,sess,focus:()=>ta&&ta.focus()};
 })();

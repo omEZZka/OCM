@@ -654,7 +654,7 @@ O.updateReadmeForModel = (modelID) => {
     if (activeJbs && activeJbs.length) {
       const jbSections = activeJbs.map(jb => {
         const target = jb.model ? ` (Модель: ${jb.model})` : ' (Все модели)';
-        return `## ⚡ [JAILBREAK DIRECTIVE: ${jb.title}${target}]\n${(jb.prompt || '').trim()}`;
+        return `## [JAILBREAK DIRECTIVE: ${jb.title}${target}]\n${(jb.prompt || '').trim()}`;
       }).join('\n\n---\n\n');
 
       content = `# OpenCode System Directives & Instructions (Active: ${curMid || 'Universal'})\n\n${jbSections}\n\n---\n\n${BASE_SYSTEM_INSTRUCTIONS}`;
