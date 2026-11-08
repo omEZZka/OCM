@@ -29,8 +29,13 @@ object Notifier {
         }
     }
 
-    private fun open(c: Context) = PendingIntent.getActivity(
-        c, 0, Intent(c, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+    private fun open(c: Context, sessionId: String = "") = PendingIntent.getActivity(
+        c,
+        if (sessionId.isEmpty()) 0 else sessionId.hashCode(),
+        Intent(c, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra("widget_action", "open_chat")
+            .putExtra("widget_session", sessionId),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
 
@@ -47,28 +52,36 @@ object Notifier {
         try { NotificationManagerCompat.from(c).notify(1, runtime(c, text)) } catch (_: SecurityException) {}
     }
 
-    fun event(c: Context, kind: String, title: String, text: String, sessionId: String = "", permissionId: String = "", questionId: String = "") {
+    fun event(c: Context, kind: String, title: String, text: String, sessionId: String = "", sessionTitle: String = "", permissionId: String = "", questionId: String = "") {
         if (!Prefs.flag(c, "snd_$kind")) return
         beep(kind)
         val id = 10 + (kind.hashCode() and 0x7fffffff) % 1000
+        val prefix = if (kind == ACTION) {
+            when {
+                questionId.isNotEmpty() -> "@ "
+                permissionId.isNotEmpty() -> "! "
+                else -> "! "
+            }
+        } else ""
+        val shownTitle = if (sessionTitle.isNotEmpty()) prefix + sessionTitle else prefix + title
         val b = NotificationCompat.Builder(c, kind)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
+            .setContentTitle(shownTitle)
             .setContentText(text)
             .setAutoCancel(true)
-            .setContentIntent(open(c))
+            .setContentIntent(open(c, sessionId))
         if (kind == ACTION && permissionId.isNotEmpty()) {
             b.addAction(0, "Разрешить", action(c, id, 1, "permission_once", sessionId, permissionId))
             b.addAction(0, "Отклонить", action(c, id, 2, "permission_reject", sessionId, permissionId))
         } else if (kind == ACTION && questionId.isNotEmpty()) {
-            b.addAction(0, "Открыть вопрос", open(c))
+            b.addAction(0, "Открыть вопрос", open(c, sessionId))
         }
         if (kind == DONE && sessionId.isNotEmpty()) {
-            b.addAction(0, "Открыть", open(c))
+            b.addAction(0, "Открыть", open(c, sessionId))
             b.addAction(0, "Стоп", action(c, id, 3, "abort", sessionId, ""))
         }
         if (kind == QUOTA) {
-            b.addAction(0, "Настройки", open(c))
+            b.addAction(0, "Настройки", open(c, sessionId))
         }
         try { NotificationManagerCompat.from(c).notify(id, b.build()) } catch (_: SecurityException) {}
     }

@@ -108,6 +108,25 @@ class OpenCodeService : Service() {
 
     private val quotaRe = Regex("(?i)quota|usage.?limit|rate.?limit|limit\\s+reached|insufficient|exceeded|credit|\\b429\\b")
 
+    /** Best-effort human title for a session, used in notifications. */
+    private val titleCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private fun sessionTitle(sid: String): String {
+        if (sid.isEmpty()) return ""
+        titleCache[sid]?.let { return it }
+        val t = try {
+            val port = ServerState.port
+            if (port <= 0) return ""
+            val c = URL("http://127.0.0.1:$port/session/$sid").openConnection() as HttpURLConnection
+            c.setRequestProperty("Authorization", Runtime.basic(ServerState.password))
+            c.connectTimeout = 2500; c.readTimeout = 2500
+            val txt = c.inputStream.bufferedReader().use { it.readText() }
+            JSONObject(txt).optString("title")
+        } catch (_: Exception) { "" }
+        val clean = if (t.isEmpty() || Regex("(?i)^(New session|Child session|Новая сессия)").containsMatchIn(t)) "" else t
+        if (clean.isNotEmpty()) titleCache[sid] = clean
+        return clean
+    }
+
     private fun onEvent(json: String) {
         val root = try { JSONObject(json) } catch (_: Exception) { return }
         val o = root.optJSONObject("payload") ?: root
@@ -135,14 +154,14 @@ class OpenCodeService : Service() {
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastIdle > 3000) {
                     lastIdle = now
-                    Notifier.event(this, Notifier.DONE, "Задача завершена", "OpenCode завершил работу.", sessionId = sid)
+                    Notifier.event(this, Notifier.DONE, "Задача завершена", "OpenCode завершил работу.", sessionId = sid, sessionTitle = sessionTitle(sid))
                 }
                 WidgetUpdater.idle(this)
             }
             type == "question.asked" || (type.startsWith("permission.") && (type.endsWith("updated") || type.endsWith("asked"))) ->
-                Notifier.event(this, Notifier.ACTION, "Требуется действие", "OpenCode ждёт вашего ответа или подтверждения.", sessionId = sid, permissionId = permId, questionId = qId)
+                Notifier.event(this, Notifier.ACTION, "Требуется действие", "OpenCode ждёт вашего ответа или подтверждения.", sessionId = sid, sessionTitle = sessionTitle(sid), permissionId = permId, questionId = qId)
             type == "session.error" && quotaRe.containsMatchIn(o.toString()) ->
-                Notifier.event(this, Notifier.QUOTA, "Квота исчерпана", "Лимит модели исчерпан. Подключите свой ключ: Настройки → Модели → Подключить провайдера.", sessionId = sid)
+                Notifier.event(this, Notifier.QUOTA, "Квота исчерпана", "Лимит модели исчерпан. Подключите свой ключ: Настройки → Модели → Подключить провайдера.", sessionId = sid, sessionTitle = sessionTitle(sid))
         }
     }
 

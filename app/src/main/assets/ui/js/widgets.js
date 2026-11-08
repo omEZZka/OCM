@@ -380,7 +380,12 @@ O.on('preview', d => {
 // Listen to native widget actions (e.g. from Android Home Screen widgets)
 O.on('widget_action', d => {
   if (d && d.action) {
-    if (d.action === 'open_chat') { O.setTab('chat'); setTimeout(()=>{try{O.chat.focus()}catch(_){}},150); return; }
+    if (d.action === 'open_chat') {
+      O.setTab('chat');
+      if (d.session) { try { O.openSession(d.session) } catch (_) {} }
+      setTimeout(()=>{try{O.chat.focus()}catch(_){}},150);
+      return;
+    }
     if (d.action === 'status') { O.setTab('chat'); return; }
     O.dispatchAction(d.action, d.target, d);
   }

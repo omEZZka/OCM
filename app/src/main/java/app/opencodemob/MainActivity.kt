@@ -232,6 +232,7 @@ class MainActivity : ComponentActivity() {
     private fun handleWidgetIntent(intent: Intent?) {
         val act = intent?.getStringExtra("widget_action") ?: return
         val target = intent.getStringExtra("widget_target") ?: ""
+        val sessionId = intent.getStringExtra("widget_session") ?: ""
         if (act == "voice") {
             ui.postDelayed({
                 try {
@@ -247,7 +248,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         ui.postDelayed({
-            emit("widget_action", JSONObject().put("action", act).put("target", target))
+            emit("widget_action", JSONObject().put("action", act).put("target", target).put("session", sessionId))
         }, 500)
     }
 

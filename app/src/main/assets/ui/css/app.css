@@ -2567,3 +2567,23 @@ a:hover {
   .part { animation: none; }
   .btn:active, .chip:active { transform: none; }
 }
+
+/* ---- Session pending badges (@ question, ! permission) ---- */
+.sess-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.sess-badge .ic { width: 13px; height: 13px; }
+.sess-badge i { font-style: normal; }
+.sess-badge.q { background: rgba(56, 189, 248, 0.18); color: #38bdf8; }
+.sess-badge.p { background: rgba(251, 191, 36, 0.18); color: #fbbf24; }

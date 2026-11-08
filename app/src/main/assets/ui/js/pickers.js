@@ -3,6 +3,11 @@ const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 const search=(ph,fn)=>h('input',{placeholder:ph,oninput:e=>fn(e.target.value.toLowerCase()),style:{marginBottom:'8px'}});
 
 // ---- sessions drawer ----
+O.sessionPending=sid=>{
+  const q=(S.questions||[]).filter(x=>x.sessionID===sid).length;
+  const p=(S.perms||[]).filter(x=>x.sessionID===sid).length;
+  return {q,p};
+};
 O.pinnedSessions=()=>O.store.get('pinned',[]);
 O.isPinned=id=>O.pinnedSessions().includes(id);
 O.togglePin=id=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i>=0)l.splice(i,1);else l.push(id);O.store.set('pinned',l);bus.emit('sessions');};
@@ -33,12 +38,15 @@ O.openSessions=()=>{
     items.sort((a,b)=>{const pa=O.isPinned(a.id)?0:1,pb=O.isPinned(b.id)?0:1;if(pa!==pb)return pa-pb;return (b.time&&b.time.updated||0)-(a.time&&a.time.updated||0)});
     if(!items.length)list.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('No sessions yet','Сессий пока нет')));
     items.forEach(x=>{const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,pin=O.isPinned(x.id),tag=O.sessionTag(x.id);
+      const pend=O.sessionPending(x.id);
       list.append(h('div',{class:'settings-row'+(x.id===S.sid?' on':'')},
         h('button',{class:'settings-row-text',onclick:()=>{s.close();O.openSession(x.id)}},
           h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},pin?O.icon('pin','pin-ic'):null,h('span',null,O.sessionTitle(x)),x.local?h('span',{class:'mut s'},'· offline'):null),
           h('span',null,(tag?'#'+tag+'  ':'')+O.ago(x.time.updated)+(sm&&(sm.additions||sm.deletions)?'  +'+sm.additions+' -'+sm.deletions:''))),
+        pend.q?h('span',{class:'sess-badge q',title:O.tr('Question pending','Ждёт ответа на вопрос')},O.icon('at'),pend.q>1?h('i',null,pend.q):null):null,
+        pend.p?h('span',{class:'sess-badge p',title:O.tr('Permission pending','Ждёт разрешения')},O.icon('excl'),pend.p>1?h('i',null,pend.p):null):null,
         b?h('span',{class:'spin',style:{flex:'none'}}):null,h('button',{class:'ibtn s',style:{flex:'none'},onclick:()=>sessActions(x)},O.icon('dots'))))})}
-  draw();bus.on('sessions',()=>{if(s.root.isConnected)draw()})};
+  draw();bus.on('sessions',()=>{if(s.root.isConnected)draw()});bus.on('perm',()=>{if(s.root.isConnected)draw()})};
 function importSessionFile(){
   const inp=h('input',{type:'file',accept:'application/json,.json,.ocmjson',style:{display:'none'}});
   inp.onchange=()=>{const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();
