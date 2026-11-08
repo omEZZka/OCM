@@ -356,6 +356,7 @@ O.mmSend=async(text,parts)=>{
     // step 3.5: fallback per failed role — up to 3 backup models each (sequentially)
     for(let x=0;x<jobs.length;x++){
       const j=jobs[x];if(!j.sid)continue;
+      if(run.roleAborts&&run.roleAborts.has(j.sid)){jobs[x]={sid:null,role:j.role,err:O.tr('stopped by user','остановлена пользователем')};continue}
       run.currentRole=j.role.name;emit();
       let err=false;try{const st=await api('GET','/session/status',null,{timeout:6000});err=!!(st[j.sid]&&st[j.sid].type==='error')}catch(e){}
       if(!err)continue;

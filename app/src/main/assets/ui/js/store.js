@@ -212,7 +212,7 @@ O.importSessionJson=text=>{
   const id='local_'+Date.now().toString(36);
   const ses={id,title:(o.session&&o.session.title)||'Импортированная сессия',time:{created:Date.now(),updated:Date.now()},local:true,imported:true};
   O.saveLocalSession(ses);
-  const list=o.messages.map(m=>{const info=Object.assign({},m.info,{sessionID:id});const parts=(m.parts||[]).map(p=>Object.assign({},p,{sessionID:id,messageID:info.id}));return{info,parts}});
+  const list=o.messages.map((m,mi)=>{const info=Object.assign({},m.info||{},{sessionID:id});if(!info.id)info.id='msg_'+mi+'_'+Date.now().toString(36);if(!info.role)info.role='user';const parts=(m.parts||[]).map((p,pi)=>Object.assign({},p,{sessionID:id,messageID:info.id,id:p.id||('prt_'+mi+'_'+pi+'_'+Date.now().toString(36))}));return{info,parts}});
   O.kv.set('msgs:'+id,list);
   const s=O.msgs(id);s.list=list;s.idx=new Map(list.map(m=>[m.info.id,m]));
   if(o.session&&o.session.tag)O.setSessionTag(id,o.session.tag);

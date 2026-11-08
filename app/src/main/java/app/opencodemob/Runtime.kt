@@ -338,9 +338,16 @@ object Runtime {
                     val opts = p.optJSONObject("options") ?: org.json.JSONObject().also { p.put("options", it) }
                     val base = opts.optString("baseURL")
                     if (base.isEmpty()) continue
-                    if (base.contains("127.0.0.1") || base.contains("localhost") || base.contains("[::1]")) continue
-                    val real = opts.optString("upstreamBaseURL").ifEmpty { base }
-                    opts.put("upstreamBaseURL", real)
+                    val saved = opts.optString("upstreamBaseURL")
+                    val isLocal = base.contains("127.0.0.1") || base.contains("localhost") || base.contains("[::1]")
+                    if (isLocal) {
+                        if (saved.isNotEmpty()) {
+                            val want = "http://127.0.0.1:$shim/v1"
+                            if (base != want) { opts.put("baseURL", want); changed = true }
+                        }
+                        continue
+                    }
+                    opts.put("upstreamBaseURL", saved.ifEmpty { base })
                     opts.put("baseURL", "http://127.0.0.1:$shim/v1")
                     changed = true
                 }

@@ -47,7 +47,7 @@ O.chatInit=root=>{
   bus.on('meta',updateChips);bus.on('conn',updateChips);
   bus.on('serror',p=>{if(p&&(!p.sessionID||p.sessionID===S.sid)){const e=p.error;const t=e&&(e.data&&e.data.message||e.name);if(t&&e.name!=='MessageAbortedError'){
     const quotaRe2=/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|balance|funds|\b429\b/i;
-    if(O._fallback&&p.sessionID===O._fallback.sid&&quotaRe2.test(String(t))&&O._fallback.tries.length){
+    if(O._fallback&&p.sessionID===O._fallback.sid&&O._fallback.tries.length){
       const fb=O._fallback;O._fallback=null;const next=fb.tries.shift();
       (async()=>{
         try{await api('POST','/session/'+fb.sid+'/revert',{messageID:fb.mid})}catch(_){}
@@ -642,7 +642,7 @@ async function onSend(){
   try{
     const sid=await sess();
     O.maybeAutoTitle(sid,text);
-    const chain=[S.model].concat(O.fallbackChain());
+    const chain=[S.model].filter(Boolean).concat(O.fallbackChain());
     const quotaRe=/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|\b429\b/i;
     for(let i=0;i<chain.length;i++){
       const mdl=chain[i];
@@ -655,7 +655,8 @@ async function onSend(){
       }catch(e){
         lastErr=e;
         const s=O.msgs(sid);s.list=s.list.filter(x=>x.info.id!==mid);s.idx.delete(mid);const el=msgEls.get(mid);if(el){el.remove();msgEls.delete(mid)}
-        if(i<chain.length-1&&quotaRe.test(String(e.message))){
+        const retryable=quotaRe.test(String(e.message))||!e.status||e.status>=429;
+        if(i<chain.length-1&&retryable){
           O.toast(O.tr('Model unavailable, trying fallback...','Модель недоступна, пробую резервную…')+' '+(chain[i+1].modelID||''),2500);
           continue;
         }

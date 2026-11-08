@@ -65,7 +65,7 @@ function sessActions(x){O.actions(O.sessionTitle(x),[
     if(cur)opts.push({label:O.tr('Remove tag','Убрать тег'),icon:'x',fn:()=>O.setSessionTag(x.id,'')});
     O.actions(O.tr('Folder / tag','Папка / тег'),opts);
   }},
-  {label:O.tr('Rename','Переименовать'),icon:'edit',fn:async()=>{const v=await O.ask(O.tr('Rename session','Переименование сессии'),null,O.sessionTitle(x));if(v)try{await api('PATCH','/session/'+x.id,{title:v})}catch(e){O.toast(e.message)}}},
+  {label:O.tr('Rename','Переименовать'),icon:'edit',fn:async()=>{const v=await O.ask(O.tr('Rename session','Переименование сессии'),null,O.sessionTitle(x));if(!v)return;if(x.local){x.title=v;O.saveLocalSession(x);bus.emit('sessions');return}try{await api('PATCH','/session/'+x.id,{title:v})}catch(e){O.toast(e.message)}}},
   {label:O.tr('Export session (JSON)','Экспорт сессии (JSON)'),icon:'down',fn:()=>{
     const json=O.exportSessionJson(x.id);
     O.actions(O.tr('Export session (JSON)','Экспорт сессии (JSON)'),[

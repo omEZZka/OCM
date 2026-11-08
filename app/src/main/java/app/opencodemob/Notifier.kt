@@ -50,7 +50,7 @@ object Notifier {
     fun event(c: Context, kind: String, title: String, text: String, sessionId: String = "", permissionId: String = "", questionId: String = "") {
         if (!Prefs.flag(c, "snd_$kind")) return
         beep(kind)
-        val id = 10 + kind.hashCode() % 1000
+        val id = 10 + (kind.hashCode() and 0x7fffffff) % 1000
         val b = NotificationCompat.Builder(c, kind)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)

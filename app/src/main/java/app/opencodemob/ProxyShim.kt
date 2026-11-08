@@ -202,7 +202,7 @@ object ProxyShim {
         val auth = headers["authorization"] ?: ""
         val up = resolveUpstream(c, uid, auth, body.optString("model"))
         if (up == null) { writeJson(out, 502, error("no provider")); return }
-        val url = up.baseURL.trimEnd('/') + path + (if (target.contains('?')) "?" + target.substringAfter('?') else "")
+        val url = if (path.endsWith("/chat/completions")) chatUrl(up.baseURL) else up.baseURL.trimEnd('/') + path
         val req = Request.Builder().url(url).post(raw.toRequestBody(jsonType))
         var hasAuth = false
         for ((k, v) in headers) {
@@ -264,7 +264,11 @@ object ProxyShim {
 
     private fun chatUrl(base: String): String {
         val b = base.trimEnd('/')
-        return if (b.endsWith("/v1")) "$b/chat/completions" else "$b/v1/chat/completions"
+        return when {
+            b.endsWith("/chat/completions") -> b
+            b.endsWith("/v1") || b.contains("/v1/") -> "$b/chat/completions"
+            else -> "$b/v1/chat/completions"
+        }
     }
 
     // ---- request translation ----
@@ -449,7 +453,7 @@ object ProxyShim {
         private var usage: JSONObject? = null
         private var failed = false
 
-        private inner class ToolState(val key: Int) {
+        private class ToolState(val key: Int) {
             var itemId = ""
             var callId = ""
             var name = ""
