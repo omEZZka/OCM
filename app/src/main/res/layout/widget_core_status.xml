@@ -53,6 +53,7 @@
             android:textSize="15sp" />
 
         <TextView
+            android:id="@+id/widget_status_sub"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
@@ -60,6 +61,15 @@
             android:text="Linux ARM64 • :45157"
             android:textColor="#A1A1AA"
             android:textSize="11sp" />
+
+        <ProgressBar
+            android:id="@+id/widget_status_progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginTop="6dp"
+            android:indeterminate="true"
+            android:visibility="gone" />
     </LinearLayout>
 
     <LinearLayout
@@ -71,6 +81,7 @@
         android:orientation="horizontal">
 
         <TextView
+            android:id="@+id/widget_status_btn_text"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:fontFamily="sans-serif-medium"

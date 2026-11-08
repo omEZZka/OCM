@@ -7,28 +7,45 @@ O.pinnedSessions=()=>O.store.get('pinned',[]);
 O.isPinned=id=>O.pinnedSessions().includes(id);
 O.togglePin=id=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i>=0)l.splice(i,1);else l.push(id);O.store.set('pinned',l);bus.emit('sessions');};
 O.openSessions=()=>{
-  const list=h('div'),q=search(O.tr('Search sessions...','Поиск по сессиям...'),()=>draw());
+  const list=h('div'),tagBar=h('div',{style:{display:'flex',gap:'6px',overflowX:'auto',marginBottom:'8px'}});
+  const q=search(O.tr('Search sessions...','Поиск по сессиям...'),()=>draw());
+  let activeTag=O.sessionTagFilter();
   const navItem=(ic,label,fn)=>h('button',{class:'drawer-nav-item',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
   const nav=h('div',{style:{marginBottom:'12px',borderBottom:'1px solid var(--line)',paddingBottom:'8px'}},
     navItem('chat',O.tr('Chat','Чат'),()=>O.setTab('chat')),
     navItem('folder',O.tr('Files','Файлы'),()=>O.setTab('files')),
     navItem('terminal',O.tr('Terminal','Терминал'),()=>O.setTab('term')),
     navItem('branch',O.tr('Changes','Изменения'),()=>O.setTab('changes')),
+    navItem('down',O.tr('Import session','Импорт сессии'),()=>importSessionFile()),
     navItem('sliders',O.tr('Settings','Настройки'),()=>O.openSettings()),
     navItem('refresh',O.tr('Restart server','Перезапуск сервера'),()=>restartApp()));
   const newBtn=h('button',{class:'btn pri wide',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));
-  const s=O.sheet(O.tr('Navigation & Sessions','Навигация и сессии'),h('div',null,nav,newBtn,h('div',{style:{height:'12px'}}),q,list),{drawer:true});
-  function draw(){list.textContent='';const f=q.value.toLowerCase();
-    const items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f));
+  const s=O.sheet(O.tr('Navigation & Sessions','Навигация и сессии'),h('div',null,nav,newBtn,h('div',{style:{height:'12px'}}),q,tagBar,list),{drawer:true});
+  function drawTags(){
+    tagBar.textContent='';
+    const tags=O.sessionTagList();
+    const chip=(label,val)=>h('button',{class:'chip',style:activeTag===val?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>{activeTag=val;O.setSessionTagFilter(val);draw()}},label);
+    tagBar.append(chip(O.tr('All','Все'),''),...tags.map(t=>chip('#'+t,t)));
+    tagBar.classList.toggle('hide',!tags.length);
+  }
+  function draw(){list.textContent='';drawTags();const f=q.value.toLowerCase();
+    const items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f)&&(!activeTag||O.sessionTag(x.id)===activeTag));
     items.sort((a,b)=>{const pa=O.isPinned(a.id)?0:1,pb=O.isPinned(b.id)?0:1;if(pa!==pb)return pa-pb;return (b.time&&b.time.updated||0)-(a.time&&a.time.updated||0)});
     if(!items.length)list.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('No sessions yet','Сессий пока нет')));
-    items.forEach(x=>{const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,pin=O.isPinned(x.id);
+    items.forEach(x=>{const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,pin=O.isPinned(x.id),tag=O.sessionTag(x.id);
       list.append(h('div',{class:'settings-row'+(x.id===S.sid?' on':'')},
         h('button',{class:'settings-row-text',onclick:()=>{s.close();O.openSession(x.id)}},
-          h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},pin?O.icon('pin','pin-ic'):null,h('span',null,O.sessionTitle(x))),
-          h('span',null,O.ago(x.time.updated)+(sm&&(sm.additions||sm.deletions)?'  +'+sm.additions+' -'+sm.deletions:''))),
+          h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},pin?O.icon('pin','pin-ic'):null,h('span',null,O.sessionTitle(x)),x.local?h('span',{class:'mut s'},'· offline'):null),
+          h('span',null,(tag?'#'+tag+'  ':'')+O.ago(x.time.updated)+(sm&&(sm.additions||sm.deletions)?'  +'+sm.additions+' -'+sm.deletions:''))),
         b?h('span',{class:'spin',style:{flex:'none'}}):null,h('button',{class:'ibtn s',style:{flex:'none'},onclick:()=>sessActions(x)},O.icon('dots'))))})}
   draw();bus.on('sessions',()=>{if(s.root.isConnected)draw()})};
+function importSessionFile(){
+  const inp=h('input',{type:'file',accept:'application/json,.json,.ocmjson',style:{display:'none'}});
+  inp.onchange=()=>{const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();
+    r.onload=()=>{try{const s=O.importSessionJson(String(r.result));O.toast('Импортировано: '+s.title,2200);O.openSession(s.id)}catch(e){O.toast(e.message,4000)}inp.remove()};
+    r.onerror=()=>{O.toast('Не удалось прочитать файл',3000);inp.remove()};r.readAsText(f)};
+  document.body.append(inp);inp.click();
+}
 async function restartApp(){
   const ok=await O.confirm(
     O.tr('Restart server?','Перезапустить сервер?'),
@@ -40,7 +57,21 @@ async function restartApp(){
 }
 function sessActions(x){O.actions(O.sessionTitle(x),[
   {label:O.isPinned(x.id)?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'star',fn:()=>{O.togglePin(x.id)}},
+  {label:O.sessionTag(x.id)?('#'+O.sessionTag(x.id)+' · '+O.tr('change folder/tag','сменить папку/тег')):O.tr('Folder / tag','Папка / тег'),icon:'folder',fn:async()=>{
+    const cur=O.sessionTag(x.id);
+    const tags=O.sessionTagList();
+    const opts=tags.filter(t=>t!==cur).map(t=>({label:'#'+t,icon:'folder',fn:()=>O.setSessionTag(x.id,t)}));
+    opts.push({label:O.tr('Set custom tag...','Задать свой тег...'),icon:'edit',fn:async()=>{const v=await O.ask(O.tr('Folder / tag','Папка / тег'),O.tr('For example: Work','Например: Работа'),cur);if(v!=null)O.setSessionTag(x.id,v)}});
+    if(cur)opts.push({label:O.tr('Remove tag','Убрать тег'),icon:'x',fn:()=>O.setSessionTag(x.id,'')});
+    O.actions(O.tr('Folder / tag','Папка / тег'),opts);
+  }},
   {label:O.tr('Rename','Переименовать'),icon:'edit',fn:async()=>{const v=await O.ask(O.tr('Rename session','Переименование сессии'),null,O.sessionTitle(x));if(v)try{await api('PATCH','/session/'+x.id,{title:v})}catch(e){O.toast(e.message)}}},
+  {label:O.tr('Export session (JSON)','Экспорт сессии (JSON)'),icon:'down',fn:()=>{
+    const json=O.exportSessionJson(x.id);
+    O.actions(O.tr('Export session (JSON)','Экспорт сессии (JSON)'),[
+      {label:O.tr('Copy JSON','Скопировать JSON'),icon:'copy',fn:()=>O.native.copy(json)},
+      {label:O.tr('Share','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(json);else O.native.copy(json)}}]);
+  }},
   {label:x.share?O.tr('Stop sharing','Отключить шаринг'):O.tr('Share','Поделиться'),icon:'share',fn:async()=>{try{if(x.share){await api('DELETE','/session/'+x.id+'/share')}else{const r=await api('POST','/session/'+x.id+'/share',{});if(r.share){O.native.copy(r.share.url);O.native.share(r.share.url)}}}catch(e){O.toast(e.message)}}},
   {label:O.tr('Fork','Форк'),icon:'branch',fn:async()=>{try{const r=await api('POST','/session/'+x.id+'/fork',{});await O.loadSessions();O.openSession(r.id)}catch(e){O.toast(e.message)}}},
   {label:O.tr('Compact context','Сжать контекст'),icon:'refresh',fn:async()=>{
@@ -50,7 +81,9 @@ function sessActions(x){O.actions(O.sessionTitle(x),[
       try{await api('POST','/session/'+x.id+'/summarize',{providerID:S.model.providerID,modelID:S.model.modelID},{timeout:600000});O.toast(O.tr('Session compacted','Сессия сжата'),1500)}catch(e){O.toast(e.message)}
     }
   }},
-  {label:O.tr('Delete','Удалить'),icon:'trash',danger:true,fn:async()=>{if(await O.confirm(O.tr('Delete session?','Удалить сессию?'),O.sessionTitle(x),O.tr('Delete','Удалить'),true))try{await api('DELETE','/session/'+x.id);S.sessions=S.sessions.filter(y=>y.id!==x.id);if(S.sid===x.id)O.openSession(S.sessions[0]&&S.sessions[0].id||null);bus.emit('sessions')}catch(e){O.toast(e.message)}}}])}
+  {label:O.tr('Delete','Удалить'),icon:'trash',danger:true,fn:async()=>{if(!await O.confirm(O.tr('Delete session?','Удалить сессию?'),O.sessionTitle(x),O.tr('Delete','Удалить'),true))return;
+    if(x.local){O.removeLocalSession(x.id);if(S.sid===x.id)O.openSession(S.sessions[0]&&S.sessions[0].id||null);return}
+    try{await api('DELETE','/session/'+x.id);S.sessions=S.sessions.filter(y=>y.id!==x.id);if(S.sid===x.id)O.openSession(S.sessions[0]&&S.sessions[0].id||null);bus.emit('sessions')}catch(e){O.toast(e.message)}}}])}
 
 // ---- projects + folder browser ----
 O.openProjects=()=>{
@@ -105,7 +138,10 @@ O.openModels=()=>{
       h('span',{style:{marginLeft:'6px'}},O.tr('Connect more providers','Подключить провайдеров (API ключи)'))),
     h('div',{class:'detached-card-right'},'›'));
 
-  const container=h('div',null,q,listEl,h('div',{style:{height:'10px'}}),swRow,effortCard,connectCard);
+  let providerFilter='';
+  const provBar=h('div',{style:{display:'flex',gap:'6px',overflowX:'auto',marginBottom:'8px'}});
+  const bulkRow=h('div',{style:{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}});
+  const container=h('div',null,q,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,effortCard,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
 
   function hiddenRow(){
@@ -119,14 +155,40 @@ O.openModels=()=>{
     container.append(b);
   }
 
+  function drawBulk(items){
+    bulkRow.textContent='';
+    const add=(label,fn)=>bulkRow.append(h('button',{class:'chip',onclick:fn},label));
+    add(O.tr('Bulk actions','Массово'),()=>{
+      const visible=items||[];
+      const paid=O.allModels().filter(x=>!O.isModelFree(x));
+      const hidden=O.hiddenModels();
+      O.actions(O.tr('Bulk actions','Массово'),[
+        {label:O.tr('Hide all paid models','Скрыть все платные')+' ('+paid.length+')',icon:'eye',fn:()=>{paid.forEach(x=>O.hideModel(x.pid+'/'+x.mid));draw()}},
+        {label:O.tr('Pin all visible','Закрепить все видимые')+' ('+visible.length+')',icon:'pin',fn:()=>{visible.forEach(x=>{const k=x.pid+'/'+x.mid;if(!O.isModelPinned(k))O.toggleModelPin(k)});draw()}},
+        {label:O.tr('Unpin everything','Открепить все'),icon:'x',fn:()=>{O.store.set('pinnedModels',[]);bus.emit('meta');draw()}},
+        {label:O.tr('Restore hidden models','Восстановить скрытые')+' ('+hidden.length+')',icon:'trash',fn:()=>{O.store.set('hiddenModels',[]);bus.emit('meta');draw()}}
+      ]);
+    });
+    if(providerFilter)add('× '+providerFilter,()=>{providerFilter='';draw()});
+  }
+  function drawProviders(all){
+    provBar.textContent='';
+    const pids=[...new Set(all.map(x=>x.pid))];
+    if(pids.length<2){provBar.classList.add('hide');return}
+    provBar.classList.remove('hide');
+    const chip=(label,val)=>h('button',{class:'chip',style:providerFilter===val?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>{providerFilter=val;draw()}},label);
+    provBar.append(chip(O.tr('All providers','Все провайдеры'),''),...pids.map(pid=>{const p=all.find(x=>x.pid===pid);return chip(p&&p.pname||pid,pid)}));
+  }
   function draw(){
     listEl.textContent='';
     const all=O.allModels();
+    drawProviders(all);
     if(!all.length){
       listEl.append(h('div',{class:'mut',style:{padding:'24px 16px',textAlign:'center'}},
         h('p',null,O.tr('No models available. Check runtime or connect a provider.','Моделей пока нет. Дождитесь запуска сервера или подключите провайдера.')),
         h('button',{class:'btn pri sm',style:{marginTop:'8px'},onclick:()=>{s.close();O.openConnect()}},O.icon('key'),O.tr('Connect provider','Подключить'))
       ));
+      drawBulk([]);
       hiddenRow();
       return;
     }
@@ -136,6 +198,7 @@ O.openModels=()=>{
       items=items.filter(x=>O.isModelFree(x));
     }
     items=items.filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
+    if(providerFilter)items=items.filter(x=>x.pid===providerFilter);
     if(filterText){
       const f=filterText.toLowerCase();
       items=items.filter(x=>(x.name+' '+x.mid+' '+(x.pname||x.pid)).toLowerCase().includes(f));
@@ -146,12 +209,14 @@ O.openModels=()=>{
         onlyFree
           ?O.tr('No free models found matching filter. Try disabling "Only free models" below.','Бесплатных моделей по фильтру не найдено. Попробуйте отключить пункт «Только бесплатные модели» ниже.')
           :O.tr('No models match filter.','Модели не найдены.')));
+      drawBulk([]);
       hiddenRow();
       return;
     }
 
     const activeKey=S.model?(S.model.providerID+'/'+S.model.modelID):'';
     items=O.sortModelsByProvider(items);
+    drawBulk(items);
 
     const rowFor=x=>{
       const key=x.pid+'/'+x.mid;
@@ -418,6 +483,11 @@ O.openCustomProvider=parentSheet=>{
     const t=O.native.cfgRead();let obj={};try{if(t.trim())obj=O.parseJsonc(t)}catch{}
     obj.provider=obj.provider||{};
     const provOpts={baseURL:url,apiKey:key||'dummy'};
+    let shim='';try{shim=OC.shimUrl?OC.shimUrl():''}catch(_){}
+    if(shim&&!url.includes('127.0.0.1')&&!url.includes('localhost')){
+      provOpts.baseURL=shim+'/v1';
+      provOpts.upstreamBaseURL=url;
+    }
     if(pid==='openrouter'||url.includes('openrouter.ai')){
       provOpts.headers={'HTTP-Referer':'https://opencode.mobile','X-Title':'OpenCode Mobile'};
     }

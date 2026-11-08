@@ -298,7 +298,7 @@ object Runtime {
                     continue
                 }
                 try {
-                    val obj = org.json.JSONObject(txt)
+                    val obj = org.json.JSONObject(ProxyShim.stripJsoncPublic(txt))
                     val prov = obj.optJSONObject("provider")
                     if (prov != null) {
                         prov.remove("local")
@@ -318,9 +318,41 @@ object Runtime {
         } catch (_: Exception) {}
     }
 
+    /** Routes custom OpenAI-compatible providers through the local Responses -> Chat Completions shim. */
+    fun rewriteOpenAiProviders(c: Context, uid: String) {
+        try {
+            val shim = ProxyShim.currentPort(c)
+            if (shim <= 0) return
+            val cfgDir = File(home(c, uid), ".config/opencode").apply { mkdirs() }
+            for (f in listOf(File(cfgDir, "opencode.json"), File(cfgDir, "opencode.jsonc"))) {
+                if (!f.exists()) continue
+                val obj = try { org.json.JSONObject(ProxyShim.stripJsoncPublic(f.readText())) } catch (_: Exception) { continue }
+                val prov = obj.optJSONObject("provider") ?: continue
+                var changed = false
+                val it = prov.keys()
+                while (it.hasNext()) {
+                    val id = it.next()
+                    if (id == "opencode" || id == "local" || id == "ollama" || id == "lmstudio" || id == "lm-studio") continue
+                    val p = prov.optJSONObject(id) ?: continue
+                    if (p.optString("npm") != "@ai-sdk/openai") continue
+                    val opts = p.optJSONObject("options") ?: org.json.JSONObject().also { p.put("options", it) }
+                    val base = opts.optString("baseURL")
+                    if (base.isEmpty()) continue
+                    if (base.contains("127.0.0.1") || base.contains("localhost") || base.contains("[::1]")) continue
+                    val real = opts.optString("upstreamBaseURL").ifEmpty { base }
+                    opts.put("upstreamBaseURL", real)
+                    opts.put("baseURL", "http://127.0.0.1:$shim/v1")
+                    changed = true
+                }
+                if (changed) f.writeText(obj.toString(2))
+            }
+        } catch (_: Exception) {}
+    }
+
     fun ensureDefaults(c: Context, uid: String) {
         try {
             sanitizeConfig(c, uid)
+            rewriteOpenAiProviders(c, uid)
             val root = rootfs(c)
             val home = home(c, uid)
             val cfg = File(home, ".config/opencode").apply { mkdirs() }

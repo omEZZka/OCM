@@ -51,7 +51,20 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import javax.crypto.Cipher
+import javax.crypto.CipherInputStream
+import javax.crypto.CipherOutputStream
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 
 /**
@@ -589,6 +602,70 @@ class MainActivity : ComponentActivity() {
 
     // ---------- uploads: AGENTS.md, agents, commands, plugins ----------
 
+    private fun deriveKey(password: String, salt: ByteArray): SecretKeySpec {
+        val spec = PBEKeySpec(password.toCharArray(), salt, 120_000, 256)
+        val f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        return SecretKeySpec(f.generateSecret(spec).encoded, "AES")
+    }
+
+    private fun backupZip(home: File, out: File, password: String) {
+        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, deriveKey(password, salt), GCMParameterSpec(128, iv))
+        val skip = setOf("node_modules", ".cache", "tmp", "bin", "rootfs", "proot-tmp")
+        FileOutputStream(out).use { fos ->
+            fos.write("OCMB1".toByteArray())
+            fos.write(salt)
+            fos.write(iv)
+            CipherOutputStream(fos, cipher).use { cos ->
+                ZipOutputStream(cos).use { zos ->
+                    home.walkTopDown().forEach { f ->
+                        if (!f.isFile) return@forEach
+                        val rel = f.relativeTo(home).path
+                        if (rel.split('/').any { it in skip }) return@forEach
+                        if (f.length() > 50_000_000L) return@forEach
+                        try {
+                            zos.putNextEntry(ZipEntry(rel))
+                            f.inputStream().use { it.copyTo(zos) }
+                            zos.closeEntry()
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        }
+    }
+
+    private fun restoreZip(src: File, home: File, password: String) {
+        FileInputStream(src).use { fis ->
+            val magic = ByteArray(5)
+            if (fis.read(magic) != 5 || String(magic) != "OCMB1") throw IllegalArgumentException("not an OCM backup")
+            val salt = ByteArray(16); if (fis.read(salt) != 16) throw IllegalArgumentException("corrupt backup")
+            val iv = ByteArray(12); if (fis.read(iv) != 12) throw IllegalArgumentException("corrupt backup")
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, deriveKey(password, salt), GCMParameterSpec(128, iv))
+            CipherInputStream(fis, cipher).use { cis ->
+                ZipInputStream(cis).use { zis ->
+                    var e = zis.nextEntry
+                    while (e != null) {
+                        val name = e.name
+                        if (name.startsWith("/") || name.contains("..")) {
+                            zis.closeEntry(); e = zis.nextEntry; continue
+                        }
+                        val dest = File(home, name)
+                        if (!dest.canonicalPath.startsWith(home.canonicalPath + File.separator)) {
+                            zis.closeEntry(); e = zis.nextEntry; continue
+                        }
+                        dest.parentFile?.mkdirs()
+                        FileOutputStream(dest).use { zis.copyTo(it) }
+                        zis.closeEntry()
+                        e = zis.nextEntry
+                    }
+                }
+            }
+        }
+    }
+
     private fun onPicked(uri: Uri?) {
         val kind = pendingKind ?: return
         pendingKind = null
@@ -604,6 +681,7 @@ class MainActivity : ComponentActivity() {
                     "project" -> File(Runtime.hostPath(this, uid(), pendingDir.ifEmpty { "/root" }), "AGENTS.md")
                     "plugin" -> File(File(cfg, "plugins"), name)
                     "skill" -> File(File(cfg, "skills"), name)
+                    "backup" -> File(cacheDir, "restore.ocmbak")
                     else -> {
                         if (!name.endsWith(".md")) name += ".md"
                         File(File(cfg, if (kind == "command") "commands" else "agents"), name)
@@ -611,7 +689,7 @@ class MainActivity : ComponentActivity() {
                 }
                 dest.parentFile?.mkdirs()
                 contentResolver.openInputStream(uri)!!.use { i -> dest.outputStream().use { i.copyTo(it) } }
-                emit("picked", JSONObject().put("ok", true).put("file", dest.name).put("kind", kind))
+                emit("picked", JSONObject().put("ok", true).put("file", dest.name).put("path", dest.absolutePath).put("kind", kind))
             } catch (e: Exception) {
                 emit("picked", JSONObject().put("ok", false).put("error", e.message ?: "failed"))
             }
@@ -1185,6 +1263,30 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface fun pickFile(kind: String, dir: String) {
             runOnUiThread { pendingKind = kind; pendingDir = dir; picker.launch(arrayOf("*/*")) }
+        }
+
+        @JavascriptInterface fun shimUrl(): String = ProxyShim.baseUrl(this@MainActivity)
+
+        @JavascriptInterface fun backupProfile(password: String): String = try {
+            val home = Runtime.home(this@MainActivity, uid())
+            val dir = File("/sdcard/Download").takeIf { it.exists() && it.canWrite() } ?: filesDir
+            val out = File(dir, "OCM-backup-" + System.currentTimeMillis() + ".ocmbak")
+            backupZip(home, out, password)
+            JSONObject().put("ok", true).put("path", out.absolutePath).put("size", out.length()).toString()
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
+        }
+
+        @JavascriptInterface fun restoreProfile(password: String, path: String): String = try {
+            val home = Runtime.home(this@MainActivity, uid())
+            val src = File(path.ifEmpty { File(cacheDir, "restore.ocmbak").absolutePath })
+            if (!src.exists()) JSONObject().put("ok", false).put("err", "backup file not found").toString()
+            else {
+                restoreZip(src, home, password)
+                JSONObject().put("ok", true).put("path", src.absolutePath).toString()
+            }
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
         }
 
         // --- clipboard / share / links ---

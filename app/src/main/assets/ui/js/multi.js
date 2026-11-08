@@ -230,9 +230,12 @@ async function mmWaitIdle(sids,run,timeoutMs){
   const pending=new Set(sids);
   while(Date.now()<end){
     if(!run||run.abort)throw new Error('aborted');
+    if(run.paused){await sleep(500);continue}
     try{
       const st=await api('GET','/session/status',null,{timeout:6000});
-      for(const id of [...pending]){const x=st[id];if(!x||x.type==='idle'||x.type==='error')pending.delete(id)}
+      for(const id of [...pending]){
+        if(run.roleAborts&&run.roleAborts.has(id)){try{await api('POST','/session/'+id+'/abort',{})}catch(e){};pending.delete(id);continue}
+        const x=st[id];if(!x||x.type==='idle'||x.type==='error')pending.delete(id)}
       if(!pending.size)return;
     }catch(e){}
     await sleep(2500);
@@ -264,6 +267,32 @@ function mmParsePlan(text,mm){
   return out;
 }
 
+O.mmPause=()=>{const r=O.mm.run;if(!r)return;r.paused=!r.paused;bus.emit('mm:progress');O.toast(r.paused?O.tr('Paused','Пауза'):O.tr('Resumed','Продолжаю'),1500)};
+O.mmStop=()=>{const r=O.mm.run;if(!r)return;r.abort=true;r.paused=false;
+  if(r.sid)api('POST','/session/'+r.sid+'/abort',{}).catch(()=>{});
+  (r.jobs||[]).forEach(j=>{if(j.sid)api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{})});
+  bus.emit('mm:progress')};
+O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new Set();
+  const j=(r.jobs||[]).find(x=>x.role&&x.role.name===name);
+  if(j&&j.sid){r.roleAborts.add(j.sid);api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{});O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}};
+
+function mmConfirmPlan(mm,plan){
+  return new Promise(res=>{
+    let done=false;
+    const finish=v=>{if(done)return;done=true;try{s.close()}catch(_){}res(v)};
+    const rows=plan.map(t=>h('div',{class:'settings-row'},
+      h('div',{class:'settings-row-icon purple'},O.icon('bot')),
+      h('div',{class:'settings-row-text'},h('b',null,t.role.name||'role'),h('span',null,t.task))));
+    const body=h('div',null,
+      h('div',{class:'mut',style:{padding:'6px 2px 10px'}},O.tr('The lead model prepared this plan. Review and confirm before roles start.','Главная модель подготовила план. Проверьте и подтвердите запуск ролей.')),
+      h('div',{class:'settings-card'},rows),
+      h('div',{style:{display:'flex',gap:'8px',marginTop:'12px'}},
+        h('button',{class:'btn wide',onclick:()=>finish(false)},O.tr('Cancel','Отмена')),
+        h('button',{class:'btn pri',style:{flex:'1'},onclick:()=>finish(true)},O.icon('play'),O.tr('Run roles','Запустить роли'))));
+    const s=O.sheet(O.tr('Plan: ','План: ')+(mm.name||''),body,{hud:true,onClose:()=>finish(false)});
+  });
+}
+
 O.mmSend=async(text,parts)=>{
   const mm=O.mmActive();
   if(!mm)return false;
@@ -273,7 +302,8 @@ O.mmSend=async(text,parts)=>{
   const leadBackup=mm.backup||null;
   if(!leadMain){O.toast(O.tr('No model selected — pick a model or set the lead model','Модель не выбрана — выберите модель или задайте главную'),3000);return true}
   const sid=await O.chat.sess();
-  const run=O.mm.run={sid,abort:false,started:Date.now(),phase:'plan',phaseStart:Date.now()};
+  const run=O.mm.run={sid,abort:false,paused:false,roleAborts:new Set(),jobs:[],started:Date.now(),phase:'plan',phaseStart:Date.now()};
+  O.maybeAutoTitle(sid,text);
   const emit=()=>bus.emit('mm:progress');
   const fileNames=parts.filter(p=>p.type==='file').map(p=>p.filename||'').filter(Boolean);
   const userText=text+(fileNames.length?'\n(прикреплённые файлы: '+fileNames.join(', ')+')':'');
@@ -304,6 +334,7 @@ O.mmSend=async(text,parts)=>{
       leadUsed=lead
     }
     if(!plan||!plan.length){O.mm.run=null;return true} // lead answered directly — done
+    if(!await mmConfirmPlan(mm,plan)){O.mm.run=null;emit();return true}
     // step 2: spawn subagent sessions per role
     const jobs=[];
     for(const t of plan){
@@ -317,6 +348,7 @@ O.mmSend=async(text,parts)=>{
         O.toast(O.tr('Role started: ','Роль запущена: ')+t.role.name,1800);
       }catch(e){jobs.push({sid:null,role:t.role,task:t.task,err:e.message||String(e)})}
     }
+    run.jobs=jobs;emit();
     // step 3: wait for all roles
     run.phase='role';run.phaseStart=Date.now();emit();
     await mmWaitIdle(jobs.filter(j=>j.sid).map(j=>j.sid),run);

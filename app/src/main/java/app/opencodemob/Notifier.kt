@@ -47,17 +47,40 @@ object Notifier {
         try { NotificationManagerCompat.from(c).notify(1, runtime(c, text)) } catch (_: SecurityException) {}
     }
 
-    fun event(c: Context, kind: String, title: String, text: String) {
+    fun event(c: Context, kind: String, title: String, text: String, sessionId: String = "", permissionId: String = "", questionId: String = "") {
         if (!Prefs.flag(c, "snd_$kind")) return
         beep(kind)
-        val n = NotificationCompat.Builder(c, kind)
+        val id = 10 + kind.hashCode() % 1000
+        val b = NotificationCompat.Builder(c, kind)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
             .setContentText(text)
             .setAutoCancel(true)
             .setContentIntent(open(c))
-            .build()
-        try { NotificationManagerCompat.from(c).notify(10 + kind.hashCode() % 1000, n) } catch (_: SecurityException) {}
+        if (kind == ACTION && permissionId.isNotEmpty()) {
+            b.addAction(0, "Разрешить", action(c, id, 1, "permission_once", sessionId, permissionId))
+            b.addAction(0, "Отклонить", action(c, id, 2, "permission_reject", sessionId, permissionId))
+        } else if (kind == ACTION && questionId.isNotEmpty()) {
+            b.addAction(0, "Открыть вопрос", open(c))
+        }
+        if (kind == DONE && sessionId.isNotEmpty()) {
+            b.addAction(0, "Открыть", open(c))
+            b.addAction(0, "Стоп", action(c, id, 3, "abort", sessionId, ""))
+        }
+        if (kind == QUOTA) {
+            b.addAction(0, "Настройки", open(c))
+        }
+        try { NotificationManagerCompat.from(c).notify(id, b.build()) } catch (_: SecurityException) {}
+    }
+
+    private fun action(c: Context, notifId: Int, slot: Int, op: String, sessionId: String, permissionId: String): PendingIntent {
+        val i = Intent(c, ActionReceiver::class.java).apply {
+            putExtra("op_action", op)
+            putExtra("session_id", sessionId)
+            putExtra("permission_id", permissionId)
+            putExtra("notif_id", notifId)
+        }
+        return PendingIntent.getBroadcast(c, notifId * 10 + slot, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
     fun beep(kind: String) {

@@ -66,6 +66,14 @@
             </intent-filter>
         </activity>
 
+        <receiver
+            android:name=".ActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="app.opencodemob.NOTIFICATION_ACTION" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".OpenCodeService"
             android:exported="false"

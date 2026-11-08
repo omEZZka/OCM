@@ -39,14 +39,28 @@ O.chatInit=root=>{
   bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd()});
   bus.on('msg-removed',(sid,id)=>{const e=msgEls.get(id);if(e){e.remove();msgEls.delete(id)}});
   bus.on('part-removed',(sid,m,pid)=>{const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
-  bus.on('status',sid=>{if(sid===S.sid){renderStatus();updateSend()}});
+  bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend()}});
   bus.on('perm',renderDock);bus.on('todo',sid=>{if(sid===S.sid)renderTodos()});
   bus.on('session',()=>{const k=revisionKey();if(k!==revKey)renderAll();else renderRevert()});
   bus.on('sessions',()=>{renderRevert()});
   bus.on('mm:progress',renderMmProgress);
   bus.on('meta',updateChips);bus.on('conn',updateChips);
   bus.on('serror',p=>{if(p&&(!p.sessionID||p.sessionID===S.sid)){const e=p.error;const t=e&&(e.data&&e.data.message||e.name);if(t&&e.name!=='MessageAbortedError'){
-    if(/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|balance|funds|\b429\b/i.test(String(t))){
+    const quotaRe2=/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|balance|funds|\b429\b/i;
+    if(O._fallback&&p.sessionID===O._fallback.sid&&quotaRe2.test(String(t))&&O._fallback.tries.length){
+      const fb=O._fallback;O._fallback=null;const next=fb.tries.shift();
+      (async()=>{
+        try{await api('POST','/session/'+fb.sid+'/revert',{messageID:fb.mid})}catch(_){}
+        try{
+          const mid=O.mid();
+          await api('POST','/session/'+fb.sid+'/prompt_async',{messageID:mid,agent:S.agent,model:next,variant:S.variant||undefined,parts:fb.parts},{timeout:30000});
+          O.toast(O.tr('Fallback model: ','Резервная модель: ')+next.modelID,3000);
+          if(fb.tries.length)O._fallback={sid:fb.sid,mid,parts:fb.parts,tries:fb.tries};
+        }catch(er){O.toast(er.message,4000)}
+      })();
+      return;
+    }
+    if(quotaRe2.test(String(t))){
       O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));
       O.showQuotaAccountModal(t);
     }
@@ -57,6 +71,22 @@ O.chatInit=root=>{
 O.notifyLimit=(title,text)=>{
   try{if(window.OC&&OC.testSound)OC.testSound('quota')}catch(_){}
   try{if(O.native&&O.native.notify)O.native.notify('quota',title||O.tr('Limit Reached','Лимит исчерпан'),text||O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'))}catch(_){}
+};
+O.checkTokenWarning=sid=>{
+  if(!sid)return;
+  const u=O.contextUsage(sid);if(!u||u.pct==null)return;
+  const lvl=u.pct>=95?95:(u.pct>=80?80:0);
+  const key='tokWarn.'+sid,prev=O.store.get(key,0)||0;
+  if(lvl>prev){
+    O.store.set(key,lvl);
+    const txt=lvl>=95
+      ?O.tr('Context is almost full ('+u.pct+'%). Compact the session or start a new one.','Контекст почти заполнен ('+u.pct+'%). Сожмите сессию или начните новую.')
+      :O.tr('Context is '+u.pct+'% full. Consider /compact soon.','Контекст заполнен на '+u.pct+'%. Скоро стоит выполнить /compact.');
+    O.toast(txt,5000);
+    if(lvl>=95)O.notifyLimit(O.tr('Context almost full','Контекст почти заполнен'),txt);
+  }else if(lvl===0&&prev){
+    O.store.set(key,0);
+  }
 };
 const nearBottom=()=>msgsEl.scrollHeight-msgsEl.scrollTop-msgsEl.clientHeight<140;
 const scrollEnd=f=>{requestAnimationFrame(()=>{msgsEl.scrollTop=msgsEl.scrollHeight;if(f){stick=true;jumpEl.classList.add('hide')}})};
@@ -193,6 +223,7 @@ function metaUpdate(el,m){
     const t=[];if(i.modelID)t.push(i.modelID);
     if(i.time&&i.time.completed&&i.time.created)t.push(((i.time.completed-i.time.created)/1000).toFixed(1)+'s');
     if(i.tokens&&(i.tokens.output||i.tokens.input))t.push(O.fmtK((i.tokens.input||0)+(i.tokens.output||0))+' tok');
+    if(i.tokens&&(i.tokens.output||i.tokens.input)&&O.checkTokenWarning)O.checkTokenWarning(i.sessionID);
     if(i.cost)t.push('$'+i.cost.toFixed(4));
     // wall clock (hh:mm:ss, device time) right after tokens
     const done=i.time&&i.time.completed?i.time.completed:(i.time&&i.time.end?i.time.end:0);
@@ -232,6 +263,9 @@ function msgText(m){return m.parts.filter(p=>p.type==='text'&&!p.synthetic).map(
 function msgActions(m){O.actions(m.info.role==='user'?'Сообщение':'Ответ',[
   {label:'Копировать текст',icon:'copy',fn:()=>O.native.copy(msgText(m))},
   {label:'Экспорт сессии в Markdown',icon:'doc',fn:()=>exportSessionMd()},
+  {label:O.tr('Export session (JSON)','Экспорт сессии (JSON)'),icon:'down',fn:()=>{if(!S.sid)return;const json=O.exportSessionJson(S.sid);O.actions(O.tr('Export session (JSON)','Экспорт сессии (JSON)'),[
+    {label:O.tr('Copy JSON','Скопировать JSON'),icon:'copy',fn:()=>O.native.copy(json)},
+    {label:O.tr('Share','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(json);else O.native.copy(json)}}])}},
   m.info.role==='user'?{label:'Отменить отсюда',sub:'Откатить это сообщение и всё после него',icon:'undo',fn:()=>revertTo(m)}:null,
   {label:'Форк сессии отсюда',icon:'branch',fn:()=>forkAt(m)}])}
 function exportSessionMd(){
@@ -321,7 +355,16 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
       h('span',{class:'mm-progress-phase'},phaseLabel),
       h('span',{class:'mm-progress-time'},elapsed+'s')),
     h('div',{class:'mm-progress-track'},
-      h('div',{class:'mm-progress-fill',style:{width:phase==='role'||phase==='synth'?'100%':'0%'}}))))}
+      h('div',{class:'mm-progress-fill',style:{width:phase==='role'||phase==='synth'?'100%':'0%'}}))));
+  const ctrl=h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap',marginTop:'6px'}},
+    h('button',{class:'chip',onclick:()=>O.mmPause&&O.mmPause()},r.paused?'▶ '+O.tr('Resume','Продолжить'):'⏸ '+O.tr('Pause','Пауза')),
+    h('button',{class:'chip',onclick:()=>O.mmStop&&O.mmStop()},'⏹ '+O.tr('Stop all','Стоп')));
+  (r.jobs||[]).forEach(j=>{
+    if(!j.sid)return;
+    ctrl.append(h('button',{class:'chip',title:O.tr('Stop this role','Остановить эту роль'),onclick:()=>O.mmStopRole&&O.mmStopRole(j.role.name)},'✕ '+(j.role.name||'')));
+  });
+  mmProgressEl.append(ctrl);
+}
 function renderStatus(){const s=S.status[S.sid];statusEl.textContent='';
   if(!s||s.type==='idle'){statusEl.classList.add('hide');return}
   statusEl.classList.remove('hide');statusEl.append(h('span',{class:'spin'}),h('span',null,s.type==='retry'?('Повтор (попытка '+s.attempt+')'+(s.message?': '+s.message:'')):'Выполняется'))}
@@ -578,12 +621,12 @@ async function onSend(){
   const cm=/^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text);
   if(cm){const b=BUILTINS.find(x=>x.n===cm[1]);if(b){clear();b.run(cm[2]);return}
     const sc=(S.commands||[]).find(c=>c.name===cm[1]);
-    if(sc){if(!S.model)return O.openConnect();clear();try{const sid=await sess();api('POST','/session/'+sid+'/command',{command:sc.name,arguments:cm[2]||'',agent:S.agent,model:modelStr()},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}}
+    if(sc){if(!S.model)return O.openConnect();clear();try{const sid=await sess();O.maybeAutoTitle(sid,text);api('POST','/session/'+sid+'/command',{command:sc.name,arguments:cm[2]||'',agent:S.agent,model:modelStr()},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}}
 
   if(!S.model&&!O.mmActive()){O.toast('Подключите провайдера, чтобы выбрать модель');O.openConnect();return}
   if(text.startsWith('!')){const cmd=text.slice(1).trim();
     if(/^opencode(\s+tui)?\s*$/i.test(cmd)){O.toast('Приложение уже является интерфейсом OpenCode. TUI — во вкладке «Терминал» → Shell, агент — во вкладке «Чат»',6000);clear();return}
-    clear();try{const sid=await sess();api('POST','/session/'+sid+'/shell',{agent:S.agent,model:S.model,command:cmd},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}
+    clear();try{const sid=await sess();O.maybeAutoTitle(sid,text);api('POST','/session/'+sid+'/shell',{agent:S.agent,model:S.model,command:cmd},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}
   const parts=[];
   if(O.updateReadmeForModel && S.model && S.model.modelID){
     O.updateReadmeForModel(S.model.modelID);
@@ -593,13 +636,36 @@ async function onSend(){
   atts.forEach(a=>parts.push(a));
   if(O.mmActive()&&O.mmSend){clear();try{await O.mmSend(text,parts)}catch(e){O.toast(e.message||String(e),4000)}return}
   O.runHook('onSend',{text,parts,model:S.model,agent:S.agent});
-  const mid=O.mid();clear();
-  try{const sid=await sess();
-    const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:S.model});m.local=true;
-    m.parts=parts.map((p,i)=>Object.assign({id:'prt_local'+i,sessionID:sid,messageID:mid},p));bus.emit('msg',sid,m);scrollEnd(true);
-    await api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,parts},{timeout:30000});
+  clear();
+  let lastErr=null,usedModel=null,sentMid=null,sentSid=null,sentTries=[];
+  O._fallback=null;
+  try{
+    const sid=await sess();
+    O.maybeAutoTitle(sid,text);
+    const chain=[S.model].concat(O.fallbackChain());
+    const quotaRe=/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|\b429\b/i;
+    for(let i=0;i<chain.length;i++){
+      const mdl=chain[i];
+      const mid=O.mid();
+      try{
+        const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:mdl});m.local=true;
+        m.parts=parts.map((p,k)=>Object.assign({id:'prt_local'+k,sessionID:sid,messageID:mid},p));bus.emit('msg',sid,m);scrollEnd(true);
+        await api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:mdl,variant:S.variant||undefined,parts},{timeout:30000});
+        usedModel=mdl;lastErr=null;sentMid=mid;sentSid=sid;sentTries=chain.slice(i+1);break;
+      }catch(e){
+        lastErr=e;
+        const s=O.msgs(sid);s.list=s.list.filter(x=>x.info.id!==mid);s.idx.delete(mid);const el=msgEls.get(mid);if(el){el.remove();msgEls.delete(mid)}
+        if(i<chain.length-1&&quotaRe.test(String(e.message))){
+          O.toast(O.tr('Model unavailable, trying fallback...','Модель недоступна, пробую резервную…')+' '+(chain[i+1].modelID||''),2500);
+          continue;
+        }
+        break;
+      }
+    }
+    if(lastErr)throw lastErr;
+    if(sentTries.length)O._fallback={sid:sentSid,mid:sentMid,parts,tries:sentTries};
+    if(usedModel&&S.model&&(usedModel.providerID!==S.model.providerID||usedModel.modelID!==S.model.modelID))O.toast(O.tr('Answered by fallback model: ','Ответила резервная модель: ')+usedModel.modelID,2500);
   }catch(e){
-    const s=O.msgs(S.sid);s.list=s.list.filter(x=>x.info.id!==mid);s.idx.delete(mid);const el=msgEls.get(mid);if(el){el.remove();msgEls.delete(mid)}
     if(/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|\b429\b/i.test(String(e.message))){
       O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));
       O.showQuotaAccountModal(e.message);

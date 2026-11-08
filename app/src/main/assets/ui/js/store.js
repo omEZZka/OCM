@@ -171,6 +171,55 @@ O.pushRecentModel=k=>{if(!k)return;const l=O.recentModels().filter(x=>x!==k);l.u
 O.sessionOrder=()=>O.store.get('sessionOrder',[]);
 O.setSessionOrder=arr=>{O.store.set('sessionOrder',arr);bus.emit('sessions')};
 O.moveSessionInOrder=(id,toIndex)=>{const o=O.sessionOrder();const i=o.indexOf(id);if(i<0)return;o.splice(i,1);o.splice(toIndex,0,id);O.setSessionOrder(o)};
+// ---- session folders / tags ----
+O.sessionTags=()=>O.store.get('sessionTags',{});
+O.sessionTag=id=>O.sessionTags()[id]||'';
+O.setSessionTag=(id,tag)=>{const m=O.sessionTags();tag=String(tag||'').trim();if(tag)m[id]=tag;else delete m[id];O.store.set('sessionTags',m);bus.emit('sessions')};
+O.sessionTagList=()=>[...new Set(Object.values(O.sessionTags()))].filter(Boolean).sort();
+O.sessionTagFilter=()=>O.store.get('sessionTagFilter','');
+O.setSessionTagFilter=t=>{O.store.set('sessionTagFilter',t||'');bus.emit('sessions')};
+
+// ---- imported (offline) sessions ----
+O.localSessions=()=>O.store.get('localSessions',[]);
+O.saveLocalSession=s=>{const l=O.localSessions().filter(x=>x.id!==s.id);l.unshift(s);O.store.set('localSessions',l.slice(0,100))};
+O.removeLocalSession=id=>{O.store.set('localSessions',O.localSessions().filter(x=>x.id!==id));S.sessions=S.sessions.filter(x=>x.id!==id);bus.emit('sessions')};
+
+// ---- fallback model chain for normal chat ----
+O.fallbackModels=()=>O.store.get('fallbackModels',[]);
+O.setFallbackModels=l=>{O.store.set('fallbackModels',(l||[]).filter(Boolean).slice(0,5));bus.emit('meta')};
+O.fallbackChain=()=>{const cur=S.model?S.model.providerID+'/'+S.model.modelID:'';return O.fallbackModels().filter(k=>k&&k!==cur).map(k=>{const i=k.indexOf('/');return i>0?{providerID:k.slice(0,i),modelID:k.slice(i+1)}:null}).filter(Boolean)};
+
+// ---- local auto title ----
+O.isDefaultTitle=t=>!t||/^(New session|Child session|Новая сессия)\b/i.test(String(t));
+O.maybeAutoTitle=(sid,text)=>{
+  const s=S.sessions.find(x=>x.id===sid);if(!s||!O.isDefaultTitle(s.title))return;
+  if(O.visibleMsgs(sid).some(m=>m.info.role==='user'))return;
+  const title=String(text||'').replace(/\s+/g,' ').trim().slice(0,60);if(!title)return;
+  s.title=title;bus.emit('sessions');
+  if(!String(sid).startsWith('local_'))api('PATCH','/session/'+sid,{title}).catch(()=>{});
+};
+
+// ---- session JSON export / import ----
+O.exportSessionJson=sid=>{
+  const s=S.sessions.find(x=>x.id===sid)||{};
+  return JSON.stringify({format:'ocm-session',version:1,exportedAt:Date.now(),
+    session:{title:O.sessionTitle(s),tag:O.sessionTag(sid),time:s.time},
+    messages:O.visibleMsgs(sid).map(m=>({info:m.info,parts:m.parts}))},null,2);
+};
+O.importSessionJson=text=>{
+  let o;try{o=JSON.parse(text)}catch(e){throw new Error('Некорректный JSON')}
+  if(!o||!Array.isArray(o.messages))throw new Error('Это не файл сессии OCM');
+  const id='local_'+Date.now().toString(36);
+  const ses={id,title:(o.session&&o.session.title)||'Импортированная сессия',time:{created:Date.now(),updated:Date.now()},local:true,imported:true};
+  O.saveLocalSession(ses);
+  const list=o.messages.map(m=>{const info=Object.assign({},m.info,{sessionID:id});const parts=(m.parts||[]).map(p=>Object.assign({},p,{sessionID:id,messageID:info.id}));return{info,parts}});
+  O.kv.set('msgs:'+id,list);
+  const s=O.msgs(id);s.list=list;s.idx=new Map(list.map(m=>[m.info.id,m]));
+  if(o.session&&o.session.tag)O.setSessionTag(id,o.session.tag);
+  S.sessions=[ses,...S.sessions.filter(x=>x.id!==id)];bus.emit('sessions');
+  return ses;
+};
+
 // Draft persistence per session
 O.getDraft=sid=>O.store.get('draft.'+sid,'');
 O.setDraft=(sid,text)=>{if(!sid)return;O.store.set('draft.'+sid,text)};
@@ -253,8 +302,11 @@ O.setVariant=v=>{
 };
 
 O.loadSessions=async()=>{
-  try{const l=await api('GET','/session');S.sessions=l.filter(s=>!s.parentID).sort((a,b)=>b.time.updated-a.time.updated);S.offline=false;O.kv.set('sessions:'+S.dir,S.sessions)}
-  catch(e){const c=await O.kv.get('sessions:'+S.dir);if(c)S.sessions=c;S.offline=true}
+  let remote=[];
+  try{const l=await api('GET','/session');remote=l.filter(s=>!s.parentID).sort((a,b)=>b.time.updated-a.time.updated);S.offline=false;O.kv.set('sessions:'+S.dir,remote)}
+  catch(e){const c=await O.kv.get('sessions:'+S.dir);if(c)remote=c;S.offline=true}
+  const locals=O.localSessions();
+  S.sessions=locals.concat(remote.filter(s=>!locals.some(x=>x.id===s.id)));
   try{const st=await api('GET','/session/status');for(const k in st)S.status[k]=st[k]}catch{}
   bus.emit('sessions')};
 O.loadPending=async()=>{
@@ -264,6 +316,11 @@ O.loadPending=async()=>{
 O.openSession=async(sid,fresh)=>{
   S.sid=sid;O.store.set('sid.'+S.dir,sid);
   if(!sid){bus.emit('open',null);return}
+  if(String(sid).startsWith('local_')){
+    const s=O.msgs(sid);
+    if(!s.list.length){const c=await O.kv.get('msgs:'+sid);if(c)c.forEach(m=>{s.list.push(m);s.idx.set(m.info.id,m)})}
+    O.pickDefaults();bus.emit('meta');bus.emit('open',sid);return;
+  }
   const ok=m=>m&&O.modelInfo(m.providerID,m.modelID);
   const sesSaved=O.store.get('session.model.'+sid);
   if(ok(sesSaved)){

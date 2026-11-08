@@ -40,6 +40,7 @@ O.openSettings=()=>{
     O.listRow('cpu',O.tr('Active Model','Текущая модель'),S.model?S.model.providerID+'/'+S.model.modelID:O.tr('Not selected','Не выбрана'),O.icon('chevR'),()=>O.openModels()),
     O.listRow('key',O.tr('Connect Providers','Подключить провайдеров'),'OpenCode Zen, OpenAI, Anthropic, Gemini, DeepSeek...',O.icon('chevR'),()=>O.openConnect()),
     O.listRow('search',O.tr('Custom API Provider','Свой API провайдер'),'OpenAI-compatible, Groq, OpenRouter...',O.icon('chevR'),()=>O.openCustomProvider(s)),
+    O.listRow('refresh',O.tr('Fallback models','Резервные модели'),O.fallbackModels().length?O.fallbackModels().join(', '):O.tr('Used automatically when the main model fails','Автопереключение при ошибке основной модели'),O.icon('chevR'),()=>openFallback()),
     O.listRow('bot',O.tr('Multimodality','Мультимодальность'),O.tr('Team agents: lead model + role models','Командные агенты: главная модель + модели ролей'),O.icon('chevR'),()=>O.openMultimodal()),
     O.listRow('cloud',O.tr('Remote Builds','Удалённая сборка'),O.tr('GitHub, GitLab, Bitbucket, CircleCI, Azure, Codemagic, Bitrise, GCB','Удалённая сборка APK по токену'),O.icon('chevR'),()=>O.openRemoteBuilds())
   );
@@ -100,6 +101,7 @@ O.openSettings=()=>{
   body.append(h('div',{class:'settings-section-title'},O.tr('System & Application','Система и приложение')));
   const sysCard=h('div',{class:'settings-card'});
   sysCard.append(
+    O.listRow('shield',O.tr('Encrypted backup','Шифрованный бэкап'),O.tr('Profile, config and sessions to /sdcard/Download','Профиль, конфиг и сессии в /sdcard/Download'),O.icon('chevR'),()=>openBackup()),
     O.listRow('down',O.tr('Updates','Обновления'),O.tr('OpenCode Mobile & Core Runtime','Приложение и ядро OpenCode (1.x)'),O.icon('chevR'),()=>openUpdates()),
     O.listRow('shield',O.tr('Permissions','Разрешения'),O.tr('Storage, notifications, background execution','Файлы, уведомления, фон'),O.icon('chevR'),()=>openPerms()),
     O.listRow('bat',O.tr('Logs & Diagnostics','Совместимость и логи'),O.tr('Safe mode, core runtime restart','Безопасный режим, перезапуск сервера'),O.icon('chevR'),()=>openCompat()),
@@ -108,6 +110,63 @@ O.openSettings=()=>{
   );
   body.append(sysCard);
 };
+
+// ---- fallback model chain ----
+function openFallback(){
+  const body=h('div');
+  const draw=()=>{
+    body.textContent='';
+    const list=O.fallbackModels();
+    body.append(h('div',{class:'mut',style:{padding:'4px 2px 10px'}},O.tr('If the main model hits a limit or errors, the app retries these models in order (up to 5).','Если основная модель упрётся в лимит или ошибку, приложение по очереди попробует эти модели (до 5).')));
+    if(!list.length)body.append(h('div',{class:'mut',style:{padding:'12px'}},O.tr('No fallback models yet.','Резервных моделей пока нет.')));
+    list.forEach((k,i)=>{
+      const p=k.split('/');const info=O.modelInfo(p[0],p.slice(1).join('/'));
+      body.append(h('div',{class:'settings-row'},
+        h('div',{class:'settings-row-icon purple'},O.icon('cpu')),
+        h('div',{class:'settings-row-text'},h('b',null,(info&&info.name)||k),h('span',null,'#'+(i+1)+' · '+k)),
+        h('button',{class:'ibtn s',onclick:()=>{const l=O.fallbackModels();l.splice(i,1);O.setFallbackModels(l);draw()}},O.icon('trash'))));
+    });
+    body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{
+      if(O.fallbackModels().length>=5)return O.toast(O.tr('Limit: 5 models','Лимит: 5 моделей'),2000);
+      O.mmPickModel(null,m=>{O.setFallbackModels(O.fallbackModels().concat([m.providerID+'/'+m.modelID]));draw()},{freeOnly:false});
+    }},O.icon('plus'),O.tr('Add model','Добавить модель')));
+  };
+  draw();
+  sub(O.tr('Fallback models','Резервные модели'),body,{full:true});
+}
+
+// ---- encrypted profile backup ----
+function openBackup(){
+  const info=h('div',{class:'mut s',style:{marginTop:'10px',wordBreak:'break-all'}},'');
+  const pw1=h('input',{type:'password',class:'mono',placeholder:O.tr('Password for encryption','Пароль для шифрования')});
+  const pw2=h('input',{type:'password',class:'mono',placeholder:O.tr('Repeat password','Повторите пароль')});
+  const body=h('div',null,
+    h('div',{class:'field'},h('label',null,O.tr('New backup','Новый бэкап')),pw1,pw2),
+    h('button',{class:'btn pri wide',onclick:()=>{
+      if(!pw1.value||pw1.value.length<6)return O.toast(O.tr('Password must be at least 6 characters','Пароль минимум 6 символов'),3000);
+      if(pw1.value!==pw2.value)return O.toast(O.tr('Passwords do not match','Пароли не совпадают'),3000);
+      try{
+        const r=JSON.parse(OC.backupProfile(pw1.value));
+        if(r.ok){info.textContent=O.tr('Saved: ','Сохранено: ')+r.path+' ('+Math.round((r.size||0)/1024)+' KB)';O.native.copy(r.path);O.toast(O.tr('Backup created','Бэкап создан'),2500)}
+        else O.toast(r.err||'failed',4000);
+      }catch(e){O.toast(e.message,4000)}
+    }},O.icon('shield'),O.tr('Create encrypted backup','Создать шифрованный бэкап')),
+    h('div',{style:{height:'18px'}}),
+    h('div',{class:'note'},O.tr('The archive contains config, agents, commands, skills, plugins and session data. It does not include the Linux rootfs.','Архив содержит конфиг, агентов, команды, навыки, плагины и данные сессий. Linux rootfs не включается.')),
+    h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>OC.pickFile('backup','')},O.icon('up'),O.tr('Restore from file...','Восстановить из файла...')),
+    info);
+  sub(O.tr('Encrypted backup','Шифрованный бэкап'),body,{full:true});
+}
+O.on('picked',async d=>{
+  if(!d||d.kind!=='backup'||!d.ok)return;
+  const pw=await O.ask(O.tr('Backup password','Пароль бэкапа'),O.tr('Enter the password used when the backup was created','Введите пароль, заданный при создании бэкапа'));
+  if(!pw)return;
+  try{
+    const r=JSON.parse(OC.restoreProfile(pw,d.path||d.file));
+    if(r.ok){O.toast(O.tr('Profile restored. Restarting server...','Профиль восстановлен. Перезапускаю сервер...'),3000);OC.restartServer()}
+    else O.toast(r.err||'failed',4000);
+  }catch(e){O.toast(e.message,4000)}
+});
 
 // ---- agents / rules upload ----
 function openAgents(){
