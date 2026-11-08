@@ -118,8 +118,13 @@ class OpenCodeService : Service() {
         val qId = props.optString("questionID").ifEmpty { if (type.startsWith("question.")) props.optString("id") else "" }
         when {
             type == "session.status" -> {
-                val st = props.optString("status").ifEmpty { props.optString("type") }
-                if (st == "busy" || st == "running") {
+                val rawStatus = props.opt("status")
+                val st = when (rawStatus) {
+                    is String -> rawStatus
+                    is JSONObject -> rawStatus.optString("type")
+                    else -> props.optString("type")
+                }
+                if (st == "busy" || st == "running" || st == "retry") {
                     val title = props.optString("title").ifEmpty { "Задача выполняется" }
                     WidgetUpdater.set(this, title, if (sid.isNotEmpty()) "Сессия ${sid.take(8)}" else "OpenCode работает", true)
                 } else if (st == "idle") {

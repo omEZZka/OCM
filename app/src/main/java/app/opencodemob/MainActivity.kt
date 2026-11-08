@@ -614,6 +614,7 @@ class MainActivity : ComponentActivity() {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, deriveKey(password, salt), GCMParameterSpec(128, iv))
         val skip = setOf("node_modules", ".cache", "tmp", "bin", "rootfs", "proot-tmp")
+        var total = 0L
         FileOutputStream(out).use { fos ->
             fos.write("OCMB1".toByteArray())
             fos.write(salt)
@@ -624,7 +625,8 @@ class MainActivity : ComponentActivity() {
                         if (!f.isFile) return@forEach
                         val rel = f.relativeTo(home).path
                         if (rel.split('/').any { it in skip }) return@forEach
-                        if (f.length() > 50_000_000L) return@forEach
+                        if (f.length() > 50_000_000L || total > 200_000_000L) return@forEach
+                        total += f.length()
                         try {
                             zos.putNextEntry(ZipEntry(rel))
                             f.inputStream().use { it.copyTo(zos) }
