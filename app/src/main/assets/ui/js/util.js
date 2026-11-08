@@ -36,8 +36,12 @@ O.longPress=(el,fn,ms)=>{ms=ms||480;let t=null;
   el.addEventListener('mouseleave',cancel);
   return el};
 // Horizontal swipe: onSwipe(dir) where dir is 'left' | 'right'. Ignores vertical scrolls and taps.
-O.swipe=(el,onSwipe,opts)=>{opts=opts||{};const thr=opts.threshold||64;let sx=0,sy=0,st=0,on=false;
-  el.addEventListener('touchstart',e=>{const t=e.touches[0];if(!t)return;sx=t.clientX;sy=t.clientY;st=Date.now();on=true},{passive:true});
+O.swipe=(el,onSwipe,opts)=>{opts=opts||{};const thr=opts.threshold||64;const edge=opts.edge||0;const top=opts.top||0;
+  let sx=0,sy=0,st=0,on=false;
+  el.addEventListener('touchstart',e=>{const t=e.touches[0];if(!t)return;
+    if(edge&&t.clientX>innerWidth*(1-edge))return; // ignore swipes starting in the right edge zone
+    if(top&&t.clientY>innerHeight*top)return;      // ignore swipes starting below the given fraction (composer area)
+    sx=t.clientX;sy=t.clientY;st=Date.now();on=true},{passive:true});
   el.addEventListener('touchend',e=>{if(!on)return;on=false;const t=e.changedTouches[0];if(!t)return;
     const dx=t.clientX-sx,dy=t.clientY-sy,dt=Date.now()-st;
     if(dt>700||Math.abs(dx)<thr||Math.abs(dx)<Math.abs(dy)*1.6)return;
