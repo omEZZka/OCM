@@ -1,6 +1,5 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
-const MAX=7;
 
 // ---- storage ----
 O.mmList=()=>O.store.get('mm.agents',[]);
@@ -149,7 +148,7 @@ O.mmEditor=(a,done)=>{
     const bsub=backupRow.querySelector('#mm-backup-sub');if(bsub)bsub.textContent=a.backup?mName(a.backup):O.tr('Not set','Не задана');
     rolesEl.textContent='';
     const card=h('div',{class:'settings-card'});
-    if(!a.roles.length)card.append(h('div',{class:'mut',style:{padding:'14px 16px'}},O.tr('No roles yet. Add up to 6 — together with the lead model an agent can use up to 7 models.','Ролей пока нет. Добавьте до 6 — вместе с главной моделью агент может использовать до 7 моделей.')));
+    if(!a.roles.length)card.append(h('div',{class:'mut',style:{padding:'14px 16px'}},O.tr('No roles yet. Add as many as you need — each role can use its own model and backups.','Ролей пока нет. Добавляйте сколько нужно — у каждой роли своя модель и запасные.')));
     a.roles.forEach((r,i)=>{
       card.append(h('div',{class:'settings-row'},
         h('div',{class:'settings-row-icon blue'},O.icon('user')),
@@ -160,7 +159,6 @@ O.mmEditor=(a,done)=>{
     });
     rolesEl.append(card);
     rolesEl.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{
-      if(a.roles.length>=MAX-1){O.toast(O.tr('Limit: up to 7 models including the lead','Лимит: до 7 моделей вместе с главной'),3000);return}
       O.mmRoleEditor({},(ok,next)=>{if(ok&&next){a.roles.push(next);draw()}},pickOpts());
     }},O.icon('plus'),O.tr('Add role','Добавить роль')));
   };
@@ -200,7 +198,7 @@ O.mmRoleEditor=(r,done,opts)=>{
     const wrap=h('div',{class:'fchips'});
     r.backups.forEach((bm,i)=>wrap.append(h('span',{class:'chip keep',style:{fontSize:'12px'}},mName(bm),
       h('button',{class:'chip-x',style:{marginLeft:'4px',opacity:'.55'},onclick:()=>{r.backups.splice(i,1);drawB()}},O.icon('x')))));
-    if(r.backups.length<3)wrap.append(h('button',{class:'chip',style:{fontSize:'12px'},onclick:()=>O.mmPickModel(r.backups[r.backups.length-1],m=>{r.backups.push(m);drawB()},opts)},
+    if(r.backups.length<10)wrap.append(h('button',{class:'chip',style:{fontSize:'12px'},onclick:()=>O.mmPickModel(r.backups[r.backups.length-1],m=>{r.backups.push(m);drawB()},opts)},
       h('span',{class:'ic'},O.icon('plus')),h('span',null,O.tr('backup','запасная'))));
     bEl.append(wrap);
   };
@@ -213,7 +211,7 @@ O.mmRoleEditor=(r,done,opts)=>{
       r.name=nameInp.value.trim();
       if(!r.name){O.toast(O.tr('Enter a role name','Введите название роли'));return}
       r.prompt=promptTa.value.trim();
-      r.backups=r.backups.slice(0,3);
+      r.backups=r.backups.slice(0,10);
       done(true,r);s.close();
     }},O.tr('Save','Сохранить')));
   draw();
