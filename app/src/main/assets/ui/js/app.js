@@ -68,6 +68,15 @@ function build(){
   O.termInit(SP.term);
   O.changesInit(SP.changes);
 
+  // Horizontal swipe on the chat: left -> Files, right -> Sessions drawer
+  if(O.swipe&&P.chat){
+    O.swipe(P.chat,d=>{
+      if(wide())return;
+      if(d==='left')O.setTab('files');
+      else if(d==='right')O.openSessions();
+    });
+  }
+
   addEventListener('resize',O.debounce(layout,100));
   ['open','session','sessions','msg','vcs','dir','meta','diff','status','idle'].forEach(e=>bus.on(e,O.debounce(updateTop,120)));
   bus.on('mm',O.debounce(updateTop,60));

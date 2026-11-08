@@ -30,6 +30,10 @@ O.native={
   openApp:t=>(window.OC&&OC.openApp?OC.openApp(t):false),
   preparePreview:p=>(window.OC&&OC.preparePreview?OC.preparePreview(p):''),
   notify:(kind,title,text)=>{try{if(window.OC&&OC.notify)OC.notify(kind,title,text)}catch(_){}},
+  autoBackupState:()=>{try{return j(OC.autoBackupState())||{}}catch(_){return{}}},
+  autoBackupConfigure:(enabled,hours,password)=>{try{return j(OC.autoBackupConfigure(enabled,hours,password))||{ok:false}}catch(_){return{ok:false}}},
+  autoBackupNow:password=>{try{return j(OC.autoBackupNow(password||''))||{ok:false}}catch(_){return{ok:false}}},
+  gitRun:(dir,args)=>{try{return j(OC.gitRun(dir,args))||{ok:false}}catch(_){return{ok:false}}},
   state:()=>j(OC.state())||{}
 };
 O.openUrl=u=>{if(/^https?:\/\//i.test(u)&&!/appassets\.androidplatform\.net/i.test(u))OC.openLink(u)};

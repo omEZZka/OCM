@@ -132,8 +132,35 @@ O.refreshChanges=async local=>{chList.textContent='';
   else{let st=[];try{st=await api('GET','/file/status')}catch{}
     if(!st.length)chList.append(h('div',{class:'mut',style:{padding:'24px',textAlign:'center'}},'Рабочее дерево чистое'));
     st.forEach(f=>chList.append(h('button',{class:'li',onclick:()=>showGit(f)},O.fileIcon(O.basename(f.path)),h('div',{class:'t'},h('b',null,O.basename(f.path)),h('span',null,f.status+'  '+O.dirname(f.path))),
-      h('span',{class:'s ok'},'+'+(f.added||0)),h('span',{class:'s err'},'-'+(f.removed||0)))))}
+      h('span',{class:'s ok'},'+'+(f.added||0)),h('span',{class:'s err'},'-'+(f.removed||0)))));
+    chList.append(gitPanel());}
   O.updateBadges&&O.updateBadges()};
+function gitPanel(){
+  const out=h('pre',{class:'term-pre',style:{maxHeight:'160px',marginTop:'8px',display:'none'}},'');
+  const msgInp=h('input',{class:'mono',placeholder:'Сообщение коммита'});
+  const run=async(args,showOut)=>{
+    const r=O.native.gitRun?O.native.gitRun(S.dir,args):{ok:false,err:'нет доступа'};
+    if(showOut){out.style.display='block';out.textContent=(r.out||r.err||'').trim()||'(нет вывода)'}
+    if(!r.ok&&r.err)O.toast(r.err,4000);
+    return r;
+  };
+  const box=h('div',{class:'card',style:{margin:'10px 8px',padding:'10px'}},
+    h('div',{class:'grp',style:{marginTop:0}},'Git'),
+    h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}},
+      h('button',{class:'btn sm',onclick:()=>run('status --short',true)},O.icon('refresh'),'Статус'),
+      h('button',{class:'btn sm',onclick:()=>run('add -A',false).then(()=>O.toast('Проиндексировано',1200))},O.icon('plus'),'Add all'),
+      h('button',{class:'btn sm',onclick:()=>run('pull --ff-only',true)},O.icon('down'),'Pull'),
+      h('button',{class:'btn sm',onclick:()=>run('push',true)},O.icon('up'),'Push'),
+      h('button',{class:'btn sm',onclick:()=>run('log --oneline -10',true)},O.icon('list'),'Log')),
+    h('div',{style:{display:'flex',gap:'6px',marginTop:'8px'}},msgInp,
+      h('button',{class:'btn pri',onclick:async()=>{
+        const m=msgInp.value.trim();if(!m)return O.toast('Введите сообщение',2000);
+        const r=await run('commit -m '+JSON.stringify(m),true);
+        if(r.ok){O.toast('Коммит создан',1500);msgInp.value='';O.refreshChanges(true)}
+      }},'Commit')),
+    out);
+  return box;
+}
 function showDiff(f){const b=h('div');
   if(typeof f.before==='string'||typeof f.after==='string')b.append(O.diffEl(O.diffOps(f.before||'',f.after||''),3));
   else if(typeof f.diff==='string'||typeof f.patch==='string')b.append(O.unifiedEl(f.diff||f.patch));

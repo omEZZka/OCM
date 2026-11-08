@@ -2536,3 +2536,34 @@ a:hover {
 
 
 
+
+/* ---- Message & UI animations (2.2.0) ---- */
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.995); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.msg { animation: msgIn 0.22s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .msg { animation: none; }
+}
+@keyframes partFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.part { animation: partFade 0.18s ease-out; }
+@keyframes chipPop {
+  0% { transform: scale(0.9); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.chip, .settings-row-icon { transition: transform 0.12s ease, background 0.15s; }
+.chip:active { transform: scale(0.94); }
+.settings-row { transition: background 0.15s ease; }
+.settings-row:active { background: var(--bg3); }
+.btn { transition: transform 0.1s ease, background 0.15s, opacity 0.15s; }
+.btn:active { transform: scale(0.97); }
+.sh-root .sheet { animation: sheetIn 0.24s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes sheetIn { from { transform: translateY(14px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .part, .sh-root .sheet { animation: none; }
+  .btn:active, .chip:active { transform: none; }
+}

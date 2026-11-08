@@ -51,20 +51,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
-import javax.crypto.Cipher
-import javax.crypto.CipherInputStream
-import javax.crypto.CipherOutputStream
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.PBEKeySpec
-import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 
 /**
@@ -601,72 +588,6 @@ class MainActivity : ComponentActivity() {
     }
 
     // ---------- uploads: AGENTS.md, agents, commands, plugins ----------
-
-    private fun deriveKey(password: String, salt: ByteArray): SecretKeySpec {
-        val spec = PBEKeySpec(password.toCharArray(), salt, 120_000, 256)
-        val f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        return SecretKeySpec(f.generateSecret(spec).encoded, "AES")
-    }
-
-    private fun backupZip(home: File, out: File, password: String) {
-        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-        val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, deriveKey(password, salt), GCMParameterSpec(128, iv))
-        val skip = setOf("node_modules", ".cache", "tmp", "bin", "rootfs", "proot-tmp")
-        var total = 0L
-        FileOutputStream(out).use { fos ->
-            fos.write("OCMB1".toByteArray())
-            fos.write(salt)
-            fos.write(iv)
-            CipherOutputStream(fos, cipher).use { cos ->
-                ZipOutputStream(cos).use { zos ->
-                    home.walkTopDown().forEach { f ->
-                        if (!f.isFile) return@forEach
-                        val rel = f.relativeTo(home).path
-                        if (rel.split('/').any { it in skip }) return@forEach
-                        if (f.length() > 50_000_000L || total > 200_000_000L) return@forEach
-                        total += f.length()
-                        try {
-                            zos.putNextEntry(ZipEntry(rel))
-                            f.inputStream().use { it.copyTo(zos) }
-                            zos.closeEntry()
-                        } catch (_: Exception) {}
-                    }
-                }
-            }
-        }
-    }
-
-    private fun restoreZip(src: File, home: File, password: String) {
-        FileInputStream(src).use { fis ->
-            val magic = ByteArray(5)
-            if (fis.read(magic) != 5 || String(magic) != "OCMB1") throw IllegalArgumentException("not an OCM backup")
-            val salt = ByteArray(16); if (fis.read(salt) != 16) throw IllegalArgumentException("corrupt backup")
-            val iv = ByteArray(12); if (fis.read(iv) != 12) throw IllegalArgumentException("corrupt backup")
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, deriveKey(password, salt), GCMParameterSpec(128, iv))
-            CipherInputStream(fis, cipher).use { cis ->
-                ZipInputStream(cis).use { zis ->
-                    var e = zis.nextEntry
-                    while (e != null) {
-                        val name = e.name
-                        if (name.startsWith("/") || name.contains("..")) {
-                            zis.closeEntry(); e = zis.nextEntry; continue
-                        }
-                        val dest = File(home, name)
-                        if (!dest.canonicalPath.startsWith(home.canonicalPath + File.separator)) {
-                            zis.closeEntry(); e = zis.nextEntry; continue
-                        }
-                        dest.parentFile?.mkdirs()
-                        FileOutputStream(dest).use { zis.copyTo(it) }
-                        zis.closeEntry()
-                        e = zis.nextEntry
-                    }
-                }
-            }
-        }
-    }
 
     private fun onPicked(uri: Uri?) {
         val kind = pendingKind ?: return
@@ -1269,11 +1190,72 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface fun shimUrl(): String = ProxyShim.baseUrl(this@MainActivity)
 
+        /** Runs `git -C <dir> <args>` inside proot and returns merged output. */
+        @JavascriptInterface fun gitRun(dir: String, args: String): String = try {
+            val u = uid()
+            if (!Runtime.isInstalled(this@MainActivity)) JSONObject().put("ok", false).put("err", "runtime not installed").toString()
+            else {
+                val parts = Regex("\"([^\"]*)\"|'([^']*)'|(\\S+)").findAll(args).map {
+                    it.groupValues[1].ifEmpty { it.groupValues[2].ifEmpty { it.groupValues[3] } }
+                }.filter { it.isNotEmpty() }.toList()
+                val cmd = mutableListOf("/usr/bin/git", "-C", dir.ifEmpty { "/root" })
+                cmd += parts
+                val p = Runtime.prootCmd(this@MainActivity, u, cmd)
+                val out = StringBuilder()
+                java.io.BufferedReader(java.io.InputStreamReader(p.inputStream, Charsets.UTF_8)).use { r ->
+                    var line = r.readLine()
+                    while (line != null) { out.append(line).append('\n'); line = r.readLine() }
+                }
+                val code = p.waitFor()
+                JSONObject().put("ok", code == 0).put("code", code).put("out", out.toString()).toString()
+            }
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
+        }
+
+        @JavascriptInterface fun autoBackupState(): String = try {
+            JSONObject().put("enabled", Prefs.flag(this@MainActivity, "auto_backup", false))
+                .put("intervalHours", Prefs.get(this@MainActivity, "auto_backup_hours", "24"))
+                .put("hasPassword", Prefs.get(this@MainActivity, "auto_backup_pw").isNotEmpty())
+                .toString()
+        } catch (e: Exception) { JSONObject().put("enabled", false).toString() }
+
+        @JavascriptInterface fun autoBackupConfigure(enabled: Boolean, hours: Int, password: String): String = try {
+            if (password.isNotEmpty()) Prefs.put(this@MainActivity, "auto_backup_pw", password)
+            Prefs.putFlag(this@MainActivity, "auto_backup", enabled)
+            Prefs.put(this@MainActivity, "auto_backup_hours", hours.coerceIn(6, 168).toString())
+            val ctx = this@MainActivity
+            val req = androidx.work.PeriodicWorkRequestBuilder<BackupWorker>(
+                hours.coerceIn(6, 168).toLong(), java.util.concurrent.TimeUnit.HOURS
+            ).build()
+            val wm = androidx.work.WorkManager.getInstance(ctx)
+            if (enabled) {
+                wm.enqueueUniquePeriodicWork(
+                    BackupWorker.UNIQUE,
+                    androidx.work.ExistingPeriodicWorkPolicy.UPDATE,
+                    req
+                )
+            } else {
+                wm.cancelUniqueWork(BackupWorker.UNIQUE)
+            }
+            JSONObject().put("ok", true).toString()
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
+        }
+
+        @JavascriptInterface fun autoBackupNow(password: String): String = try {
+            val home = Runtime.home(this@MainActivity, uid())
+            val out = Backup.runAutoBackup(this@MainActivity, uid(), password.ifEmpty { Prefs.get(this@MainActivity, "auto_backup_pw") })
+            JSONObject().put("ok", true).put("path", out.absolutePath).put("size", out.length()).toString()
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
+        }
+
         @JavascriptInterface fun backupProfile(password: String): String = try {
             val home = Runtime.home(this@MainActivity, uid())
-            val dir = File("/sdcard/Download").takeIf { it.exists() && it.canWrite() } ?: filesDir
+            val dir = Backup.backupDir(this@MainActivity)
             val out = File(dir, "OCM-backup-" + System.currentTimeMillis() + ".ocmbak")
-            backupZip(home, out, password)
+            Backup.backupZip(home, out, password)
             JSONObject().put("ok", true).put("path", out.absolutePath).put("size", out.length()).toString()
         } catch (e: Exception) {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
@@ -1284,7 +1266,7 @@ class MainActivity : ComponentActivity() {
             val src = File(path.ifEmpty { File(cacheDir, "restore.ocmbak").absolutePath })
             if (!src.exists()) JSONObject().put("ok", false).put("err", "backup file not found").toString()
             else {
-                restoreZip(src, home, password)
+                Backup.restoreZip(src, home, password)
                 JSONObject().put("ok", true).put("path", src.absolutePath).toString()
             }
         } catch (e: Exception) {

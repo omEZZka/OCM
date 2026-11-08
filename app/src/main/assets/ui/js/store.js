@@ -441,4 +441,24 @@ O.runHook=(name,...args)=>{
   }
 };
 
+// ---- settings export / import (localStorage + opencode.json) ----
+const SETTINGS_SKIP=new Set(['author_token']);
+O.exportSettings=()=>{
+  const ls={};
+  try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(!k||!k.startsWith('ocm.'))continue;const short=k.slice(4);if(SETTINGS_SKIP.has(short))continue;ls[short]=localStorage.getItem(k)}}catch(_){}
+  let config='';
+  try{const c=O.native.cfgRead();if(c)config=c}catch(_){}
+  return JSON.stringify({format:'ocm-settings',version:1,exportedAt:Date.now(),app:S.opts&&S.opts.theme||'',localStorage:ls,config},null,2);
+};
+O.importSettings=text=>{
+  let o;try{o=JSON.parse(text)}catch(e){throw new Error(O.tr('Invalid JSON','Некорректный JSON'))}
+  if(!o||o.format!=='ocm-settings'||typeof o.localStorage!=='object')throw new Error(O.tr('Not an OCM settings file','Это не файл настроек OCM'));
+  let n=0;
+  for(const k in o.localStorage){try{localStorage.setItem('ocm.'+k,o.localStorage[k]);n++}catch(_){}}
+  if(typeof o.config==='string'&&o.config.trim()){try{O.native.cfgWrite(o.config)}catch(_){}}
+  return n;
+};
+O.lastFallback=()=>O.store.get('lastFallback',null);
+O.setLastFallback=v=>{O.store.set('lastFallback',v||null)};
+
 })();

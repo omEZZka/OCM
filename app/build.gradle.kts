@@ -3,8 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersionName = (findProperty("appVersionName") as String?) ?: "2.1.2"
-val appVersionCode = ((findProperty("appVersionCode") as String?) ?: "212").toInt()
+val appVersionName = (findProperty("appVersionName") as String?) ?: "2.2.0"
+val appVersionCode = ((findProperty("appVersionCode") as String?) ?: "220").toInt()
 val ksPass = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "opencodemob"
 
 android {
@@ -59,4 +59,5 @@ dependencies {
     implementation("org.tukaani:xz:1.10")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }

@@ -39,7 +39,7 @@ O.chatInit=root=>{
   bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd()});
   bus.on('msg-removed',(sid,id)=>{const e=msgEls.get(id);if(e){e.remove();msgEls.delete(id)}});
   bus.on('part-removed',(sid,m,pid)=>{const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
-  bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend()}});
+  bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend()}if(O.mm.run)renderMmProgress()});
   bus.on('perm',renderDock);bus.on('todo',sid=>{if(sid===S.sid)renderTodos()});
   bus.on('session',()=>{const k=revisionKey();if(k!==revKey)renderAll();else renderRevert()});
   bus.on('sessions',()=>{renderRevert()});
@@ -361,7 +361,10 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
     h('button',{class:'chip',onclick:()=>O.mmStop&&O.mmStop()},'⏹ '+O.tr('Stop all','Стоп')));
   (r.jobs||[]).forEach(j=>{
     if(!j.sid)return;
-    ctrl.append(h('button',{class:'chip',title:O.tr('Stop this role','Остановить эту роль'),onclick:()=>O.mmStopRole&&O.mmStopRole(j.role.name)},'✕ '+(j.role.name||'')));
+    const done=!S.status[j.sid]||S.status[j.sid].type==='idle';
+    const cur=r.currentRole&&(j.role.name===r.currentRole||j.role.name+' (retry)'===r.currentRole);
+    ctrl.append(h('button',{class:'chip',title:O.tr('Stop this role','Остановить эту роль'),style:cur?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>O.mmStopRole&&O.mmStopRole(j.role.name)},
+      (done?'✓ ':cur?'◐ ':'• ')+(j.role.name||'')));
   });
   mmProgressEl.append(ctrl);
 }
@@ -665,7 +668,8 @@ async function onSend(){
     }
     if(lastErr)throw lastErr;
     if(sentTries.length)O._fallback={sid:sentSid,mid:sentMid,parts,tries:sentTries};
-    if(usedModel&&S.model&&(usedModel.providerID!==S.model.providerID||usedModel.modelID!==S.model.modelID))O.toast(O.tr('Answered by fallback model: ','Ответила резервная модель: ')+usedModel.modelID,2500);
+    if(usedModel&&S.model&&(usedModel.providerID!==S.model.providerID||usedModel.modelID!==S.model.modelID)){O.setLastFallback({model:usedModel.modelID,at:Date.now()});O.toast(O.tr('Answered by fallback model: ','Ответила резервная модель: ')+usedModel.modelID,2500)}
+    else if(O.setLastFallback)O.setLastFallback(null);
   }catch(e){
     if(/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|\b429\b/i.test(String(e.message))){
       O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));

@@ -280,15 +280,32 @@ function mmConfirmPlan(mm,plan){
   return new Promise(res=>{
     let done=false;
     const finish=v=>{if(done)return;done=true;try{s.close()}catch(_){}res(v)};
-    const rows=plan.map(t=>h('div',{class:'settings-row'},
-      h('div',{class:'settings-row-icon purple'},O.icon('bot')),
-      h('div',{class:'settings-row-text'},h('b',null,t.role.name||'role'),h('span',null,t.task))));
+    const listBox=h('div',{class:'settings-card'});
+    const collect=()=>{listBox.querySelectorAll('textarea').forEach((ta,i)=>{if(plan[i])plan[i].task=ta.value.trim()})};
+    const redraw=()=>{
+      listBox.textContent='';
+      plan.forEach((t,i)=>{
+        const ta=h('textarea',{class:'mono',rows:2,style:{width:'100%'}});ta.value=t.task||'';
+        listBox.append(h('div',{class:'settings-row',style:{alignItems:'flex-start'}},
+          h('div',{class:'settings-row-icon purple'},O.icon('bot')),
+          h('div',{class:'settings-row-text',style:{flex:1}},
+            h('b',null,t.role.name||'role'),
+            h('div',{class:'field',style:{marginTop:'4px'}},ta)),
+          h('button',{class:'ibtn s',title:O.tr('Remove task','Убрать задачу'),onclick:()=>{collect();plan.splice(i,1);redraw()}},O.icon('trash'))));
+      });
+    };
+    redraw();
     const body=h('div',null,
-      h('div',{class:'mut',style:{padding:'6px 2px 10px'}},O.tr('The lead model prepared this plan. Review and confirm before roles start.','Главная модель подготовила план. Проверьте и подтвердите запуск ролей.')),
-      h('div',{class:'settings-card'},rows),
+      h('div',{class:'mut',style:{padding:'6px 2px 10px'}},O.tr('The lead model prepared this plan. Edit tasks, remove or confirm before roles start.','Главная модель подготовила план. Отредактируйте задачи, уберите лишние или подтвердите запуск.')),
+      listBox,
       h('div',{style:{display:'flex',gap:'8px',marginTop:'12px'}},
         h('button',{class:'btn wide',onclick:()=>finish(false)},O.tr('Cancel','Отмена')),
-        h('button',{class:'btn pri',style:{flex:'1'},onclick:()=>finish(true)},O.icon('play'),O.tr('Run roles','Запустить роли'))));
+        h('button',{class:'btn pri',style:{flex:'1'},onclick:()=>{
+          collect();
+          const cleaned=plan.filter(t=>t&&t.task);
+          if(!cleaned.length)return O.toast(O.tr('Add at least one task','Оставьте хотя бы одну задачу'),2500);
+          finish(cleaned);
+        }},O.icon('play'),O.tr('Run roles','Запустить роли'))));
     const s=O.sheet(O.tr('Plan: ','План: ')+(mm.name||''),body,{hud:true,onClose:()=>finish(false)});
   });
 }
@@ -334,7 +351,9 @@ O.mmSend=async(text,parts)=>{
       leadUsed=lead
     }
     if(!plan||!plan.length){O.mm.run=null;return true} // lead answered directly — done
-    if(!await mmConfirmPlan(mm,plan)){O.mm.run=null;emit();return true}
+    const confirmed=await mmConfirmPlan(mm,plan);
+    if(!confirmed){O.mm.run=null;emit();return true}
+    plan=confirmed;
     // step 2: spawn subagent sessions per role
     const jobs=[];
     for(const t of plan){

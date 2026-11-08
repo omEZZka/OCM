@@ -103,6 +103,7 @@ O.openSettings=()=>{
   sysCard.append(
     O.listRow('shield',O.tr('Encrypted backup','Шифрованный бэкап'),O.tr('Profile, config and sessions to /sdcard/Download','Профиль, конфиг и сессии в /sdcard/Download'),O.icon('chevR'),()=>openBackup()),
     O.listRow('down',O.tr('Updates','Обновления'),O.tr('OpenCode Mobile & Core Runtime','Приложение и ядро OpenCode (1.x)'),O.icon('chevR'),()=>openUpdates()),
+    O.listRow('code',O.tr('Export / Import settings','Экспорт / импорт настроек'),O.tr('Models, agents, themes, fallbacks as JSON','Модели, агенты, темы, резервные модели в JSON'),O.icon('chevR'),()=>openSettingsTransfer()),
     O.listRow('shield',O.tr('Permissions','Разрешения'),O.tr('Storage, notifications, background execution','Файлы, уведомления, фон'),O.icon('chevR'),()=>openPerms()),
     O.listRow('bat',O.tr('Logs & Diagnostics','Совместимость и логи'),O.tr('Safe mode, core runtime restart','Безопасный режим, перезапуск сервера'),O.icon('chevR'),()=>openCompat()),
     O.listRow('info',O.tr('About OpenCode Mobile','О приложении'),'',O.icon('chevR'),()=>openAbout()),
@@ -117,19 +118,35 @@ function openFallback(){
   const draw=()=>{
     body.textContent='';
     const list=O.fallbackModels();
+    const last=O.lastFallback&&O.lastFallback();
     body.append(h('div',{class:'mut',style:{padding:'4px 2px 10px'}},O.tr('If the main model hits a limit or errors, the app retries these models in order (up to 5).','Если основная модель упрётся в лимит или ошибку, приложение по очереди попробует эти модели (до 5).')));
+    if(last&&last.model)body.append(h('div',{class:'note',style:{marginBottom:'10px'}},O.tr('Last answered by fallback: ','Последний раз ответила резервная модель: ')+last.model+' · '+O.ago(last.at)));
     if(!list.length)body.append(h('div',{class:'mut',style:{padding:'12px'}},O.tr('No fallback models yet.','Резервных моделей пока нет.')));
     list.forEach((k,i)=>{
       const p=k.split('/');const info=O.modelInfo(p[0],p.slice(1).join('/'));
+      const move=(d)=>{const l=O.fallbackModels();const j=i+d;if(j<0||j>=l.length)return;const t=l[i];l[i]=l[j];l[j]=t;O.setFallbackModels(l);draw()};
+      const test=async()=>{
+        const mdl={providerID:p[0],modelID:p.slice(1).join('/')};
+        O.toast(O.tr('Testing model...','Проверяю модель...'),1500);
+        try{
+          const sid=await O.chat.sess();
+          await api('POST','/session/'+sid+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:mdl,parts:[{type:'text',text:'ping'}]},{timeout:30000});
+          O.toast(O.tr('Model responded: ','Модель ответила: ')+k,2500);
+        }catch(e){O.toast(O.tr('Model failed: ','Модель не ответила: ')+e.message,4000)}
+      };
       body.append(h('div',{class:'settings-row'},
         h('div',{class:'settings-row-icon purple'},O.icon('cpu')),
         h('div',{class:'settings-row-text'},h('b',null,(info&&info.name)||k),h('span',null,'#'+(i+1)+' · '+k)),
+        h('button',{class:'ibtn s',disabled:i===0,onclick:()=>move(-1)},O.icon('chevD')),
+        h('button',{class:'ibtn s',disabled:i===list.length-1,onclick:()=>move(1)},O.icon('chevR')),
+        h('button',{class:'ibtn s',title:O.tr('Test','Проверить'),onclick:test},O.icon('play')),
         h('button',{class:'ibtn s',onclick:()=>{const l=O.fallbackModels();l.splice(i,1);O.setFallbackModels(l);draw()}},O.icon('trash'))));
     });
     body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{
       if(O.fallbackModels().length>=5)return O.toast(O.tr('Limit: 5 models','Лимит: 5 моделей'),2000);
       O.mmPickModel(null,m=>{O.setFallbackModels(O.fallbackModels().concat([m.providerID+'/'+m.modelID]));draw()},{freeOnly:false});
     }},O.icon('plus'),O.tr('Add model','Добавить модель')));
+    if(last)body.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{O.setLastFallback(null);draw()}},O.icon('x'),O.tr('Clear last-fallback note','Сбросить отметку о резервной модели')));
   };
   draw();
   sub(O.tr('Fallback models','Резервные модели'),body,{full:true});
@@ -140,6 +157,29 @@ function openBackup(){
   const info=h('div',{class:'mut s',style:{marginTop:'10px',wordBreak:'break-all'}},'');
   const pw1=h('input',{type:'password',class:'mono',placeholder:O.tr('Password for encryption','Пароль для шифрования')});
   const pw2=h('input',{type:'password',class:'mono',placeholder:O.tr('Repeat password','Повторите пароль')});
+  const existing=h('div');
+  const drawExisting=()=>{
+    existing.textContent='';
+    let items=[];try{const r=O.native.ls('/sdcard/Download');items=(r.items||[]).filter(x=>!x.dir&&/\.ocmbak$/i.test(x.name))}catch(_){}
+    if(!items.length)return;
+    existing.append(h('div',{class:'grp'},O.tr('Existing backups','Существующие бэкапы')));
+    items.sort((a,b)=>(b.size||0)-(a.size||0)).slice(0,8).forEach(x=>{
+      const full='/sdcard/Download/'+x.name;
+      existing.append(h('div',{class:'settings-row'},
+        h('div',{class:'settings-row-icon purple'},O.icon('shield')),
+        h('div',{class:'settings-row-text'},h('b',null,x.name),h('span',null,Math.round((x.size||0)/1024)+' KB')),
+        h('button',{class:'ibtn s',title:O.tr('Restore','Восстановить'),onclick:async()=>{
+          const pw=await O.ask(O.tr('Backup password','Пароль бэкапа'),O.tr('Enter the password used when the backup was created','Введите пароль, заданный при создании бэкапа'));
+          if(!pw)return;
+          try{
+            const r=JSON.parse(OC.restoreProfile(pw,full));
+            if(r.ok){O.toast(O.tr('Profile restored. Restarting server...','Профиль восстановлен. Перезапускаю сервер...'),3000);OC.restartServer()}
+            else O.toast(r.err||'failed',4000);
+          }catch(e){O.toast(e.message,4000)}
+        }},O.icon('down'))));
+    });
+  };
+  drawExisting();
   const body=h('div',null,
     h('div',{class:'field'},h('label',null,O.tr('New backup','Новый бэкап')),pw1,pw2),
     h('button',{class:'btn pri wide',onclick:()=>{
@@ -147,13 +187,31 @@ function openBackup(){
       if(pw1.value!==pw2.value)return O.toast(O.tr('Passwords do not match','Пароли не совпадают'),3000);
       try{
         const r=JSON.parse(OC.backupProfile(pw1.value));
-        if(r.ok){info.textContent=O.tr('Saved: ','Сохранено: ')+r.path+' ('+Math.round((r.size||0)/1024)+' KB)';O.native.copy(r.path);O.toast(O.tr('Backup created','Бэкап создан'),2500)}
+        if(r.ok){info.textContent=O.tr('Saved: ','Сохранено: ')+r.path+' ('+Math.round((r.size||0)/1024)+' KB)';O.native.copy(r.path);O.toast(O.tr('Backup created','Бэкап создан'),2500);drawExisting()}
         else O.toast(r.err||'failed',4000);
       }catch(e){O.toast(e.message,4000)}
     }},O.icon('shield'),O.tr('Create encrypted backup','Создать шифрованный бэкап')),
+    existing,
     h('div',{style:{height:'18px'}}),
     h('div',{class:'note'},O.tr('The archive contains config, agents, commands, skills, plugins and session data. It does not include the Linux rootfs.','Архив содержит конфиг, агентов, команды, навыки, плагины и данные сессий. Linux rootfs не включается.')),
     h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>OC.pickFile('backup','')},O.icon('up'),O.tr('Restore from file...','Восстановить из файла...')),
+    h('div',{class:'grp',style:{marginTop:'18px'}},O.tr('Scheduled backup','Автобэкап по расписанию')),
+    (()=>{
+      const st=O.native.autoBackupState?O.native.autoBackupState():{};
+      const hoursInp=h('input',{type:'number',min:'6',max:'168',class:'mono',value:String(st.intervalHours||24),style:{width:'80px'}});
+      const pwInp=h('input',{type:'password',class:'mono',placeholder:st.hasPassword?O.tr('Password saved (leave empty to keep)','Пароль сохранён (оставьте пустым)'):O.tr('Backup password','Пароль бэкапа')});
+      const status=h('div',{class:'mut s',style:{marginTop:'6px'}},'');
+      const toggle=O.toggleRow('refresh',O.tr('Automatic backup','Автоматический бэкап'),O.tr('Encrypted copies in /sdcard/Download, newest 5 kept','Шифрованные копии в /sdcard/Download, хранятся 5 последних'),!!st.enabled,v=>{
+        const r=O.native.autoBackupConfigure(v,parseInt(hoursInp.value,10)||24,pwInp.value);
+        if(r&&r.ok===false)O.toast(r.err||'failed',4000);else O.toast(v?O.tr('Scheduled backup enabled','Автобэкап включён'):O.tr('Scheduled backup disabled','Автобэкап выключен'),1500);
+      });
+      return h('div',null,toggle,
+        h('div',{style:{display:'flex',gap:'8px',alignItems:'center',margin:'8px 0',flexWrap:'wrap'}},
+          h('span',{class:'mut s'},O.tr('Interval (hours):','Интервал (часы):')),hoursInp,pwInp,
+          h('button',{class:'btn sm',onclick:()=>{const r=O.native.autoBackupConfigure(true,parseInt(hoursInp.value,10)||24,pwInp.value);if(r&&r.ok===false)O.toast(r.err||'failed',4000);else O.toast(O.tr('Saved','Сохранено'),1200)}},O.tr('Save','Сохранить'))),
+        h('button',{class:'btn wide',onclick:()=>{const r=O.native.autoBackupNow(pwInp.value);if(r&&r.ok){status.textContent=O.tr('Created: ','Создано: ')+r.path;drawExisting();O.toast(O.tr('Backup created','Бэкап создан'),2000)}else O.toast((r&&r.err)||O.tr('Set a password first','Сначала задайте пароль'),4000)}},O.icon('shield'),O.tr('Backup now','Сделать бэкап сейчас')),
+        status);
+    })(),
     info);
   sub(O.tr('Encrypted backup','Шифрованный бэкап'),body,{full:true});
 }
@@ -167,6 +225,40 @@ O.on('picked',async d=>{
     else O.toast(r.err||'failed',4000);
   }catch(e){O.toast(e.message,4000)}
 });
+
+// ---- settings export / import ----
+function openSettingsTransfer(){
+  const info=h('div',{class:'mut s',style:{marginTop:'10px',wordBreak:'break-all'}},'');
+  const fileInp=h('input',{type:'file',accept:'application/json,.json',class:'hide'});
+  fileInp.onchange=()=>{
+    const f=fileInp.files&&fileInp.files[0];if(!f)return;
+    const r=new FileReader();
+    r.onload=async()=>{
+      try{
+        const n=O.importSettings(String(r.result));
+        info.textContent=O.tr('Imported keys: ','Импортировано записей: ')+n;
+        O.toast(O.tr('Settings imported. Reloading...','Настройки импортированы. Перезагрузка...'),2000);
+        setTimeout(()=>location.reload(),900);
+      }catch(e){O.toast(e.message,4000)}
+    };
+    r.onerror=()=>O.toast(O.tr('Could not read file','Не удалось прочитать файл'),3000);
+    r.readAsText(f);
+  };
+  const body=h('div',null,
+    h('div',{class:'note'},O.tr('Export includes models, agents, themes, fallback chain, session tags, plugins and the opencode.json config. Secrets and tokens are not exported.','Экспорт включает модели, агентов, темы, резервные модели, теги сессий, плагины и конфиг opencode.json. Токены и секреты не экспортируются.')),
+    h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:()=>{
+      try{
+        const json=O.exportSettings();
+        O.actions(O.tr('Export settings','Экспорт настроек'),[
+          {label:O.tr('Copy JSON','Скопировать JSON'),icon:'copy',fn:()=>O.native.copy(json)},
+          {label:O.tr('Share file/text','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(json);else O.native.copy(json)}}]);
+      }catch(e){O.toast(e.message,4000)}
+    }},O.icon('down'),O.tr('Export settings (JSON)','Экспортировать настройки (JSON)')),
+    h('div',{style:{height:'16px'}}),
+    h('button',{class:'btn wide',onclick:()=>fileInp.click()},O.icon('up'),O.tr('Import settings from file...','Импортировать настройки из файла...')),
+    fileInp,info);
+  sub(O.tr('Export / Import settings','Экспорт / импорт настроек'),body,{full:true});
+}
 
 // ---- agents / rules upload ----
 function openAgents(){
@@ -187,13 +279,16 @@ function editFile(path,title){const r=O.native.readText(path);const ta=h('textar
   const s=O.sheet(title,h('div',null,ta,h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:()=>{const w=O.native.fs('mkdir',O.dirname(path));const x=O.native.writeText(path,ta.value);if(x.ok){O.toast('Сохранено',1200);s.close();O.loadMeta()}else O.toast(x.err||'Не удалось')}},'Сохранить')),{full:true})}
 
 // ---- MCP ----
-O.openMcp=async()=>{const body=h('div');const s=sub('Серверы MCP',body,{actions:h('button',{class:'ibtn',onclick:()=>edit(null)},O.icon('plus'))});
+O.openMcp=async()=>{const body=h('div');const s=sub('Серверы MCP',body,{actions:h('div',{style:{display:'flex',gap:'4px'}},h('button',{class:'ibtn',onclick:()=>draw()},O.icon('refresh')),h('button',{class:'ibtn',onclick:()=>edit(null)},O.icon('plus')))});
   const draw=async()=>{body.textContent='';const c=cfg.read();if(!c.obj){body.append(h('div',{class:'errbox'},'Ошибки в opencode.json: '+c.err));return}
     let live={};try{live=await api('GET','/mcp')}catch{}const m=c.obj.mcp||{};const ks=Object.keys(m);
     if(!ks.length)body.append(h('div',{class:'mut',style:{padding:'12px'}},'Серверов MCP пока нет. Нажмите + чтобы добавить.'));
     ks.forEach(k=>{const e=m[k],l=live[k],stt=l?l.status:(e.enabled===false?'disabled':'unknown');
-      body.append(O.listRow('server',k,(e.type==='remote'?e.url:(e.command||[]).join(' '))+'  ('+stt+')',h('span',{class:'dot '+(stt==='connected'?'ok':stt==='failed'?'err':stt==='disabled'?'':'warn')}),
+      const tools=l&&(l.tools||l.toolCount||(Array.isArray(l.tools)?l.tools.length:0));
+      const subTxt=(e.type==='remote'?e.url:(e.command||[]).join(' '))+'  ('+stt+(tools?', '+tools+' tools':'')+')';
+      body.append(O.listRow('server',k,subTxt,h('span',{class:'dot '+(stt==='connected'?'ok':stt==='failed'?'err':stt==='disabled'?'':'warn')}),
         ()=>O.actions(k,[{label:'Изменить',icon:'edit',fn:()=>edit(k)},
+          {label:'Переподключить',icon:'refresh',fn:async()=>{try{await api('POST','/mcp/'+encodeURIComponent(k)+'/disconnect',{}).catch(()=>{});await api('POST','/mcp/'+encodeURIComponent(k)+'/connect',{});O.toast('Переподключено',1200)}catch(er){O.toast(er.message,4000)}draw()}},
           {label:e.enabled===false?'Включить':'Отключить',icon:'play',fn:()=>{const cc=cfg.read();cc.obj.mcp[k].enabled=e.enabled===false;cfg.write(cc.obj);api('POST','/mcp/'+encodeURIComponent(k)+(e.enabled===false?'/connect':'/disconnect'),{}).catch(()=>{});draw()}},
           {label:'Удалить',icon:'trash',danger:true,fn:()=>{const cc=cfg.read();delete cc.obj.mcp[k];cfg.write(cc.obj);api('POST','/mcp/'+encodeURIComponent(k)+'/disconnect',{}).catch(()=>{});draw()}}])))});
     body.append(restartBar())};
@@ -1113,6 +1208,8 @@ function openCustomPlugins(){
   const s=sub(O.tr('Custom Plugins','Пользовательские плагины'),body,{full:true});
   const myToken=getAuthorToken();
   const list=h('div',{class:'plugins-list'});
+  let pluginQuery='';
+  const searchInp=h('input',{class:'mono',placeholder:O.tr('Search plugins...','Поиск плагинов...'),autocapitalize:'off',autocorrect:'off',style:{marginBottom:'8px'},oninput:e=>{pluginQuery=e.target.value;draw()}});
 
   const syncEnabledPluginsToDisk=()=>{
     try{
@@ -1173,11 +1270,12 @@ function openCustomPlugins(){
 
   const draw=()=>{
     list.textContent='';
-    const all=O.getCustomPlugins();
+    const q=(pluginQuery||'').toLowerCase().trim();
+    const all=O.getCustomPlugins().filter(p=>!q||((p.name||'')+' '+(p.desc||'')+' '+(p.author||'')).toLowerCase().includes(q));
     const enabledIds=new Set(O.store.get('enabled_plugins',[]));
 
     if(!all.length){
-      list.append(h('div',{class:'mut',style:{padding:'24px 16px',textAlign:'center'}},'В каталоге сообщества пока нет плагинов. Нажмите «Опубликовать плагин» ниже, чтобы добавить его для всех.'));
+      list.append(h('div',{class:'mut',style:{padding:'24px 16px',textAlign:'center'}},q?'Ничего не найдено по запросу «'+pluginQuery+'»':'В каталоге сообщества пока нет плагинов. Нажмите «Опубликовать плагин» ниже, чтобы добавить его для всех.'));
     }else{
       all.forEach(p=>{
         const isEnabled=enabledIds.has(p.id);
@@ -1242,6 +1340,7 @@ function openCustomPlugins(){
   body.append(
     h('div',{class:'note',style:{marginBottom:'12px'}},O.tr('Community plugins are shared with all users. All uploaded plugins are available across all devices.','Общий каталог плагинов сообщества: все загруженные плагины видны всем людям на любых устройствах.')),
     syncRow,
+    searchInp,
     list,
     addBtn,
     localBtn);
