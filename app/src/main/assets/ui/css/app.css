@@ -824,6 +824,7 @@ a:hover {
   background: #3f3f46;
   margin: 10px auto 4px;
   flex: none;
+  touch-action: none;
 }
 
 .sh-header-row {
@@ -2561,9 +2562,8 @@ a:hover {
 .settings-row:active { background: var(--bg3); }
 .btn { transition: transform 0.1s ease, background 0.15s, opacity 0.15s; }
 .btn:active { transform: scale(0.97); }
-.sh-root .sheet { animation: sheetIn 0.24s cubic-bezier(0.2, 0.8, 0.2, 1); }
-@keyframes sheetIn { from { transform: translateY(14px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.sh-root .sheet { will-change: transform; }
 @media (prefers-reduced-motion: reduce) {
-  .part, .sh-root .sheet { animation: none; }
+  .part { animation: none; }
   .btn:active, .chip:active { transform: none; }
 }

@@ -81,9 +81,78 @@ O.sheet=(title,body,opts)=>{opts=opts||{};
 
   const box=h('div',{class:'sheet'+(opts.full?' full':'')+(opts.drawer?' drawer':'')},
     handle,header,h('div',{class:'sh-b'},body));
-  api.root=h('div',{class:'sh-root'},h('div',{class:'sh-back',onclick:api.close}),box);
+  const back=h('div',{class:'sh-back',onclick:api.close});
+  api.root=h('div',{class:'sh-root'},back,box);
   api.box=box;api.body=box.querySelector('.sh-b');
-  document.body.append(api.root);stack.push(api);requestAnimationFrame(()=>api.root.classList.add('on'));return api};
+  document.body.append(api.root);stack.push(api);
+
+  // ---- finger-tracking drag to dismiss (bottom sheets and the left drawer) ----
+  if(!opts.full){
+    const isDrawer=!!opts.drawer;
+    let startX=0,startY=0,dragging=false,cur=0,axis=null,startT=0;
+    const size=()=>isDrawer?(box.offsetWidth||340):(box.offsetHeight||400);
+    const setProgress=p=>{back.style.opacity=String(Math.max(0,Math.min(1,p)))};
+    const apply=v=>{
+      cur=v;
+      box.style.transform=isDrawer?('translateX('+v+'px)'):('translateY('+v+'px)');
+      setProgress(1-Math.abs(v)/size());
+    };
+    const start=(x,y)=>{
+      dragging=true;axis=null;cur=0;startX=x;startY=y;startT=Date.now();
+      box.style.transition='none';
+    };
+    const move=(x,y,e)=>{
+      if(!dragging)return;
+      const dy=y-startY,dx=x-startX;
+      if(axis===null){if(Math.abs(dy)<3&&Math.abs(dx)<3)return;axis=Math.abs(dy)>Math.abs(dx)?'y':'x'}
+      if(isDrawer){
+        if(axis!=='x')return;
+        apply(Math.min(0,dx));
+      }else{
+        if(axis!=='y')return;
+        if(dy<0){apply(0);return} // upward: let the list scroll natively
+        apply(dy);
+      }
+      if(e&&e.cancelable)e.preventDefault();
+    };
+    const end=(x,y)=>{
+      if(!dragging)return;dragging=false;
+      box.style.transition='';
+      const dist=isDrawer?-cur:cur;
+      const dt=Math.max(1,Date.now()-startT);
+      const vel=dist/dt;
+      if(dist>size()*0.32||vel>0.55){
+        box.style.transform=isDrawer?'translateX(-100%)':'translateY(100%)';
+        setProgress(0);
+        api.close();
+      }else{
+        box.style.transform='';
+        setProgress(1);
+      }
+    };
+    const shouldStart=t=>{
+      if(t.closest('button')||t.closest('input')||t.closest('textarea')||t.closest('a')||t.closest('.seg'))return false;
+      if(!isDrawer&&t.closest('.sh-b')){
+        // only drag the sheet from its content when the list is scrolled to the very top
+        return (api.body.scrollTop||0)<=0;
+      }
+      return true;
+    };
+    const onMouseMove=e=>move(e.clientX,e.clientY,e);
+    const onMouseUp=e=>end(e.clientX,e.clientY);
+    box.addEventListener('touchstart',e=>{const t=e.touches[0];if(t&&shouldStart(e.target))start(t.clientX,t.clientY)},{passive:true});
+    box.addEventListener('touchmove',e=>{const t=e.touches[0];if(t)move(t.clientX,t.clientY,e)},{passive:false});
+    box.addEventListener('touchend',e=>{const t=e.changedTouches[0];if(t)end(t.clientX,t.clientY)});
+    box.addEventListener('touchcancel',e=>{const t=e.changedTouches[0];if(t)end(t.clientX,t.clientY)});
+    box.addEventListener('mousedown',e=>{if(shouldStart(e.target))start(e.clientX,e.clientY)});
+    window.addEventListener('mousemove',onMouseMove);
+    window.addEventListener('mouseup',onMouseUp);
+    const cleanupDrag=()=>{window.removeEventListener('mousemove',onMouseMove);window.removeEventListener('mouseup',onMouseUp)};
+    const baseClose=api.close;
+    api.close=()=>{cleanupDrag();try{box.style.transform='';back.style.opacity=''}catch(_){}baseClose()};
+  }
+
+  requestAnimationFrame(()=>api.root.classList.add('on'));return api};
 
 O.confirm=(title,msg,ok,danger)=>new Promise(res=>{let done=false;
   const fin=v=>{if(done)return;done=true;s.close();res(v)};
