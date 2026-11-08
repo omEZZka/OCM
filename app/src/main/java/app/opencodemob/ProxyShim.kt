@@ -439,7 +439,7 @@ object ProxyShim {
 
     // ---- streaming translation ----
 
-    private inner class Translator(private val out: BufferedOutputStream, private val model: String, private val upstream: String) {
+    private class Translator(private val out: BufferedOutputStream, private val model: String, private val upstream: String) {
         private val id = "resp_" + System.currentTimeMillis().toString(36)
         private val createdAt = System.currentTimeMillis() / 1000
         private var outIndex = 0
@@ -465,9 +465,9 @@ object ProxyShim {
         }
 
         fun created() {
-            val r = baseResponse(id, model, "in_progress", JSONArray())
-            emit("response.created", JSONObject().put("type", "response.created").put("sequence_number", seq.incrementAndGet()).put("response", r))
-            emit("response.in_progress", JSONObject().put("type", "response.in_progress").put("sequence_number", seq.incrementAndGet()).put("response", r))
+            val r = ProxyShim.baseResponse(id, model, "in_progress", JSONArray())
+            emit("response.created", JSONObject().put("type", "response.created").put("sequence_number", ProxyShim.seq.incrementAndGet()).put("response", r))
+            emit("response.in_progress", JSONObject().put("type", "response.in_progress").put("sequence_number", ProxyShim.seq.incrementAndGet()).put("response", r))
         }
 
         fun chunk(c: JSONObject) {
@@ -499,7 +499,7 @@ object ProxyShim {
                     st.args.setLength(0)
                     emit("response.function_call_arguments.delta", JSONObject()
                         .put("type", "response.function_call_arguments.delta")
-                        .put("sequence_number", seq.incrementAndGet())
+                        .put("sequence_number", ProxyShim.seq.incrementAndGet())
                         .put("item_id", st.itemId).put("output_index", st.index).put("delta", a))
                 }
             }
@@ -515,17 +515,17 @@ object ProxyShim {
                     .put("role", "assistant").put("content", JSONArray())
                 items[textIndex] = item
                 emit("response.output_item.added", JSONObject()
-                    .put("type", "response.output_item.added").put("sequence_number", seq.incrementAndGet())
+                    .put("type", "response.output_item.added").put("sequence_number", ProxyShim.seq.incrementAndGet())
                     .put("output_index", textIndex).put("item", item))
                 val part = JSONObject().put("type", "output_text").put("text", "").put("annotations", JSONArray())
                 emit("response.content_part.added", JSONObject()
-                    .put("type", "response.content_part.added").put("sequence_number", seq.incrementAndGet())
+                    .put("type", "response.content_part.added").put("sequence_number", ProxyShim.seq.incrementAndGet())
                     .put("item_id", textId).put("output_index", textIndex).put("content_index", 0).put("part", part))
                 textOpen = true
             }
             text.append(t)
             emit("response.output_text.delta", JSONObject()
-                .put("type", "response.output_text.delta").put("sequence_number", seq.incrementAndGet())
+                .put("type", "response.output_text.delta").put("sequence_number", ProxyShim.seq.incrementAndGet())
                 .put("item_id", textId).put("output_index", textIndex).put("content_index", 0).put("delta", t))
         }
 
@@ -538,7 +538,7 @@ object ProxyShim {
                 .put("call_id", st.callId.ifEmpty { st.itemId }).put("name", st.name).put("arguments", "")
             items[st.index] = item
             emit("response.output_item.added", JSONObject()
-                .put("type", "response.output_item.added").put("sequence_number", seq.incrementAndGet())
+                .put("type", "response.output_item.added").put("sequence_number", ProxyShim.seq.incrementAndGet())
                 .put("output_index", st.index).put("item", item))
             st.added = true
             if (st.args.isNotEmpty()) {
@@ -546,7 +546,7 @@ object ProxyShim {
                 st.args.setLength(0)
                 emit("response.function_call_arguments.delta", JSONObject()
                     .put("type", "response.function_call_arguments.delta")
-                    .put("sequence_number", seq.incrementAndGet())
+                    .put("sequence_number", ProxyShim.seq.incrementAndGet())
                     .put("item_id", st.itemId).put("output_index", st.index).put("delta", a))
             }
         }
@@ -557,18 +557,18 @@ object ProxyShim {
                 textDone = true
                 val full = text.toString()
                 emit("response.output_text.done", JSONObject()
-                    .put("type", "response.output_text.done").put("sequence_number", seq.incrementAndGet())
+                    .put("type", "response.output_text.done").put("sequence_number", ProxyShim.seq.incrementAndGet())
                     .put("item_id", textId).put("output_index", textIndex).put("content_index", 0).put("text", full))
                 val part = JSONObject().put("type", "output_text").put("text", full).put("annotations", JSONArray())
                 emit("response.content_part.done", JSONObject()
-                    .put("type", "response.content_part.done").put("sequence_number", seq.incrementAndGet())
+                    .put("type", "response.content_part.done").put("sequence_number", ProxyShim.seq.incrementAndGet())
                     .put("item_id", textId).put("output_index", textIndex).put("content_index", 0).put("part", part))
                 val item = items[textIndex]
                 if (item != null) {
                     item.put("status", "completed")
                     item.put("content", JSONArray().put(part))
                     emit("response.output_item.done", JSONObject()
-                        .put("type", "response.output_item.done").put("sequence_number", seq.incrementAndGet())
+                        .put("type", "response.output_item.done").put("sequence_number", ProxyShim.seq.incrementAndGet())
                         .put("output_index", textIndex).put("item", item))
                 }
             }
@@ -577,14 +577,14 @@ object ProxyShim {
                 if (!st.added) addTool(st)
                 val args = st.fullArgs.toString()
                 emit("response.function_call_arguments.done", JSONObject()
-                    .put("type", "response.function_call_arguments.done").put("sequence_number", seq.incrementAndGet())
+                    .put("type", "response.function_call_arguments.done").put("sequence_number", ProxyShim.seq.incrementAndGet())
                     .put("item_id", st.itemId).put("output_index", st.index).put("arguments", args))
                 val item = items[st.index]
                 if (item != null) {
                     item.put("status", "completed")
                     item.put("arguments", args)
                     emit("response.output_item.done", JSONObject()
-                        .put("type", "response.output_item.done").put("sequence_number", seq.incrementAndGet())
+                        .put("type", "response.output_item.done").put("sequence_number", ProxyShim.seq.incrementAndGet())
                         .put("output_index", st.index).put("item", item))
                 }
                 st.done = true
@@ -592,19 +592,19 @@ object ProxyShim {
             val output = JSONArray()
             val keys = items.keys.sorted()
             for (k in keys) output.put(items[k])
-            val r = baseResponse(id, model, "completed", output)
-            r.put("usage", usageOf(usage))
+            val r = ProxyShim.baseResponse(id, model, "completed", output)
+            r.put("usage", ProxyShim.usageOf(usage))
             emit("response.completed", JSONObject()
-                .put("type", "response.completed").put("sequence_number", seq.incrementAndGet()).put("response", r))
+                .put("type", "response.completed").put("sequence_number", ProxyShim.seq.incrementAndGet()).put("response", r))
             try { out.flush() } catch (_: Exception) {}
         }
 
         fun fail(msg: String) {
             failed = true
-            val r = baseResponse(id, model, "failed", JSONArray())
+            val r = ProxyShim.baseResponse(id, model, "failed", JSONArray())
             r.put("error", JSONObject().put("code", "upstream_error").put("message", msg))
             emit("response.failed", JSONObject()
-                .put("type", "response.failed").put("sequence_number", seq.incrementAndGet()).put("response", r))
+                .put("type", "response.failed").put("sequence_number", ProxyShim.seq.incrementAndGet()).put("response", r))
             try { out.flush() } catch (_: Exception) {}
         }
 
