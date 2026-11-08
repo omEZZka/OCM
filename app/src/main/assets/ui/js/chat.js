@@ -90,6 +90,19 @@ O.checkTokenWarning=sid=>{
 };
 const nearBottom=()=>msgsEl.scrollHeight-msgsEl.scrollTop-msgsEl.clientHeight<140;
 const scrollEnd=f=>{requestAnimationFrame(()=>{msgsEl.scrollTop=msgsEl.scrollHeight;if(f){stick=true;jumpEl.classList.add('hide')}})};
+// Keep the chat pinned to the bottom for a short while after an open/render:
+// images, code blocks and markdown inflate the height asynchronously, which
+// otherwise leaves the view stranded in the middle of the conversation.
+let pinT=null;
+const pinBottom=ms=>{
+  if(pinT)clearInterval(pinT);
+  const until=Date.now()+(ms||1200);
+  pinT=setInterval(()=>{
+    if(!msgsEl.isConnected){clearInterval(pinT);pinT=null;return}
+    if(Date.now()>until){clearInterval(pinT);pinT=null;return}
+    msgsEl.scrollTop=msgsEl.scrollHeight;
+  },60);
+};
 const revisionKey=()=>{const s=cur();return s&&s.revert?s.revert.messageID:''};
 
 function renderAll(){
@@ -106,7 +119,7 @@ function renderAll(){
     for(let i=start;i<list.length;i++)fr.append(buildMsg(list[i]));
     msgsEl.append(fr);
   }
-  scrollEnd(true);renderDock();renderStatus();renderRevert();renderTodos();updateSend();updateChips()}
+  scrollEnd(true);pinBottom(1500);renderDock();renderStatus();renderRevert();renderTodos();updateSend();updateChips()}
 
 function maybeLoadOlder(){
   if(loadingOlder||!pendingHead.length)return;

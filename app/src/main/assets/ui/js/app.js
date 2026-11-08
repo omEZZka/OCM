@@ -74,11 +74,11 @@ function build(){
       if(wide())return;
       if(d==='left')O.setTab('files');
       else if(d==='right')O.openSessions();
-    },{fromLeft:0.12,fromRight:0.06,top:0.75});
+    },{fromLeft:0.24,fromRight:0.12,top:0.75});
     O.swipe(P.files,d=>{
       if(wide())return;
       if(d==='right')O.setTab('chat');
-    },{fromLeft:0.12,top:0.75});
+    },{fromLeft:0.24,top:0.75});
   }
 
   addEventListener('resize',O.debounce(layout,100));
