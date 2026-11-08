@@ -675,6 +675,6 @@ async function onSend(){
     }
     ta.value=text;onInput();
   }}
-function clear(){if(S.sid)O.clearDraft(S.sid);ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
+function clear(){clearTimeout(draftTimer);if(S.sid)O.clearDraft(S.sid);ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
 O.chat={renderAll,sess,focus:()=>ta&&ta.focus()};
 })();

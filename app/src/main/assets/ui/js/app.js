@@ -329,8 +329,4 @@ O.playChime=kind=>{
 };
 
 addEventListener('unhandledrejection',e=>console.error(e.reason));
-document.addEventListener('DOMContentLoaded',()=>{
-  O.saveOpts();
-  O.bootRun();
-});
 })();

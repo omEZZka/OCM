@@ -34,7 +34,7 @@ O.longPress=(el,fn,ms)=>{ms=ms||480;let t=null;
   el.addEventListener('mousedown',start);
   el.addEventListener('mouseup',cancel);
   el.addEventListener('mouseleave',cancel);
-  return el};O.store={get(k,d){try{const v=localStorage.getItem('ocm.'+k);return v==null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem('ocm.'+k,JSON.stringify(v))}catch{}}};
+  return el};O.store={get(k,d){try{const v=localStorage.getItem('ocm.'+k);return v==null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem('ocm.'+k,JSON.stringify(v))}catch{}},remove(k){try{localStorage.removeItem('ocm.'+k)}catch{}}};
 let last=0,ctr=0;
 O.mid=()=>{const n=Date.now();if(n!==last){last=n;ctr=0}ctr++;
   const hex=(BigInt(n)*0x1000n+BigInt(ctr)).toString(16).padStart(12,'0').slice(-12);
