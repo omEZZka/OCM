@@ -18,7 +18,7 @@ O.chatInit=root=>{
   todoEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
   dockEl=h('div',{id:'dock'});statusEl=h('div',{class:'status-line hide'});
   mmProgressEl=h('div',{id:'mm-progress',class:'hide'});
-  mmFloatBtn=h('button',{id:'mm-float-btn',class:'hide',title:O.tr('Multimodal agent','Мультимодальный агент'),onclick:()=>{mmCollapsed=false;renderMmProgress()}},O.icon('bot'));
+  mmFloatBtn=h('button',{id:'mm-float-btn',class:'hide',title:O.tr('Multimodal agent','Мультимодальный агент')});
   popEl=h('div',{id:'pop',class:'hide'});attsEl=h('div',{class:'atts hide'});
   nokeyEl=h('div',{class:'nokey hide'},h('span',{class:'grow'},O.tr('No models connected.','Модели не подключены.')),h('button',{class:'btn sm',onclick:()=>O.openConnect()},O.icon('key'),O.tr('Connect','Подключить')));
   ta=h('textarea',{rows:1,placeholder:O.tr('Chat with OpenCode...','Чат с OpenCode...'),oninput:onInput,onclick:onInput,onkeyup:e=>{if(e.key.length>1)onInput()}});
@@ -363,22 +363,30 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
   if(!r){mmProgressEl.classList.add('hide');mmCollapsed=false;if(mmFloatBtn)mmFloatBtn.classList.add('hide');return}
   const active=r.currentRole||r.phase;
   if(!active){mmProgressEl.classList.add('hide');return}
-  mmProgressEl.classList.remove('hide');
-  mmProgressEl.classList.toggle('collapsed',!!mmCollapsed);
-  if(mmFloatBtn)mmFloatBtn.classList.toggle('hide',!mmCollapsed);
-  const started=r.phaseStart||r.started||Date.now();
-  const elapsed=((Date.now()-started)/1000).toFixed(0);
   const phase=r.phase||'role';
   const phaseLabel={plan:'Планирование',role:'Работает роль',synth:'Синтез',idle:'Ожидание'}[phase]||phase;
-  const head=h('div',{class:'mm-progress-head'},
-    h('span',{class:'mm-progress-role'},active),
-    h('span',{class:'mm-progress-phase'},phaseLabel),
-    h('span',{class:'mm-progress-time'},elapsed+'s'),
-    h('button',{class:'ibtn s mm-graph-btn',title:O.tr('Agent graph','Граф агента'),onclick:()=>O.openMmGraph&&O.openMmGraph()},O.icon('branch')),
-    h('button',{class:'ibtn s mm-collapse-btn',title:mmCollapsed?O.tr('Show','Показать'):O.tr('Hide','Свернуть'),onclick:()=>{mmCollapsed=!mmCollapsed;renderMmProgress()}},O.icon(mmCollapsed?'chevD':'chevR')));
-  mmProgressEl.append(h('div',{class:'mm-progress-bar'},head));
-  if(mmCollapsed)return;
+  const started=r.phaseStart||r.started||Date.now();
+  const elapsed=((Date.now()-started)/1000).toFixed(0);
+  // compact pill: always visible, tap toggles the detailed panel
+  const pill=h('button',{class:'mm-pill'+(mmCollapsed?'':' expanded'),id:'mm-pill',
+    title:mmCollapsed?O.tr('Show details','Показать подробности'):O.tr('Hide details','Свернуть'),
+    onclick:()=>{mmCollapsed=!mmCollapsed;renderMmProgress()}},
+    h('span',{class:'mm-pill-dot'+(r.paused?' paused':'')}),
+    h('span',{class:'mm-pill-role'},active),
+    h('span',{class:'mm-pill-time'},elapsed+'s'),
+    O.icon(mmCollapsed?'chevD':'chevR'));
+  mmFloatBtn.textContent='';
+  mmFloatBtn.append(pill);
+  mmFloatBtn.classList.remove('hide');
+  mmProgressEl.classList.toggle('hide',!!mmCollapsed);
+  mmProgressEl.classList.toggle('collapsed',!!mmCollapsed);
+  if(mmCollapsed){if(mmTimer){clearInterval(mmTimer);mmTimer=null}return}
   mmProgressEl.append(h('div',{class:'mm-progress-bar'},
+    h('div',{class:'mm-progress-head'},
+      h('span',{class:'mm-progress-role'},active),
+      h('span',{class:'mm-progress-phase'},phaseLabel),
+      h('span',{class:'mm-progress-time'},elapsed+'s'),
+      h('button',{class:'ibtn s mm-graph-btn',title:O.tr('Agent graph','Граф агента'),onclick:e=>{e.stopPropagation();O.openMmGraph&&O.openMmGraph()}},O.icon('branch'))),
     h('div',{class:'mm-progress-track'},
       h('div',{class:'mm-progress-fill',style:{width:phase==='role'||phase==='synth'?'100%':'0%'}}))));
   const ctrl=h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap',marginTop:'6px'}},
@@ -394,9 +402,12 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
   mmProgressEl.append(ctrl);
   if(!r.paused){
     const timeEl=mmProgressEl.querySelector('.mm-progress-time');
+    const pillTime=mmFloatBtn.querySelector('.mm-pill-time');
     mmTimer=setInterval(()=>{
       if(!O.mm.run){clearInterval(mmTimer);mmTimer=null;return}
-      if(timeEl&&timeEl.isConnected)timeEl.textContent=((Date.now()-started)/1000).toFixed(0)+'s';
+      const sec=((Date.now()-started)/1000).toFixed(0)+'s';
+      if(timeEl&&timeEl.isConnected)timeEl.textContent=sec;
+      if(pillTime&&pillTime.isConnected)pillTime.textContent=sec;
       else{clearInterval(mmTimer);mmTimer=null}
     },1000);
   }

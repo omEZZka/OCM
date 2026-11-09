@@ -94,7 +94,7 @@ O.sheet=(title,body,opts)=>{opts=opts||{};
   // ---- finger-tracking drag to dismiss (bottom sheets and the left drawer) ----
   if(!opts.full){
     const isDrawer=!!opts.drawer;
-    let startX=0,startY=0,dragging=false,cur=0,axis=null,startT=0;
+    let startX=0,startY=0,dragging=false,cur=0,axis=null,startT=0,moved=false;
     const size=()=>isDrawer?(box.offsetWidth||340):(box.offsetHeight||400);
     const setProgress=p=>{back.style.opacity=String(Math.max(0,Math.min(1,p)))};
     const apply=v=>{
@@ -103,13 +103,21 @@ O.sheet=(title,body,opts)=>{opts=opts||{};
       setProgress(1-Math.abs(v)/size());
     };
     const start=(x,y)=>{
-      dragging=true;axis=null;cur=0;startX=x;startY=y;startT=Date.now();
+      dragging=true;axis=null;cur=0;moved=false;startX=x;startY=y;startT=Date.now();
       box.style.transition='none';
     };
     const move=(x,y,e)=>{
       if(!dragging)return;
       const dy=y-startY,dx=x-startX;
-      if(axis===null){if(Math.abs(dy)<3&&Math.abs(dx)<3)return;axis=Math.abs(dy)>Math.abs(dx)?'y':'x'}
+      if(axis===null){
+        if(Math.abs(dy)<3&&Math.abs(dx)<3)return;
+        axis=Math.abs(dy)>Math.abs(dx)?'y':'x';
+      }
+      // only start blocking native gestures once the finger clearly moved,
+      // otherwise plain taps inside the sheet would lose their click event
+      const dist=isDrawer?Math.abs(dx):Math.abs(dy);
+      if(dist<10)return;
+      moved=true;
       if(isDrawer){
         if(axis!=='x')return;
         apply(Math.min(0,dx));

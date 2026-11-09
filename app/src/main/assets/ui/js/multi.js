@@ -302,6 +302,7 @@ O.mmGraphData=()=>{
 O.openMmGraph=async()=>{
   const body=h('div',{class:'mm-graph-wrap'});
   const svgNS='http://www.w3.org/2000/svg';
+  let sheet=null;
   const draw=()=>{
     body.textContent='';
     const g=O.mmGraphData();
@@ -340,10 +341,15 @@ O.openMmGraph=async()=>{
         const hint=mk('text',{x:MM_NODE_W-10,y:14,class:'mm-graph-open','text-anchor':'end'});
         hint.textContent='>';
         gEl.append(hint);
-        gEl.addEventListener('click',()=>{
-          try{s.close()}catch(_){}
+        let opened=false;
+        const openIt=e=>{
+          if(opened)return;opened=true;
+          if(e&&e.stopPropagation)e.stopPropagation();
+          try{if(sheet)sheet.close()}catch(_){}
           if(O.openChild)O.openChild(n.sid);
-        });
+        };
+        gEl.addEventListener('click',openIt);
+        gEl.addEventListener('pointerup',e=>{if(e&&e.pointerType!=='mouse')openIt(e)});
       }
       svg.append(gEl);
     });
@@ -366,8 +372,8 @@ O.openMmGraph=async()=>{
       h('span',null,O.tr('tap a role to open its session','нажмите на роль, чтобы открыть её сессию'))));
   };
   draw();
-  const s=O.sheet(O.tr('Multimodal agent graph','Граф мультимодального агента'),body,{full:true});
-  const t=setInterval(()=>{if(!s.root.isConnected){clearInterval(t);return}draw()},1500);
+  sheet=O.sheet(O.tr('Multimodal agent graph','Граф мультимодального агента'),body,{full:true});
+  const t=setInterval(()=>{if(!sheet||!sheet.root.isConnected){clearInterval(t);return}draw()},1500);
 };
 
 

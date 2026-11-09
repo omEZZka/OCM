@@ -2619,21 +2619,34 @@ a:hover {
 .mm-graph-legend .lg.done{background:#22c55e}
 .mm-graph-legend .lg.err{background:#f87171}
 
-/* floating MM badge when the progress panel is collapsed */
+/* floating MM pill (compact, expandable) */
 #mm-float-btn{
-  position:fixed;top:calc(env(safe-area-inset-top) + 52px);right:12px;z-index:45;
-  width:38px;height:38px;border-radius:19px;border:1px solid var(--line);
-  background:rgba(20,20,23,0.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
-  color:var(--acc2);display:flex;align-items:center;justify-content:center;
-  box-shadow:0 4px 14px rgba(0,0,0,0.4);opacity:.72;
+  position:fixed;top:calc(env(safe-area-inset-top) + 52px);right:12px;z-index:46;
+  border:none;background:none;padding:0;
 }
-#mm-float-btn:active{opacity:1}
 #mm-float-btn.hide{display:none}
-#mm-float-btn .ic{width:19px;height:19px}
+.mm-pill{
+  display:inline-flex;align-items:center;gap:6px;
+  height:30px;padding:0 10px;border-radius:15px;
+  border:1px solid var(--line);background:rgba(20,20,23,0.78);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  color:var(--fg);font-size:12px;font-weight:600;
+  box-shadow:0 4px 14px rgba(0,0,0,0.4);opacity:.8;
+  max-width:52vw;overflow:hidden;
+}
+.mm-pill:active{opacity:1}
+.mm-pill.expanded{opacity:.95}
+.mm-pill .ic{width:14px;height:14px;flex:none;opacity:.7}
+.mm-pill-role{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28vw}
+.mm-pill-time{color:var(--ok);font-variant-numeric:tabular-nums;font-size:11px;flex:none}
+.mm-pill-dot{width:7px;height:7px;border-radius:50%;background:#38bdf8;flex:none;box-shadow:0 0 8px #38bdf8;animation:mmPulse 1.4s ease-in-out infinite}
+.mm-pill-dot.paused{background:#fbbf24;box-shadow:none;animation:none}
+@keyframes mmPulse{0%,100%{opacity:1}50%{opacity:.35}}
 
 .mm-graph-node.clickable{cursor:pointer}
-.mm-graph-node.clickable .mm-graph-box{stroke-dasharray:none}
-.mm-graph-node.clickable:active .mm-graph-box{filter:brightness(1.3)}
-.mm-graph-open{fill:var(--mut);font-size:11px;font-weight:700}
+.mm-graph-node.clickable .mm-graph-box{stroke:var(--acc);stroke-width:1.6}
+.mm-graph-node.clickable:active .mm-graph-box{filter:brightness(1.4)}
+.mm-graph-node .mm-graph-title,.mm-graph-node .mm-graph-sub,.mm-graph-node .mm-graph-state{pointer-events:none}
+.mm-graph-open{pointer-events:none}
 .mm-graph-ctrl{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:10px}
 .mm-graph-ctrl .btn.sm{display:inline-flex;align-items:center;gap:4px}
