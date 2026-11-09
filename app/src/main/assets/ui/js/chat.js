@@ -1,6 +1,6 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
-let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl;
+let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
 let atts=[],mentions=[],stick=true,revKey='',trail=[];
 let pendingHead=[],loadingOlder=false;
@@ -18,6 +18,7 @@ O.chatInit=root=>{
   todoEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
   dockEl=h('div',{id:'dock'});statusEl=h('div',{class:'status-line hide'});
   mmProgressEl=h('div',{id:'mm-progress',class:'hide'});
+  mmFloatBtn=h('button',{id:'mm-float-btn',class:'hide',title:O.tr('Multimodal agent','Мультимодальный агент'),onclick:()=>{mmCollapsed=false;renderMmProgress()}},O.icon('bot'));
   popEl=h('div',{id:'pop',class:'hide'});attsEl=h('div',{class:'atts hide'});
   nokeyEl=h('div',{class:'nokey hide'},h('span',{class:'grow'},O.tr('No models connected.','Модели не подключены.')),h('button',{class:'btn sm',onclick:()=>O.openConnect()},O.icon('key'),O.tr('Connect','Подключить')));
   ta=h('textarea',{rows:1,placeholder:O.tr('Chat with OpenCode...','Чат с OpenCode...'),oninput:onInput,onclick:onInput,onkeyup:e=>{if(e.key.length>1)onInput()}});
@@ -33,7 +34,7 @@ O.chatInit=root=>{
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,jumpEl);
-  root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,comp);
+  root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,mmFloatBtn,comp);
   bus.on('open',()=>{renderAll()});
   bus.on('msg',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd();O.runHook('onReceive',{message:m,sessionID:sid})});
   bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd()});
@@ -355,21 +356,28 @@ function renderTodos(){const t=(S.todos[S.sid]||[]);todoEl.textContent='';
   const list=h('div',{class:'hide',style:{marginTop:'6px'}},t.map(x=>h('div',{class:'todo-i'+(x.status==='completed'?' done':'')},O.icon(x.status==='completed'?'check':'chevR'),x.content)));
   todoEl.append(h('div',{class:'card',style:{padding:'8px 12px'}},h('button',{style:{display:'flex',alignItems:'center',gap:'8px',width:'100%'},onclick:()=>list.classList.toggle('hide')},O.icon('list'),h('b',{class:'grow',style:{textAlign:'left'}},'Задачи '+done+'/'+t.length),O.icon('chevD')),list))}
 let mmTimer=null;
+let mmCollapsed=false;
 function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
   if(mmTimer){clearInterval(mmTimer);mmTimer=null}
-  if(!r){mmProgressEl.classList.add('hide');return}
+  if(!r){mmProgressEl.classList.add('hide');mmCollapsed=false;if(mmFloatBtn)mmFloatBtn.classList.add('hide');return}
   const active=r.currentRole||r.phase;
   if(!active){mmProgressEl.classList.add('hide');return}
   mmProgressEl.classList.remove('hide');
+  mmProgressEl.classList.toggle('collapsed',!!mmCollapsed);
+  if(mmFloatBtn)mmFloatBtn.classList.toggle('hide',!mmCollapsed);
   const started=r.phaseStart||r.started||Date.now();
   const elapsed=((Date.now()-started)/1000).toFixed(0);
   const phase=r.phase||'role';
   const phaseLabel={plan:'Планирование',role:'Работает роль',synth:'Синтез',idle:'Ожидание'}[phase]||phase;
+  const head=h('div',{class:'mm-progress-head'},
+    h('span',{class:'mm-progress-role'},active),
+    h('span',{class:'mm-progress-phase'},phaseLabel),
+    h('span',{class:'mm-progress-time'},elapsed+'s'),
+    h('button',{class:'ibtn s mm-graph-btn',title:O.tr('Agent graph','Граф агента'),onclick:()=>O.openMmGraph&&O.openMmGraph()},O.icon('branch')),
+    h('button',{class:'ibtn s mm-collapse-btn',title:mmCollapsed?O.tr('Show','Показать'):O.tr('Hide','Свернуть'),onclick:()=>{mmCollapsed=!mmCollapsed;renderMmProgress()}},O.icon(mmCollapsed?'chevD':'chevR')));
+  mmProgressEl.append(h('div',{class:'mm-progress-bar'},head));
+  if(mmCollapsed)return;
   mmProgressEl.append(h('div',{class:'mm-progress-bar'},
-    h('div',{class:'mm-progress-info'},
-      h('span',{class:'mm-progress-role'},active),
-      h('span',{class:'mm-progress-phase'},phaseLabel),
-      h('span',{class:'mm-progress-time'},elapsed+'s')),
     h('div',{class:'mm-progress-track'},
       h('div',{class:'mm-progress-fill',style:{width:phase==='role'||phase==='synth'?'100%':'0%'}}))));
   const ctrl=h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap',marginTop:'6px'}},

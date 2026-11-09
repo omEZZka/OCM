@@ -265,14 +265,94 @@ function mmParsePlan(text,mm){
   return out;
 }
 
-O.mmPause=()=>{const r=O.mm.run;if(!r)return;r.paused=!r.paused;bus.emit('mm:progress');O.toast(r.paused?O.tr('Paused','Пауза'):O.tr('Resumed','Продолжаю'),1500)};
-O.mmStop=()=>{const r=O.mm.run;if(!r)return;r.abort=true;r.paused=false;
+O.mmPause=()=>{const r=O.mm.run;if(!r)return;r.paused=!r.paused;bus.emit('mm:progress');O.toast(r.paused?O.tr('Paused','Пауза'):O.tr('Resumed','Продолжаю'),1500)};O.mmStop=()=>{const r=O.mm.run;if(!r)return;r.abort=true;r.paused=false;
   if(r.sid)api('POST','/session/'+r.sid+'/abort',{}).catch(()=>{});
   (r.jobs||[]).forEach(j=>{if(j.sid)api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{})});
   bus.emit('mm:progress')};
 O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new Set();
   const j=(r.jobs||[]).find(x=>x.role&&x.role.name===name);
   if(j&&j.sid){r.roleAborts.add(j.sid);api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{});O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}};
+
+// ---- graph visualisation of the MM run (who talks to whom) ----
+const MM_NODE_W=132,MM_NODE_H=52,MM_GAP_X=26,MM_GAP_Y=72;
+O.mmGraphData=()=>{
+  const r=O.mm.run;if(!r)return null;
+  const jobs=r.jobs||[];
+  const roles=jobs.map(j=>({name:j.role&&j.role.name||'role',model:(j.role&&j.role.model&&j.role.model.modelID)||'',sid:j.sid||'',err:j.err||''}));
+  const phase=r.phase||'plan';
+  const statusOf=j=>{
+    if(!j.sid)return 'err';
+    const st=S.status[j.sid];
+    if(!st||st.type==='idle')return 'done';
+    return 'busy';
+  };
+  const mmActive=O.mmActive();
+  return {
+    name:(mmActive&&mmActive.name)||'',
+    phase,
+    leadModel:(r.leadModel||'')||'',
+    nodes:[
+      {id:'__lead__',name:O.tr('Coordinator','Координатор'),model:r.leadModel||'',kind:'lead',status:phase==='plan'?'busy':(phase==='synth'?'busy':'done')},
+      ...roles.map((x,i)=>({id:'r'+i,name:x.name,model:x.model,kind:'role',status:statusOf(jobs[i]),err:x.err}))
+    ],
+    links:roles.map((_,i)=>({from:'__lead__',to:'r'+i})),
+    synth:phase==='synth'
+  };
+};
+O.openMmGraph=async()=>{
+  const d=O.mmGraphData();
+  const body=h('div',{class:'mm-graph-wrap'});
+  const svgNS='http://www.w3.org/2000/svg';
+  const draw=()=>{
+    body.textContent='';
+    const g=O.mmGraphData();
+    if(!g){body.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('The multimodal agent is not running','Мультимодальный агент не запущен')));return}
+    const rows=g.nodes.length;
+    const svg=document.createElementNS(svgNS,'svg');
+    const W=MM_NODE_W*2+MM_GAP_X+24,H=MM_NODE_H*rows+MM_GAP_Y+24;
+    svg.setAttribute('viewBox','0 0 '+W+' '+H);
+    svg.setAttribute('class','mm-graph');
+    const mk=(tag,attrs)=>{const e=document.createElementNS(svgNS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);return e};
+    // links: lead -> roles
+    const lead=g.nodes[0];
+    g.links.forEach(l=>{
+      const to=g.nodes.find(n=>n.id===l.to);if(!to)return;
+      const i=g.nodes.indexOf(to);
+      const x1=MM_NODE_W/2+12,y1=MM_NODE_H/2+12;
+      const x2=MM_NODE_W+MM_GAP_X+MM_NODE_W/2+12,y2=MM_NODE_H*i+MM_GAP_Y+MM_NODE_H/2+12;
+      const path=mk('path',{d:'M '+x1+' '+y1+' C '+(x1+40)+' '+y1+', '+(x2-40)+' '+y2+', '+x2+' '+y2,
+        class:'mm-graph-link '+(to.status==='busy'?'active':to.status==='done'?'done':'')});
+      svg.append(path);
+      const dot=mk('circle',{cx:x1,cy:y1,r:3.5,class:'mm-graph-dot'});
+      svg.append(dot);
+    });
+    g.nodes.forEach((n,i)=>{
+      const isLead=n.kind==='lead';
+      const x=isLead?12:MM_NODE_W+MM_GAP_X+12,y=isLead?12:MM_NODE_H*i+MM_GAP_Y+12;
+      const gEl=mk('g',{class:'mm-graph-node '+n.kind+' '+n.status,transform:'translate('+x+','+y+')'});
+      gEl.append(mk('rect',{x:0,y:0,width:MM_NODE_W,height:MM_NODE_H,rx:12,class:'mm-graph-box'}));
+      const t1=mk('text',{x:MM_NODE_W/2,y:20,class:'mm-graph-title','text-anchor':'middle'});
+      t1.textContent=n.name.length>16?n.name.slice(0,15)+'…':n.name;
+      gEl.append(t1);
+      const t2=mk('text',{x:MM_NODE_W/2,y:37,class:'mm-graph-sub','text-anchor':'middle'});
+      t2.textContent=n.model||(isLead?O.tr('main model','главная модель'):'—');
+      gEl.append(t2);
+      const t3=mk('text',{x:MM_NODE_W/2,y:48,class:'mm-graph-state','text-anchor':'middle'});
+      t3.textContent=n.status==='busy'?O.tr('working','работает'):n.status==='done'?O.tr('done','готово'):O.tr('failed','ошибка');
+      gEl.append(t3);
+      svg.append(gEl);
+    });
+    body.append(svg);
+    body.append(h('div',{class:'mm-graph-legend'},
+      h('span',null,h('i',{class:'lg busy'}),O.tr('working','работает')),
+      h('span',null,h('i',{class:'lg done'}),O.tr('done','готово')),
+      h('span',null,h('i',{class:'lg err'}),O.tr('failed','ошибка'))));
+  };
+  draw();
+  const s=O.sheet(O.tr('Multimodal agent graph','Граф мультимодального агента'),body,{full:true});
+  const t=setInterval(()=>{if(!s.root.isConnected){clearInterval(t);return}draw()},1500);
+};
+
 
 function mmConfirmPlan(mm,plan){
   return new Promise(res=>{
@@ -317,7 +397,7 @@ O.mmSend=async(text,parts)=>{
   const leadBackup=mm.backup||null;
   if(!leadMain){O.toast(O.tr('No model selected — pick a model or set the lead model','Модель не выбрана — выберите модель или задайте главную'),3000);return true}
   const sid=await O.chat.sess();
-  const run=O.mm.run={sid,abort:false,paused:false,roleAborts:new Set(),jobs:[],started:Date.now(),phase:'plan',phaseStart:Date.now()};
+  const run=O.mm.run={sid,abort:false,paused:false,roleAborts:new Set(),jobs:[],started:Date.now(),phase:'plan',phaseStart:Date.now(),leadModel:leadMain&&leadMain.modelID||''};
   O.maybeAutoTitle(sid,text);
   const emit=()=>bus.emit('mm:progress');
   const fileNames=parts.filter(p=>p.type==='file').map(p=>p.filename||'').filter(Boolean);
