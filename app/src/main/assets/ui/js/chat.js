@@ -344,6 +344,7 @@ function fillTool(el,p){const st=p.state||{},m=toolMeta(p),isOpen=S.opts.details
     O.icon(m.ic),h('span',{class:'t'},m.t),h('span',{class:'sub grow'},m.s||''),stat,S.opts.details?O.icon('chevR','chev'):null));
   if(isOpen)el.append(h('div',{class:'tool-b'},toolBody(p)))}
 async function openChild(sid){try{if(!O.child(sid)){const s=await api('GET','/session/'+sid);(S.childSessions=S.childSessions||{})[sid]=s}}catch{}trail.push(S.sid);await O.openSession(sid);bus.emit('session')}
+O.openChild=openChild;
 
 // ---- banners / dock ----
 function renderRevert(){const s=cur();revEl.textContent='';

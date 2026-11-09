@@ -300,7 +300,6 @@ O.mmGraphData=()=>{
   };
 };
 O.openMmGraph=async()=>{
-  const d=O.mmGraphData();
   const body=h('div',{class:'mm-graph-wrap'});
   const svgNS='http://www.w3.org/2000/svg';
   const draw=()=>{
@@ -313,8 +312,6 @@ O.openMmGraph=async()=>{
     svg.setAttribute('viewBox','0 0 '+W+' '+H);
     svg.setAttribute('class','mm-graph');
     const mk=(tag,attrs)=>{const e=document.createElementNS(svgNS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);return e};
-    // links: lead -> roles
-    const lead=g.nodes[0];
     g.links.forEach(l=>{
       const to=g.nodes.find(n=>n.id===l.to);if(!to)return;
       const i=g.nodes.indexOf(to);
@@ -323,13 +320,12 @@ O.openMmGraph=async()=>{
       const path=mk('path',{d:'M '+x1+' '+y1+' C '+(x1+40)+' '+y1+', '+(x2-40)+' '+y2+', '+x2+' '+y2,
         class:'mm-graph-link '+(to.status==='busy'?'active':to.status==='done'?'done':'')});
       svg.append(path);
-      const dot=mk('circle',{cx:x1,cy:y1,r:3.5,class:'mm-graph-dot'});
-      svg.append(dot);
+      svg.append(mk('circle',{cx:x1,cy:y1,r:3.5,class:'mm-graph-dot'}));
     });
     g.nodes.forEach((n,i)=>{
       const isLead=n.kind==='lead';
       const x=isLead?12:MM_NODE_W+MM_GAP_X+12,y=isLead?12:MM_NODE_H*i+MM_GAP_Y+12;
-      const gEl=mk('g',{class:'mm-graph-node '+n.kind+' '+n.status,transform:'translate('+x+','+y+')'});
+      const gEl=mk('g',{class:'mm-graph-node '+n.kind+' '+n.status+(n.sid?' clickable':''),transform:'translate('+x+','+y+')'});
       gEl.append(mk('rect',{x:0,y:0,width:MM_NODE_W,height:MM_NODE_H,rx:12,class:'mm-graph-box'}));
       const t1=mk('text',{x:MM_NODE_W/2,y:20,class:'mm-graph-title','text-anchor':'middle'});
       t1.textContent=n.name.length>16?n.name.slice(0,15)+'…':n.name;
@@ -340,13 +336,34 @@ O.openMmGraph=async()=>{
       const t3=mk('text',{x:MM_NODE_W/2,y:48,class:'mm-graph-state','text-anchor':'middle'});
       t3.textContent=n.status==='busy'?O.tr('working','работает'):n.status==='done'?O.tr('done','готово'):O.tr('failed','ошибка');
       gEl.append(t3);
+      if(n.sid){
+        const hint=mk('text',{x:MM_NODE_W-10,y:14,class:'mm-graph-open','text-anchor':'end'});
+        hint.textContent='>';
+        gEl.append(hint);
+        gEl.addEventListener('click',()=>{
+          try{s.close()}catch(_){}
+          if(O.openChild)O.openChild(n.sid);
+        });
+      }
       svg.append(gEl);
     });
     body.append(svg);
+    // ---- controls ----
+    const run=O.mm.run;
+    const ctrl=h('div',{class:'mm-graph-ctrl'},
+      h('button',{class:'btn sm',onclick:()=>{O.mmPause&&O.mmPause();draw()}},O.icon(run&&run.paused?'play':'pause'),run&&run.paused?O.tr('Resume','Продолжить'):O.tr('Pause','Пауза')),
+      h('button',{class:'btn sm',onclick:()=>{O.mmStop&&O.mmStop();draw()}},O.icon('stop'),O.tr('Stop all','Стоп')));
+    (run&&run.jobs||[]).forEach(j=>{
+      if(!j.sid)return;
+      const done=!S.status[j.sid]||S.status[j.sid].type==='idle';
+      ctrl.append(h('button',{class:'btn sm',title:O.tr('Stop this role','Остановить эту роль'),onclick:()=>{O.mmStopRole&&O.mmStopRole(j.role.name);draw()}},O.icon(done?'check':'stop'),(j.role.name||'')));
+    });
+    body.append(ctrl);
     body.append(h('div',{class:'mm-graph-legend'},
       h('span',null,h('i',{class:'lg busy'}),O.tr('working','работает')),
       h('span',null,h('i',{class:'lg done'}),O.tr('done','готово')),
-      h('span',null,h('i',{class:'lg err'}),O.tr('failed','ошибка'))));
+      h('span',null,h('i',{class:'lg err'}),O.tr('failed','ошибка')),
+      h('span',null,O.tr('tap a role to open its session','нажмите на роль, чтобы открыть её сессию'))));
   };
   draw();
   const s=O.sheet(O.tr('Multimodal agent graph','Граф мультимодального агента'),body,{full:true});
