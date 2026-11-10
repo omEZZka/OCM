@@ -396,7 +396,7 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
     if(!j.sid)return;
     const done=!S.status[j.sid]||S.status[j.sid].type==='idle';
     const cur=r.currentRole&&(j.role.name===r.currentRole||j.role.name+' (retry)'===r.currentRole);
-    ctrl.append(h('button',{class:'chip',title:O.tr('Stop this role','Остановить эту роль'),style:cur?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>O.mmStopRole&&O.mmStopRole(j.role.name)},
+    ctrl.append(h('button',{class:'chip',title:O.tr('Role actions','Действия с ролью'),style:cur?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>O.mmRoleActions&&O.mmRoleActions(j)},
       O.icon(done?'check':cur?'refresh':'dot'),(j.role.name||'')));
   });
   mmProgressEl.append(ctrl);

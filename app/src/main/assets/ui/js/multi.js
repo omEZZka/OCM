@@ -273,6 +273,18 @@ O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new
   const j=(r.jobs||[]).find(x=>x.role&&x.role.name===name);
   if(j&&j.sid){r.roleAborts.add(j.sid);api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{});O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}};
 
+// Actions for one role: open its session or stop that model
+O.mmRoleActions=job=>{
+  if(!job)return;
+  const name=job.role&&job.role.name||O.tr('role','роль');
+  const done=!S.status[job.sid]||S.status[job.sid].type==='idle';
+  const body=h('div',null,
+    h('div',{class:'note'},O.tr('Role: ','Роль: ')+name+(job.sid?'':' · '+O.tr('failed','ошибка'))),
+    h('button',{class:'btn pri wide',style:{marginTop:'10px'},disabled:!job.sid,onclick:()=>{s.close();if(O.openChild)O.openChild(job.sid)}},O.icon('chat'),O.tr('Open session','Открыть сессию')),
+    h('button',{class:'btn wide',style:{marginTop:'8px'},disabled:!job.sid||done,onclick:()=>{s.close();O.mmStopRole&&O.mmStopRole(name)}},O.icon('stop'),O.tr('Stop this model','Остановить модель')));
+  const s=O.sheet(O.tr('Role: ','Роль: ')+name,body,{hud:true});
+};
+
 // ---- graph visualisation of the MM run (who talks to whom) ----
 const MM_NODE_W=132,MM_NODE_H=52,MM_GAP_X=26,MM_GAP_Y=72;
 O.mmGraphData=()=>{
@@ -362,7 +374,8 @@ O.openMmGraph=async()=>{
     (run&&run.jobs||[]).forEach(j=>{
       if(!j.sid)return;
       const done=!S.status[j.sid]||S.status[j.sid].type==='idle';
-      ctrl.append(h('button',{class:'btn sm',title:O.tr('Stop this role','Остановить эту роль'),onclick:()=>{O.mmStopRole&&O.mmStopRole(j.role.name);draw()}},O.icon(done?'check':'stop'),(j.role.name||'')));
+      ctrl.append(h('button',{class:'btn sm',title:O.tr('Role actions','Действия с ролью'),onclick:()=>{O.mmRoleActions&&O.mmRoleActions(j);draw()}},
+        O.icon(done?'check':'stop'),(j.role.name||'')));
     });
     body.append(ctrl);
     body.append(h('div',{class:'mm-graph-legend'},
