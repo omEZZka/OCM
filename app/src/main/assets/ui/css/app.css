@@ -2650,3 +2650,18 @@ a:hover {
 .mm-graph-open{pointer-events:none}
 .mm-graph-ctrl{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:10px}
 .mm-graph-ctrl .btn.sm{display:inline-flex;align-items:center;gap:4px}
+
+.sess-badge.sub{background:rgba(168,85,247,0.16);color:#a855f7}
+.mm-graph-node[style*="--role-color"] .mm-graph-box{stroke:var(--role-color)}
+.mm-graph-node[style*="--role-color"].busy .mm-graph-box{fill:rgba(56,189,248,0.10)}
+.chip[style*="--role-color"]{border-color:var(--role-color)}
+
+.mm-role-tag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;
+  font-size:11px;font-weight:600;background:rgba(255,255,255,0.06);margin-bottom:4px}
+.mm-role-tag .ic{width:12px;height:12px}
+
+.mm-graph-stats{display:flex;flex-direction:column;gap:4px;margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+.mm-graph-stat{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--mut)}
+.mm-graph-stat .n{color:var(--fg);font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mm-graph-stat .d{font-variant-numeric:tabular-nums}
+.mm-graph-stat .s{opacity:.7}

@@ -45,7 +45,9 @@ O.openSessions=()=>{
           h('span',null,(tag?'#'+tag+'  ':'')+O.ago(x.time.updated)+(sm&&(sm.additions||sm.deletions)?'  +'+sm.additions+' -'+sm.deletions:''))),
         pend.q?h('span',{class:'sess-badge q',title:O.tr('Question pending','Ждёт ответа на вопрос')},O.icon('at'),pend.q>1?h('i',null,pend.q):null):null,
         pend.p?h('span',{class:'sess-badge p',title:O.tr('Permission pending','Ждёт разрешения')},O.icon('excl'),pend.p>1?h('i',null,pend.p):null):null,
-        b?h('span',{class:'spin',style:{flex:'none'}}):null,h('button',{class:'ibtn s',style:{flex:'none'},onclick:()=>sessActions(x)},O.icon('dots'))))})}
+        b?h('span',{class:'spin',style:{flex:'none'}}):null,
+        x.parentID?h('span',{class:'sess-badge sub',title:O.tr('Subagent session','Сессия субагента')},O.icon('bot')):null,
+        h('button',{class:'ibtn s',style:{flex:'none'},onclick:()=>sessActions(x)},O.icon('dots'))))})}
   draw();bus.on('sessions',()=>{if(s.root.isConnected)draw()});bus.on('perm',()=>{if(s.root.isConnected)draw()})};
 function importSessionFile(){
   const inp=h('input',{type:'file',accept:'application/json,.json,.ocmjson',style:{display:'none'}});

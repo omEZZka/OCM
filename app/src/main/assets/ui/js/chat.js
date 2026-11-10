@@ -333,7 +333,9 @@ function toolBody(p){const st=p.state||{},i=st.input||{},md=st.metadata||{};
   case'write':b.append(pre(String(i.content||'').split('\n').slice(0,80).join('\n'),'code-pre'));break;
   case'read':b.append(pre(out.split('\n').slice(0,60).join('\n'),'code-pre'));break;
   case'todowrite':(i.todos||[]).forEach(t=>b.append(h('div',{class:'todo-i'+(t.status==='completed'?' done':'')},O.icon(t.status==='completed'?'check':'chevR'),t.content)));break;
-  case'task':{const sid=md.sessionId||md.sessionID;if(i.prompt)b.append(h('div',{class:'mut s'},String(i.prompt).slice(0,500)));
+  case'task':{const sid=md.sessionId||md.sessionID;const sub=i.subagent_type||i.subagent||'';
+    if(sub)b.append(h('span',{class:'mm-role-tag',style:O.mmRoleColor?O.mmRoleColor(sub):''},O.icon('bot'),sub));
+    if(i.prompt)b.append(h('div',{class:'mut s'},String(i.prompt).slice(0,500)));
     if(sid)b.append(h('button',{class:'btn sm',style:{marginTop:'8px'},onclick:()=>openChild(sid)},'Открыть сессию субагента'));if(out)b.append(pre(out.slice(0,3000),'code-pre'));break}
   default:if(Object.keys(i).length)b.append(pre(JSON.stringify(i,null,2).slice(0,3000),'code-pre'));if(out)b.append(pre(out.slice(0,6000),'code-pre'))}
   if(st.status==='error'&&st.error)b.append(h('div',{class:'errbox'},String(st.error)));return b}
@@ -386,18 +388,22 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
       h('span',{class:'mm-progress-role'},active),
       h('span',{class:'mm-progress-phase'},phaseLabel),
       h('span',{class:'mm-progress-time'},elapsed+'s'),
-      h('button',{class:'ibtn s mm-graph-btn',title:O.tr('Agent graph','Граф агента'),onclick:e=>{e.stopPropagation();O.openMmGraph&&O.openMmGraph()}},O.icon('branch'))),
+      h('button',{class:'ibtn s mm-graph-btn',title:O.tr('Agent graph','Граф агента'),onclick:e=>{e.stopPropagation();O.openMmGraph&&O.openMmGraph()}},O.icon('branch')),
+      h('button',{class:'ibtn s mm-graph-btn',title:O.tr('Export report','Экспорт отчёта'),onclick:e=>{e.stopPropagation();O.mmExportReport&&O.mmExportReport()}},O.icon('doc'))),
     h('div',{class:'mm-progress-track'},
       h('div',{class:'mm-progress-fill',style:{width:phase==='role'||phase==='synth'?'100%':'0%'}}))));
   const ctrl=h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap',marginTop:'6px'}},
     h('button',{class:'chip',onclick:()=>O.mmPause&&O.mmPause()},O.icon(r.paused?'play':'pause'),r.paused?O.tr('Resume','Продолжить'):O.tr('Pause','Пауза')),
     h('button',{class:'chip',onclick:()=>O.mmStop&&O.mmStop()},O.icon('stop'),O.tr('Stop all','Стоп')));
   (r.jobs||[]).forEach(j=>{
-    if(!j.sid)return;
-    const done=!S.status[j.sid]||S.status[j.sid].type==='idle';
+    if(!j.sid&&!j.role)return;
+    const done=j.state==='done'||(!S.status[j.sid]||S.status[j.sid].type==='idle');
     const cur=r.currentRole&&(j.role.name===r.currentRole||j.role.name+' (retry)'===r.currentRole);
-    ctrl.append(h('button',{class:'chip',title:O.tr('Role actions','Действия с ролью'),style:cur?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>O.mmRoleActions&&O.mmRoleActions(j)},
-      O.icon(done?'check':cur?'refresh':'dot'),(j.role.name||'')));
+    const col=j.role&&j.role.color;
+    ctrl.append(h('button',{class:'chip',title:O.tr('Role actions','Действия с ролью'),
+      style:(cur?'border-color:var(--acc);color:var(--acc)':'')+(col?(';--role-color:'+col):''),
+      onclick:()=>O.mmRoleActions&&O.mmRoleActions(j)},
+      O.icon((j.role&&j.role.icon)||(done?'check':cur?'refresh':'dot')),(j.role.name||'')));
   });
   mmProgressEl.append(ctrl);
   if(!r.paused){

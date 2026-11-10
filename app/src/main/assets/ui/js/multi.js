@@ -1,5 +1,6 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
+const MM_ICONS=['bot','user','cpu','code','terminal','doc','globe','server','plug','branch','memory','chart','bulb','key','shield','ghost'];
 
 // ---- storage ----
 O.mmList=()=>O.store.get('mm.agents',[]);
@@ -16,6 +17,76 @@ const mName=m=>{if(!m)return'';const mi=O.modelInfo(m.providerID,m.modelID);retu
 // ---- model picker (does not touch global S.model) ----
 O.mmFreeOnly=()=>O.store.get('onlyFreeModels',true);
 O.mmSetFreeOnly=v=>{O.store.set('onlyFreeModels',!!v);bus.emit('mm');bus.emit('meta')};
+// ---- pick a subagent for a role (or create one on the fly) ----
+O.mmSubagents=()=>(S.agents||[]).filter(a=>a.mode==='subagent'||a.mode==='all');
+// The built-in "Планировщик"/Planner role maps onto the standard 'plan' subagent.
+O.mmRoleSubagent=role=>{
+  if(!role)return '';
+  if(role.subagent)return role.subagent;
+  const n=String(role.name||'').trim().toLowerCase();
+  if(n==='планировщик'||n==='planner'||n==='plan')return 'plan';
+  return '';
+};
+O.mmAgentInfo=name=>(S.agents||[]).find(a=>a.name===name)||null;
+O.mmPickSubagent=(cur,cb)=>{
+  const list=h('div');
+  const s=O.sheet(O.tr('Select subagent','Выбор субагента'),list,{hud:true,full:true});
+  const draw=()=>{
+    list.textContent='';
+    const subs=O.mmSubagents();
+    if(!subs.length)list.append(h('div',{class:'mut',style:{padding:'16px'}},O.tr('No subagents yet. You can create one from the role.','Субагентов пока нет. Можно создать из роли.')));
+    subs.forEach(a=>{
+      const isSel=a.name===cur;
+      list.append(h('button',{class:'settings-row',onclick:()=>{s.close();cb(a.name)}},
+        h('div',{class:'settings-row-icon blue'},O.icon('bot')),
+        h('div',{class:'settings-row-text'},h('b',null,a.name),h('span',null,a.description||O.tr('Subagent','Субагент'))),
+        isSel?O.icon('check','ok'):null));
+    });
+    list.append(h('button',{class:'btn pri wide',style:{marginTop:'12px'},onclick:async()=>{
+      const name=await O.ask(O.tr('New subagent name','Имя нового субагента'),O.tr('e.g. reviewer','например reviewer'));
+      if(!name)return;
+      s.close();
+      cb(name,true);
+    }},O.icon('plus'),O.tr('Create subagent','Создать субагента')));
+  };
+  draw();
+};
+
+// Finds the MM role that maps to a given subagent and returns its colour.
+O.mmRoleColor=subagent=>{
+  const mm=O.mmActive();if(!mm||!subagent)return '';
+  const role=(mm.roles||[]).find(r=>O.mmRoleSubagent(r)===subagent);
+  return role&&role.color?('border-color:'+role.color+';color:'+role.color):'';
+};
+// A role linked to a subagent inherits that subagent's model and backup models.
+O.mmRoleModels=role=>{
+  const base={model:role&&role.model||null,backups:((role&&role.backups)||[]).slice()};
+  const linked=O.mmRoleSubagent(role);
+  if(!linked)return base;
+  const sg=O.mmAgentInfo(linked);
+  if(sg){
+    if(!base.model&&sg.model)base.model={providerID:sg.model.providerID||sg.providerID,modelID:sg.model.modelID||sg.model};
+    if(sg.backups&&sg.backups.length){
+      sg.backups.forEach(b=>{
+        const k=(b.modelID||b)+'';
+        const has=base.backups.some(x=>((x.modelID||x)+'').includes(k));
+        if(!has)base.backups.push(b);
+      });
+    }
+  }
+  return base;
+};
+const MM_CFG='/root/.config/opencode';
+O.mmCreateSubagent=async(name,role)=>{
+  const desc=(role&&role.prompt)||'';
+  const body='---\ndescription: '+(desc?desc.replace(/\n/g,' ').slice(0,200):'Role '+name)+'\nmode: subagent\n---\n\n'+
+    (desc||('You are the '+name+' role. Complete the task you are given and return a concrete result.'))+'\n';
+  const path=MM_CFG+'/agents/'+name.replace(/[^a-zA-Z0-9_-]/g,'_')+'.md';
+  O.native.fs('mkdir',MM_CFG+'/agents');
+  const r=O.native.writeText(path,body);
+  return r&&r.ok?path:null;
+};
+
 O.mmPickModel=(cur,cb,opts)=>{
   opts=opts||{};
   const freeOnly=opts.freeOnly!=null?opts.freeOnly:O.mmFreeOnly();
@@ -124,9 +195,10 @@ O.openMultimodal=()=>{
 // ---- editor ----
 O.mmEditor=(a,done)=>{
   const isNew=!a;
-  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,backup:null,roles:[]};
+  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,backup:null,roles:[],mode:'subagents'};
   a.roles=Array.isArray(a.roles)?a.roles:[];
   if(!a.backup)a.backup=null;
+  if(!a.mode)a.mode='sessions';
   const pickOpts=()=>({});
   const body=h('div');
   const s=O.sheet(isNew?O.tr('New multimodal agent','Новый мультимодальный агент'):O.tr('Edit multimodal agent','Редактирование агента'),body,{full:true});
@@ -142,6 +214,9 @@ O.mmEditor=(a,done)=>{
       h('span',{id:'mm-backup-sub'},a.backup?mName(a.backup):O.tr('Used when the lead model fails','Включается, если главная модель дала сбой'))),
     O.icon('chevR'));
   const freeRow=O.toggleRow('star',O.tr('Only free models','Только бесплатные модели'),O.tr('Hide paid models in every picker (agents, roles, subagents)','Скрывать платные модели во всех выборах (агенты, роли, субагенты)'),O.mmFreeOnly(),v=>{O.mmSetFreeOnly(v);draw()});
+  const modeSeg=h('div',{class:'seg',style:{margin:'0 0 10px'}},
+    h('button',{class:a.mode==='sessions'?'on':'',onclick:e=>{a.mode='sessions';modeSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===e.currentTarget));draw()}},O.tr('Sessions','Сессии')),
+    h('button',{class:a.mode==='subagents'?'on':'',onclick:e=>{a.mode='subagents';modeSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===e.currentTarget));draw()}},O.tr('Subagents','Субагенты')));
   const rolesEl=h('div');
   const draw=()=>{
     const sub=mainRow.querySelector('#mm-main-sub');if(sub)sub.textContent=a.main?mName(a.main):O.tr('Empty — uses the active session model','Пусто — берётся модель активной сессии');
@@ -150,11 +225,13 @@ O.mmEditor=(a,done)=>{
     const card=h('div',{class:'settings-card'});
     if(!a.roles.length)card.append(h('div',{class:'mut',style:{padding:'14px 16px'}},O.tr('No roles yet. Add as many as you need — each role can use its own model and backups.','Ролей пока нет. Добавляйте сколько нужно — у каждой роли своя модель и запасные.')));
     a.roles.forEach((r,i)=>{
+      const linked=r.subagent||O.mmRoleSubagent(r);
+      const sg=linked?O.mmAgentInfo(linked):null;
       card.append(h('div',{class:'settings-row'},
-        h('div',{class:'settings-row-icon blue'},O.icon('user')),
+        h('div',{class:'settings-row-icon blue',style:r.color?{background:r.color+'33',color:r.color}:null},O.icon(r.icon||'bot')),
          h('button',{class:'settings-row-text',style:{textAlign:'left'},onclick:()=>O.mmRoleEditor(r,(ok,next)=>{if(ok&&next){a.roles[i]=next;draw()}},pickOpts())},
           h('b',null,r.name||O.tr('Unnamed role','Роль без названия')),
-          h('span',null,r.model?mName(r.model):O.tr('Lead model will be used','Будет использована главная модель'))),
+          h('span',null,linked?('@'+linked+(sg?'':' '+O.tr('(missing)','(нет)'))):(r.model?mName(r.model):O.tr('Lead model will be used','Будет использована главная модель')))),
         h('button',{class:'ibtn s',onclick:()=>{a.roles.splice(i,1);draw()}},O.icon('trash'))));
     });
     rolesEl.append(card);
@@ -163,6 +240,11 @@ O.mmEditor=(a,done)=>{
     }},O.icon('plus'),O.tr('Add role','Добавить роль')));
   };
   body.append(h('div',{class:'field'},h('label',null,O.tr('Name','Название')),nameInp),
+    h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Work mode','Режим работы')),
+    modeSeg,
+    h('div',{class:'note',style:{margin:'0 2px 10px'}},a.mode==='subagents'
+      ?O.tr('The lead model delegates tasks to real subagents inside the same session. Roles map to subagents of your team.','Главная модель распределяет задачи между настоящими субагентами в той же сессии. Роли соответствуют субагентам вашей команды.')
+      :O.tr('Each role gets its own child session. Independent, but creates extra sessions.','Каждой роли выделяется своя дочерняя сессия. Независимо, но создаёт лишние сессии.')),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Lead model','Главная модель')),
     h('div',{class:'settings-card'},mainRow,backupRow,freeRow),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Roles','Роли')),
@@ -185,6 +267,30 @@ O.mmRoleEditor=(r,done,opts)=>{
   const body=h('div');
   const s=O.sheet(r.name?O.tr('Edit role','Редактирование роли'):O.tr('New role','Новая роль'),body,{full:true});
   const nameInp=h('input',{type:'text',placeholder:O.tr('Role, e.g. Translator, Critic, Coder','Роль, например Переводчик, Критик, Кодер'),value:r.name||''});
+  const subagents=()=>(S.agents||[]).filter(a=>a.mode==='subagent'||a.mode==='all');
+  const subRow=h('button',{class:'settings-row',onclick:()=>O.mmPickSubagent(r.subagent,(sg,create)=>{
+      r.subagent=sg;
+      if(create&&sg){
+        O.mmCreateSubagent(sg,r).then(p=>{
+          O.toast(p?O.tr('Subagent created: ','Субагент создан: ')+sg:O.tr('Could not create subagent','Не удалось создать субагента'),2000);
+          if(p)O.loadMeta&&O.loadMeta();
+        });
+      }
+      draw();
+    })},
+    h('div',{class:'settings-row-icon blue'},O.icon('bot')),
+    h('div',{class:'settings-row-text'},h('b',null,O.tr('Subagent','Субагент')),
+      h('span',{id:'mm-role-subagent'},r.subagent||O.tr('Not linked — a session will be created','Не привязан — будет создана сессия'))),
+    O.icon('chevR'));
+  const colorRow=h('div',{class:'settings-row',style:{cursor:'pointer'}},
+    h('div',{class:'settings-row-icon',style:{background:(r.color||'#38bdf8')+'33',color:r.color||'#38bdf8'}},O.icon('palette')),
+    h('div',{class:'settings-row-text'},h('b',null,O.tr('Role colour','Цвет роли')),
+      h('span',null,r.color||O.tr('Default','По умолчанию'))),
+    h('input',{type:'color',value:r.color||'#38bdf8',style:{width:'42px',height:'28px',background:'none',border:'none'},oninput:e=>{r.color=e.target.value;draw()}}));
+  const iconRow=h('div',{class:'settings-row'},
+    h('div',{class:'settings-row-icon'},O.icon(r.icon||'bot')),
+    h('div',{class:'settings-row-text'},h('b',null,O.tr('Role icon','Иконка роли'))),
+    h('div',{class:'fchips'},MM_ICONS.map(ic=>h('button',{class:'chip',style:r.icon===ic?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>{r.icon=ic;draw()}},O.icon(ic)))));
   const modelRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(r.model,m=>{r.model=m;draw()},opts)},
     h('div',{class:'settings-row-icon purple'},O.icon('cpu')),
     h('div',{class:'settings-row-text'},h('b',null,O.tr('Role model','Модель роли')),
@@ -202,9 +308,19 @@ O.mmRoleEditor=(r,done,opts)=>{
       h('span',{class:'ic'},O.icon('plus')),h('span',null,O.tr('backup','запасная'))));
     bEl.append(wrap);
   };
-  const draw=()=>{const sub=modelRow.querySelector('#mm-role-sub');if(sub)sub.textContent=r.model?mName(r.model):O.tr('Optional — lead model by default','Необязательно — по умолчанию главная');drawB()};
+  const draw=()=>{const rm=O.mmRoleModels(r);
+    const sub=modelRow.querySelector('#mm-role-sub');if(sub)sub.textContent=rm.model?mName(rm.model):O.tr('Optional — lead model by default','Необязательно — по умолчанию главная');
+    const sg=subRow.querySelector('#mm-role-subagent');if(sg)sg.textContent=r.subagent||O.tr('Not linked — a session will be created','Не привязан — будет создана сессия');
+    colorRow.querySelector('.settings-row-text span').textContent=r.color||O.tr('Default','По умолчанию');
+    const ci=colorRow.querySelector('.settings-row-icon');ci.style.background=(r.color||'#38bdf8')+'33';ci.style.color=r.color||'#38bdf8';
+    iconRow.querySelector('.settings-row-icon').textContent='';iconRow.querySelector('.settings-row-icon').append(O.icon(r.icon||'bot'));
+    drawB()};
   body.append(h('div',{class:'field'},h('label',null,O.tr('Role name','Название роли')),nameInp),
     h('div',{class:'field'},h('label',null,O.tr('Prompt (optional)','Промпт (необязательно)')),promptTa),
+    h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Subagent','Субагент')),
+    h('div',{class:'settings-card'},subRow),
+    h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Appearance','Внешний вид')),
+    h('div',{class:'settings-card'},colorRow,iconRow),
     h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Role model','Модель роли')),
     h('div',{class:'settings-card'},modelRow,bEl),
     h('button',{class:'btn pri wide',style:{marginTop:'14px'},onclick:()=>{
@@ -247,6 +363,30 @@ async function mmLastAssistant(sid){
   for(const m of arr){if(m.info&&m.info.role==='assistant'){const t=(m.parts||[]).filter(p=>p.type==='text').map(p=>p.text).join('\n');if(t.trim())text=t}}
   return text.trim();
 }
+// Collects the output of every subagent invocation (task tool calls) of a session.
+async function mmCollectTasks(sid,run){
+  const out={};
+  let arr=[];
+  try{arr=await api('GET','/session/'+sid+'/message',null,{timeout:30000})}catch(e){return out}
+  for(const m of arr||[]){
+    const parts=m.parts||[];
+    for(const p of parts){
+      if(p.type!=='tool')continue;
+      const tool=String(p.tool||'');
+      if(tool!=='task'&&tool!=='subagent')continue;
+      const st=p.state||{};
+      const md=st.metadata||{};
+      const inp=st.input||{};
+      const key=String(inp.subagent_type||inp.subagent||inp.agent||'');
+      if(!key)continue;
+      const outText=st.output!=null?st.output:(md.output!=null?md.output:'');
+      const text=typeof outText==='string'?outText.trim():'';
+      if(text)out[key]=(out[key]?out[key]+'\n':'')+text;
+      else if(!out[key])out[key]='';
+    }
+  }
+  return out;
+}
 function mmParsePlan(text,mm){
   if(!text)return[];
   let raw=null;
@@ -273,6 +413,39 @@ O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new
   const j=(r.jobs||[]).find(x=>x.role&&x.role.name===name);
   if(j&&j.sid){r.roleAborts.add(j.sid);api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{});O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}};
 
+// Markdown report of the last MM run: tasks -> roles -> results
+O.mmReport=()=>{
+  const r=O.mm.run;const mm=O.mmActive();
+  const jobs=(r&&r.jobs)||[];
+  const lines=[];
+  lines.push('# '+(mm?mm.name:O.tr('Multimodal agent','Мультимодальный агент')));
+  lines.push('');
+  lines.push(O.tr('Mode: ','Режим: ')+((mm&&mm.mode==='subagents')?O.tr('subagents','субагенты'):O.tr('sessions','сессии')));
+  if(r&&r.started)lines.push(O.tr('Started: ','Начато: ')+new Date(r.started).toLocaleString());
+  lines.push('');
+  jobs.forEach((j,i)=>{
+    const name=j.role&&j.role.name||('role '+(i+1));
+    lines.push('## '+(i+1)+'. '+name);
+    if(j.role&&j.role.subagent)lines.push(O.tr('Subagent: ','Субагент: ')+'@'+j.role.subagent);
+    if(j.role&&j.role.model)lines.push(O.tr('Model: ','Модель: ')+j.role.model.modelID);
+    lines.push('');
+    lines.push('**'+O.tr('Task','Задача')+':** '+(j.task||''));
+    lines.push('');
+    if(j.err)lines.push('> '+O.tr('Error: ','Ошибка: ')+j.err);
+    else if(j.result)lines.push(j.result);
+    else lines.push('_'+O.tr('no result','нет ответа')+'_');
+    lines.push('');
+  });
+  return lines.join('\n');
+};
+O.mmExportReport=()=>{
+  const md=O.mmReport();
+  if(!md||md.split('\n').length<3)return O.toast(O.tr('Nothing to export yet','Пока нечего экспортировать'),2000);
+  O.actions(O.tr('Export MM report','Экспорт отчёта MM'),[
+    {label:O.tr('Copy Markdown','Скопировать Markdown'),icon:'copy',fn:()=>O.native.copy(md)},
+    {label:O.tr('Share file/text','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(md);else O.native.copy(md)}}]);
+};
+
 // Actions for one role: open its session or stop that model
 O.mmRoleActions=job=>{
   if(!job)return;
@@ -290,13 +463,20 @@ const MM_NODE_W=132,MM_NODE_H=52,MM_GAP_X=26,MM_GAP_Y=72;
 O.mmGraphData=()=>{
   const r=O.mm.run;if(!r)return null;
   const jobs=r.jobs||[];
-  const roles=jobs.map(j=>({name:j.role&&j.role.name||'role',model:(j.role&&j.role.model&&j.role.model.modelID)||'',sid:j.sid||'',err:j.err||''}));
+  const roles=jobs.map(j=>({name:j.role&&j.role.name||'role',model:(j.role&&j.role.model&&j.role.model.modelID)||'',sid:j.sid||'',err:j.err||'',color:j.role&&j.role.color||'',icon:j.role&&j.role.icon||'bot',subagent:O.mmRoleSubagent(j.role),result:j.result||''}));
   const phase=r.phase||'plan';
   const statusOf=j=>{
     if(!j.sid)return 'err';
     const st=S.status[j.sid];
     if(!st||st.type==='idle')return 'done';
     return 'busy';
+  };
+  // Per-role statistics: duration and tokens of the role's session
+  const statsOf=j=>{
+    if(!j.sid)return null;
+    const st=S.status[j.sid];
+    const busy=st&&st.type!=='idle';
+    return {busy:!!busy,started:j.started||0};
   };
   const mmActive=O.mmActive();
   return {
@@ -305,7 +485,7 @@ O.mmGraphData=()=>{
     leadModel:(r.leadModel||'')||'',
     nodes:[
       {id:'__lead__',name:O.tr('Coordinator','Координатор'),model:r.leadModel||'',kind:'lead',status:phase==='plan'?'busy':(phase==='synth'?'busy':'done')},
-      ...roles.map((x,i)=>({id:'r'+i,name:x.name,model:x.model,kind:'role',status:statusOf(jobs[i]),err:x.err}))
+      ...roles.map((x,i)=>({id:'r'+i,name:x.name,model:x.model,kind:'role',status:statusOf(jobs[i]),err:x.err,color:x.color,icon:x.icon,subagent:x.subagent,sid:x.sid,result:x.result}))
     ],
     links:roles.map((_,i)=>({from:'__lead__',to:'r'+i})),
     synth:phase==='synth'
@@ -338,13 +518,14 @@ O.openMmGraph=async()=>{
     g.nodes.forEach((n,i)=>{
       const isLead=n.kind==='lead';
       const x=isLead?12:MM_NODE_W+MM_GAP_X+12,y=isLead?12:MM_NODE_H*i+MM_GAP_Y+12;
-      const gEl=mk('g',{class:'mm-graph-node '+n.kind+' '+n.status+(n.sid?' clickable':''),transform:'translate('+x+','+y+')'});
+      const gEl=mk('g',{class:'mm-graph-node '+n.kind+' '+n.status+(n.sid?' clickable':''),transform:'translate('+x+','+y+')'+(n.color?'':'')});
+      if(n.color)gEl.setAttribute('style','--role-color:'+n.color);
       gEl.append(mk('rect',{x:0,y:0,width:MM_NODE_W,height:MM_NODE_H,rx:12,class:'mm-graph-box'}));
       const t1=mk('text',{x:MM_NODE_W/2,y:20,class:'mm-graph-title','text-anchor':'middle'});
       t1.textContent=n.name.length>16?n.name.slice(0,15)+'…':n.name;
       gEl.append(t1);
       const t2=mk('text',{x:MM_NODE_W/2,y:37,class:'mm-graph-sub','text-anchor':'middle'});
-      t2.textContent=n.model||(isLead?O.tr('main model','главная модель'):'—');
+      t2.textContent=n.subagent?('@'+n.subagent):(n.model||(isLead?O.tr('main model','главная модель'):'—'));
       gEl.append(t2);
       const t3=mk('text',{x:MM_NODE_W/2,y:48,class:'mm-graph-state','text-anchor':'middle'});
       t3.textContent=n.status==='busy'?O.tr('working','работает'):n.status==='done'?O.tr('done','готово'):O.tr('failed','ошибка');
@@ -378,6 +559,18 @@ O.openMmGraph=async()=>{
         O.icon(done?'check':'stop'),(j.role.name||'')));
     });
     body.append(ctrl);
+    // per-role statistics: duration and answer size
+    const stats=h('div',{class:'mm-graph-stats'});
+    const run2=O.mm.run;
+    ((run2&&run2.jobs)||[]).forEach(j=>{
+      const dur=j.started?Math.max(0,Math.round((Date.now()-j.started)/1000))+'s':'—';
+      const size=j.result?Math.round(j.result.length/100)+'k chars':(j.err?'—':'—');
+      stats.append(h('div',{class:'mm-graph-stat'},
+        h('span',{class:'n'},(j.role&&j.role.name)||'?'),
+        h('span',{class:'d'},dur),
+        h('span',{class:'s'},size)));
+    });
+    if(stats.children.length)body.append(stats);
     body.append(h('div',{class:'mm-graph-legend'},
       h('span',null,h('i',{class:'lg busy'}),O.tr('working','работает')),
       h('span',null,h('i',{class:'lg done'}),O.tr('done','готово')),
@@ -468,7 +661,41 @@ O.mmSend=async(text,parts)=>{
     const confirmed=await mmConfirmPlan(mm,plan);
     if(!confirmed){O.mm.run=null;emit();return true}
     plan=confirmed;
-    // step 2: spawn subagent sessions per role
+    // ---- subagent mode: the lead delegates through the task tool inside this very session ----
+    if(mm.mode==='subagents'){
+      run.phase='role';run.phaseStart=Date.now();emit();
+      const linked=plan.filter(t=>O.mmRoleSubagent(t.role));
+      const plain=plan.filter(t=>!O.mmRoleSubagent(t.role));
+      const tasks=[];
+      linked.forEach(t=>tasks.push({role:t.role,task:t.task,subagent:O.mmRoleSubagent(t.role)}));
+      plain.forEach(t=>tasks.push({role:t.role,task:t.task,subagent:t.role.name}));
+      run.jobs=tasks.map(t=>({sid:null,role:t.role,task:t.task,subagent:t.subagent,state:'queued',started:Date.now()}));
+      emit();
+      // tell the lead exactly which subagent handles which task
+      const delegation='Список задач по субагентам (используй инструмент task с параметром subagent_type):\n'+
+        tasks.map((t,i)=>(i+1)+'. '+t.subagent+' → '+t.task).join('\n')+
+        '\n\nВызови task для КАЖДОЙ задачи (несколько вызовов подряд). В description пиши краткое описание, в prompt — полное задание для субагента. '+
+        'В исходном запросе пользователя: «'+userText+'». Дождись результатов и затем дай сводный ответ.';
+      const planWithRoles=plan.map(t=>({role:t.role,task:t.task}));
+      const delegInstr=PLAN_TAG+'\n'+delegation;
+      await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:delegInstr}]});
+      await mmWaitIdle([sid],run,1800000);
+      if(run.abort)throw new Error('aborted');
+      // collect per-subagent results from the session messages
+      const collected=await mmCollectTasks(sid,run);
+      run.jobs.forEach(j=>{const c=collected[j.subagent||j.role.name];if(c){j.result=c;j.state='done'}});
+      emit();
+      // final synthesis
+      run.phase='synth';run.phaseStart=Date.now();run.currentRole=O.tr('Synthesis','Синтез');emit();
+      const results=run.jobs.map(j=>'['+(j.role&&j.role.name||'?')+']:\n'+(j.result||O.tr('(no result)','(нет ответа)'))).join('\n\n');
+      const finInstr=PLAN_TAG+' — ФИНАЛ\nСубагенты команды «'+mm.name+'» отработали задачи. Их результаты:\n\n'+results+
+        '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ: что сделано и итог. Без служебных пометок.';
+      await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:finInstr}]});
+      O.mm.run=null;
+      emit();
+      return true;
+    }
+    // ---- session mode (legacy): every role gets its own child session ----
     const jobs=[];
     for(const t of plan){
       if(run.abort)break;
@@ -476,8 +703,8 @@ O.mmSend=async(text,parts)=>{
         const cs=await api('POST','/session',{parentID:sid,title:mm.name+' · '+t.role.name});
         const rtext='Ты — «'+t.role.name+'» в команде «'+mm.name+'».\n'+(t.role.prompt||'')+
           '\n\nЗадача от координатора: '+t.task+'\nИсходный запрос пользователя: «'+userText+'»\n\nВыполни свою часть и дай конкретный результат.';
-        await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:t.role.model||leadMain,parts:[{type:'text',text:rtext}]},{timeout:30000});
-        jobs.push({sid:cs.id,role:t.role,task:t.task});
+        await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:O.mmRoleModels(t.role).model||leadMain,parts:[{type:'text',text:rtext}]},{timeout:30000});
+        jobs.push({sid:cs.id,role:t.role,task:t.task,started:Date.now()});
         O.toast(O.tr('Role started: ','Роль запущена: ')+t.role.name,1800);
       }catch(e){jobs.push({sid:null,role:t.role,task:t.task,err:e.message||String(e)})}
     }
@@ -495,7 +722,8 @@ O.mmSend=async(text,parts)=>{
       if(!err)continue;
       let t='';try{t=await mmLastAssistant(j.sid)}catch(e){}
       if(t.trim())continue; // errored but produced content — keep it
-      const bups=[j.role.model||leadMain].concat((j.role.backups||[]).filter(Boolean));
+      const rm=O.mmRoleModels(j.role);
+      const bups=[rm.model||leadMain].concat((rm.backups||[]).filter(Boolean));
       let done=false;
       for(const model of bups){
         if(run.abort)break;
