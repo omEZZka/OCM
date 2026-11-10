@@ -363,6 +363,26 @@ async function mmLastAssistant(sid){
   for(const m of arr){if(m.info&&m.info.role==='assistant'){const t=(m.parts||[]).filter(p=>p.type==='text').map(p=>p.text).join('\n');if(t.trim())text=t}}
   return text.trim();
 }
+// Which subagent is currently running (the task tool call that has not completed yet)
+async function mmRunningTask(sid){
+  let arr=[];
+  try{arr=await api('GET','/session/'+sid+'/message',null,{timeout:20000})}catch(e){return ''}
+  let running='';
+  for(const m of arr||[]){
+    for(const p of (m.parts||[])){
+      if(p.type!=='tool')continue;
+      const tool=String(p.tool||'');
+      if(tool!=='task'&&tool!=='subagent')continue;
+      const st=p.state||{};
+      const inp=st.input||{};
+      const key=String(inp.subagent_type||inp.subagent||inp.agent||'');
+      if(!key)continue;
+      if(st.status==='running'||st.status==='pending')running=key;
+      else if(st.status==='completed'||st.status==='error'){if(running===key)running=''}
+    }
+  }
+  return running;
+}
 // Collects the output of every subagent invocation (task tool calls) of a session.
 async function mmCollectTasks(sid,run){
   const out={};
@@ -411,7 +431,8 @@ O.mmPause=()=>{const r=O.mm.run;if(!r)return;r.paused=!r.paused;bus.emit('mm:pro
   bus.emit('mm:progress')};
 O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new Set();
   const j=(r.jobs||[]).find(x=>x.role&&x.role.name===name);
-  if(j&&j.sid){r.roleAborts.add(j.sid);api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{});O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}};
+  if(j&&j.sid){r.roleAborts.add(j.sid);api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{});O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}
+  else if(j){j.state='stopped';j.err=O.tr('stopped by user','остановлена пользователем');O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}};
 
 // Markdown report of the last MM run: tasks -> roles -> results
 O.mmReport=()=>{
@@ -446,15 +467,16 @@ O.mmExportReport=()=>{
     {label:O.tr('Share file/text','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(md);else O.native.copy(md)}}]);
 };
 
-// Actions for one role: open its session or stop that model
+// Actions for one role: open its session (only in session mode) or stop that model
 O.mmRoleActions=job=>{
   if(!job)return;
   const name=job.role&&job.role.name||O.tr('role','роль');
-  const done=!S.status[job.sid]||S.status[job.sid].type==='idle';
+  const done=!job.sid||!S.status[job.sid]||S.status[job.sid].type==='idle';
+  const canOpen=!!job.sid;
   const body=h('div',null,
-    h('div',{class:'note'},O.tr('Role: ','Роль: ')+name+(job.sid?'':' · '+O.tr('failed','ошибка'))),
-    h('button',{class:'btn pri wide',style:{marginTop:'10px'},disabled:!job.sid,onclick:()=>{s.close();if(O.openChild)O.openChild(job.sid)}},O.icon('chat'),O.tr('Open session','Открыть сессию')),
-    h('button',{class:'btn wide',style:{marginTop:'8px'},disabled:!job.sid||done,onclick:()=>{s.close();O.mmStopRole&&O.mmStopRole(name)}},O.icon('stop'),O.tr('Stop this model','Остановить модель')));
+    h('div',{class:'note'},O.tr('Role: ','Роль: ')+name+(job.subagent?(' · @'+job.subagent):'')+(job.sid?'':' · '+O.tr('runs in the main session','работает в основной сессии'))),
+    canOpen?h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:()=>{s.close();if(O.openChild)O.openChild(job.sid)}},O.icon('chat'),O.tr('Open session','Открыть сессию')):null,
+    h('button',{class:'btn wide',style:{marginTop:'8px'},disabled:done,onclick:()=>{s.close();O.mmStopRole&&O.mmStopRole(name)}},O.icon('stop'),O.tr('Stop this model','Остановить модель')));
   const s=O.sheet(O.tr('Role: ','Роль: ')+name,body,{hud:true});
 };
 
@@ -466,12 +488,18 @@ O.mmGraphData=()=>{
   const roles=jobs.map(j=>({name:j.role&&j.role.name||'role',model:(j.role&&j.role.model&&j.role.model.modelID)||'',sid:j.sid||'',err:j.err||'',color:j.role&&j.role.color||'',icon:j.role&&j.role.icon||'bot',subagent:O.mmRoleSubagent(j.role),result:j.result||''}));
   const phase=r.phase||'plan';
   const statusOf=j=>{
-    if(!j.sid)return 'err';
+    // subagent mode: roles live inside the main session, so there is no child session id
+    if(!j.sid){
+      if(j.state==='done')return 'done';
+      if(j.state==='stopped')return 'stopped';
+      if(j.state==='error'||j.err)return 'err';
+      if(j.state==='running')return 'busy';
+      return 'queued';
+    }
     const st=S.status[j.sid];
     if(!st||st.type==='idle')return 'done';
     return 'busy';
-  };
-  // Per-role statistics: duration and tokens of the role's session
+  };  // Per-role statistics: duration and tokens of the role's session
   const statsOf=j=>{
     if(!j.sid)return null;
     const st=S.status[j.sid];
@@ -518,7 +546,9 @@ O.openMmGraph=async()=>{
     g.nodes.forEach((n,i)=>{
       const isLead=n.kind==='lead';
       const x=isLead?12:MM_NODE_W+MM_GAP_X+12,y=isLead?12:MM_NODE_H*i+MM_GAP_Y+12;
-      const gEl=mk('g',{class:'mm-graph-node '+n.kind+' '+n.status+(n.sid?' clickable':''),transform:'translate('+x+','+y+')'+(n.color?'':'')});
+      const job=(O.mm.run&&O.mm.run.jobs||[]).find(j=>j.role&&j.role.name===n.name);
+      const canAct=!isLead&&!!job;
+      const gEl=mk('g',{class:'mm-graph-node '+n.kind+' '+n.status+(canAct?' clickable':''),transform:'translate('+x+','+y+')'});
       if(n.color)gEl.setAttribute('style','--role-color:'+n.color);
       gEl.append(mk('rect',{x:0,y:0,width:MM_NODE_W,height:MM_NODE_H,rx:12,class:'mm-graph-box'}));
       const t1=mk('text',{x:MM_NODE_W/2,y:20,class:'mm-graph-title','text-anchor':'middle'});
@@ -528,21 +558,22 @@ O.openMmGraph=async()=>{
       t2.textContent=n.subagent?('@'+n.subagent):(n.model||(isLead?O.tr('main model','главная модель'):'—'));
       gEl.append(t2);
       const t3=mk('text',{x:MM_NODE_W/2,y:48,class:'mm-graph-state','text-anchor':'middle'});
-      t3.textContent=n.status==='busy'?O.tr('working','работает'):n.status==='done'?O.tr('done','готово'):O.tr('failed','ошибка');
+      t3.textContent=n.status==='busy'?O.tr('working','работает'):n.status==='done'?O.tr('done','готово'):n.status==='queued'?O.tr('queued','в очереди'):n.status==='stopped'?O.tr('stopped','остановлена'):O.tr('failed','ошибка');
       gEl.append(t3);
-      if(n.sid){
+      if(canAct){
         const hint=mk('text',{x:MM_NODE_W-10,y:14,class:'mm-graph-open','text-anchor':'end'});
-        hint.textContent='>';
+        hint.textContent='⋯';
         gEl.append(hint);
-        let opened=false;
-        const openIt=e=>{
-          if(opened)return;opened=true;
+        let acted=false;
+        const act=e=>{
+          if(acted)return;acted=true;
           if(e&&e.stopPropagation)e.stopPropagation();
+          // In subagent mode there is no separate session to open: the tap stops the role.
           try{if(sheet)sheet.close()}catch(_){}
-          if(O.openChild)O.openChild(n.sid);
+          O.mmRoleActions&&O.mmRoleActions(job);
         };
-        gEl.addEventListener('click',openIt);
-        gEl.addEventListener('pointerup',e=>{if(e&&e.pointerType!=='mouse')openIt(e)});
+        gEl.addEventListener('click',act);
+        gEl.addEventListener('pointerup',e=>{if(e&&e.pointerType!=='mouse')act(e)});
       }
       svg.append(gEl);
     });
@@ -574,8 +605,9 @@ O.openMmGraph=async()=>{
     body.append(h('div',{class:'mm-graph-legend'},
       h('span',null,h('i',{class:'lg busy'}),O.tr('working','работает')),
       h('span',null,h('i',{class:'lg done'}),O.tr('done','готово')),
+      h('span',null,h('i',{class:'lg queued'}),O.tr('queued','в очереди')),
       h('span',null,h('i',{class:'lg err'}),O.tr('failed','ошибка')),
-      h('span',null,O.tr('tap a role to open its session','нажмите на роль, чтобы открыть её сессию'))));
+      h('span',null,O.tr('tap a role for actions','нажмите на роль для действий'))));
   };
   draw();
   sheet=O.sheet(O.tr('Multimodal agent graph','Граф мультимодального агента'),body,{full:true});
@@ -679,11 +711,23 @@ O.mmSend=async(text,parts)=>{
       const planWithRoles=plan.map(t=>({role:t.role,task:t.task}));
       const delegInstr=PLAN_TAG+'\n'+delegation;
       await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:delegInstr}]});
+      // live tracking of the running subagent while the lead works
+      const tracker=setInterval(async()=>{
+        try{
+          const running=await mmRunningTask(sid);
+          if(running){
+            const j=run.jobs.find(x=>x.subagent===running);
+            if(j&&j.state!=='done'){j.state='running';j.started=j.started||Date.now();emit()}
+          }
+        }catch(e){}
+      },1500);
       await mmWaitIdle([sid],run,1800000);
+      clearInterval(tracker);
       if(run.abort)throw new Error('aborted');
       // collect per-subagent results from the session messages
       const collected=await mmCollectTasks(sid,run);
-      run.jobs.forEach(j=>{const c=collected[j.subagent||j.role.name];if(c){j.result=c;j.state='done'}});
+      run.jobs.forEach(j=>{const c=collected[j.subagent||j.role.name];if(c){j.result=c;j.state='done'}
+        else if(j.state!=='stopped'){j.state='error';j.err=O.tr('no result','нет ответа')}});
       emit();
       // final synthesis
       run.phase='synth';run.phaseStart=Date.now();run.currentRole=O.tr('Synthesis','Синтез');emit();

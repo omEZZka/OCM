@@ -396,14 +396,16 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
     h('button',{class:'chip',onclick:()=>O.mmPause&&O.mmPause()},O.icon(r.paused?'play':'pause'),r.paused?O.tr('Resume','Продолжить'):O.tr('Pause','Пауза')),
     h('button',{class:'chip',onclick:()=>O.mmStop&&O.mmStop()},O.icon('stop'),O.tr('Stop all','Стоп')));
   (r.jobs||[]).forEach(j=>{
-    if(!j.sid&&!j.role)return;
-    const done=j.state==='done'||(!S.status[j.sid]||S.status[j.sid].type==='idle');
+    if(!j.role)return;
+    const st=j.state||'';
+    const done=st==='done'||(j.sid&&(!S.status[j.sid]||S.status[j.sid].type==='idle'));
     const cur=r.currentRole&&(j.role.name===r.currentRole||j.role.name+' (retry)'===r.currentRole);
-    const col=j.role&&j.role.color;
+    const col=j.role.color;
+    const ic=st==='stopped'?'stop':(j.role.icon||(done?'check':cur?'refresh':'dot'));
     ctrl.append(h('button',{class:'chip',title:O.tr('Role actions','Действия с ролью'),
       style:(cur?'border-color:var(--acc);color:var(--acc)':'')+(col?(';--role-color:'+col):''),
       onclick:()=>O.mmRoleActions&&O.mmRoleActions(j)},
-      O.icon((j.role&&j.role.icon)||(done?'check':cur?'refresh':'dot')),(j.role.name||'')));
+      O.icon(ic),(j.role.name||'')));
   });
   mmProgressEl.append(ctrl);
   if(!r.paused){

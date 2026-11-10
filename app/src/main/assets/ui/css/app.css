@@ -2665,3 +2665,9 @@ a:hover {
 .mm-graph-stat .n{color:var(--fg);font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mm-graph-stat .d{font-variant-numeric:tabular-nums}
 .mm-graph-stat .s{opacity:.7}
+
+.mm-graph-node.stopped .mm-graph-box{stroke:var(--mut);fill:rgba(142,142,147,0.10)}
+.mm-graph-node.stopped .mm-graph-state{fill:var(--mut)}
+.mm-graph-node.queued .mm-graph-box{stroke:var(--mut);stroke-dasharray:4 3;fill:rgba(142,142,147,0.06)}
+.mm-graph-node.queued .mm-graph-state{fill:var(--mut)}
+.mm-graph-legend .lg.queued{background:var(--mut);opacity:.6}
