@@ -24,6 +24,7 @@ class ActionReceiver : BroadcastReceiver() {
         val notifId = intent.getIntExtra("notif_id", 0)
         val pending = goAsync()
         Thread {
+            var ok = false
             try {
                 val port = ServerState.port
                 if (port > 0) {
@@ -32,10 +33,15 @@ class ActionReceiver : BroadcastReceiver() {
                         "permission_reject" -> post(port, "/permission/$pid/reply", """{"reply":"reject"}""")
                         "abort" -> post(port, "/session/$sid/abort", "{}")
                     }
+                    ok = true
                 }
-                if (notifId != 0) NotificationManagerCompat.from(context).cancel(notifId)
             } catch (_: Exception) {
             } finally {
+                // Keep the notification when the server was not reachable, so the action can be
+                // retried instead of silently disappearing.
+                if (ok && notifId != 0) {
+                    try { NotificationManagerCompat.from(context).cancel(notifId) } catch (_: Exception) {}
+                }
                 pending.finish()
             }
         }.start()
@@ -47,6 +53,10 @@ class ActionReceiver : BroadcastReceiver() {
             .header("Authorization", Runtime.basic(ServerState.password))
             .post(body.toRequestBody("application/json".toMediaType()))
             .build()
-        http.newCall(req).execute().use { }
+        http.newCall(req).execute().use { r ->
+            // A 4xx/5xx (stale permission id, server still booting) is not a success: surface it so
+            // the notification is kept instead of being dismissed as if the action had worked.
+            if (!r.isSuccessful) throw IllegalStateException("HTTP ${r.code}")
+        }
     }
 }

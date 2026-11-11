@@ -34,27 +34,40 @@ object Backup {
         cipher.init(Cipher.ENCRYPT_MODE, deriveKey(password, salt), GCMParameterSpec(128, iv))
         val skip = setOf("node_modules", ".cache", "tmp", "bin", "rootfs", "proot-tmp")
         var total = 0L
-        FileOutputStream(out).use { fos ->
-            fos.write("OCMB1".toByteArray())
-            fos.write(salt)
-            fos.write(iv)
-            CipherOutputStream(fos, cipher).use { cos ->
-                ZipOutputStream(cos).use { zos ->
-                    home.walkTopDown().forEach { f ->
-                        if (!f.isFile) return@forEach
-                        val rel = f.relativeTo(home).path
-                        if (rel.split('/').any { it in skip }) return@forEach
-                        if (f.length() > 50_000_000L || total > 200_000_000L) return@forEach
-                        total += f.length()
-                        try {
-                            zos.putNextEntry(ZipEntry(rel))
-                            f.inputStream().use { it.copyTo(zos) }
-                            zos.closeEntry()
-                        } catch (_: Exception) {}
+        // Write next to the target and swap it in only on success: a crash or a full disk must not
+        // leave a truncated .ocmbak that later looks like a usable backup.
+        val tmp = File(out.parentFile, out.name + ".part")
+        try {
+            FileOutputStream(tmp).use { fos ->
+                fos.write("OCMB1".toByteArray())
+                fos.write(salt)
+                fos.write(iv)
+                CipherOutputStream(fos, cipher).use { cos ->
+                    ZipOutputStream(cos).use { zos ->
+                        home.walkTopDown().forEach { f ->
+                            if (!f.isFile) return@forEach
+                            val rel = f.relativeTo(home).path
+                            if (rel.split('/').any { it in skip }) return@forEach
+                            if (f.length() > 50_000_000L || total > 200_000_000L) return@forEach
+                            total += f.length()
+                            try {
+                                zos.putNextEntry(ZipEntry(rel))
+                                f.inputStream().use { it.copyTo(zos) }
+                                zos.closeEntry()
+                            } catch (_: Exception) {}
+                        }
                     }
                 }
             }
+        } catch (e: Throwable) {
+            tmp.delete()
+            throw e
         }
+        if (!tmp.renameTo(out)) {
+            tmp.copyTo(out, overwrite = true)
+            tmp.delete()
+        }
+        out.setLastModified(System.currentTimeMillis())
     }
 
     fun restoreZip(src: File, home: File, password: String) {

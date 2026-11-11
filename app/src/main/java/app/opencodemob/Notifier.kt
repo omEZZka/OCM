@@ -55,7 +55,9 @@ object Notifier {
     fun event(c: Context, kind: String, title: String, text: String, sessionId: String = "", sessionTitle: String = "", permissionId: String = "", questionId: String = "") {
         if (!Prefs.flag(c, "snd_$kind")) return
         beep(kind)
-        val id = 10 + (kind.hashCode() and 0x7fffffff) % 1000
+        // One notification per kind AND session: a single id per kind meant a permission prompt in
+        // another session silently replaced the one the user had not answered yet.
+        val id = 10 + (((kind + "#" + sessionId).hashCode() and 0x7fffffff) % 100_000)
         val prefix = if (kind == ACTION) {
             when {
                 questionId.isNotEmpty() -> "@ "

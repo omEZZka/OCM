@@ -1,17 +1,20 @@
 (function(){
 const O=window.OCM;
 const pend=new Map();let seq=0;const L={};
-O.on=(n,f)=>{(L[n]=L[n]||[]).push(f)};
+O.on=(n,f)=>{(L[n]=L[n]||[]).push(f);return()=>O.off(n,f)};
+O.off=(n,f)=>{const a=L[n];if(!a)return;const i=a.indexOf(f);if(i>=0)a.splice(i,1)};
 window.OCEvent=(n,d)=>{if(n==='http'){finishHttp(d);return}(L[n]||[]).forEach(f=>{try{f(d)}catch(e){console.error(n,e)}})};
 O.dir='';
 // api(method, path, body, {dir:false|string, timeout, raw})
 O.api=(method,path,body,opt)=>new Promise((res,rej)=>{opt=opt||{};
   const id='r'+(++seq)+'_'+Date.now().toString(36);let p=path;
   if(opt.dir!==false){const d=typeof opt.dir==='string'?opt.dir:O.dir;if(d)p+=(p.includes('?')?'&':'?')+'directory='+encodeURIComponent(d)}
-  pend.set(id,{res,rej,raw:opt.raw});
-  try{OC.http(id,method,p,body==null?'':JSON.stringify(body))}catch(e){pend.delete(id);rej(e);return}
-  setTimeout(()=>{if(pend.has(id)){pend.delete(id);rej(Object.assign(new Error('timeout'),{net:true}))}},opt.timeout||60000)});
-async function finishHttp(d){const p=pend.get(d.id);if(!p)return;pend.delete(d.id);
+  // the watchdog is cleared as soon as the response lands; otherwise every request kept a live
+  // timer for its full timeout, which accumulates over a long session
+  const timer=setTimeout(()=>{if(pend.has(id)){pend.delete(id);rej(Object.assign(new Error('timeout'),{net:true}))}},opt.timeout||60000);
+  pend.set(id,{res,rej,raw:opt.raw,timer});
+  try{OC.http(id,method,p,body==null?'':JSON.stringify(body))}catch(e){clearTimeout(timer);pend.delete(id);rej(e);return}});
+async function finishHttp(d){const p=pend.get(d.id);if(!p)return;pend.delete(d.id);clearTimeout(p.timer);
   if(d.err){p.rej(Object.assign(new Error(d.err),{status:0,net:true}));return}
   let text=d.body||'';
   if(d.file){try{text=await(await fetch('/_resp/'+d.id)).text()}catch(e){p.rej(e);return}finally{try{OC.drop(d.id)}catch{}}}

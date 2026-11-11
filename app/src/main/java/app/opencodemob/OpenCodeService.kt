@@ -90,19 +90,29 @@ class OpenCodeService : Service() {
         }
     }
 
+    @Volatile private var watcherGen = 0
+    @Volatile private var watcherConn: HttpURLConnection? = null
+
     private fun startWatcher(port: Int, pw: String) {
+        // Interrupting the previous thread does not unblock a socket read, so an old watcher could
+        // survive a restart and keep sending duplicate notifications. Bump a generation and close
+        // its connection instead.
+        val gen = ++watcherGen
+        try { watcherConn?.disconnect() } catch (_: Exception) {}
         watcher?.interrupt()
         watcher = thread(isDaemon = true) {
-            while (!stopping && ServerState.ready) {
+            while (!stopping && ServerState.ready && gen == watcherGen) {
                 try {
                     val c = URL("http://127.0.0.1:$port/global/event").openConnection() as HttpURLConnection
                     c.setRequestProperty("Authorization", Runtime.basic(pw))
                     c.setRequestProperty("Accept", "text/event-stream")
                     c.connectTimeout = 3000; c.readTimeout = 0
-                    c.inputStream.bufferedReader().forEachLine { l -> if (l.startsWith("data:")) onEvent(l.substring(5).trim()) }
+                    watcherConn = c
+                    c.inputStream.bufferedReader().forEachLine { l -> if (l.startsWith("data:") && gen == watcherGen) onEvent(l.substring(5).trim()) }
                 } catch (_: Exception) {}
                 try { Thread.sleep(2000) } catch (_: InterruptedException) { return@thread }
             }
+            if (gen == watcherGen) try { watcherConn?.disconnect() } catch (_: Exception) {}
         }
     }
 
@@ -110,19 +120,23 @@ class OpenCodeService : Service() {
 
     /** Best-effort human title for a session, used in notifications. */
     private val titleCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private fun cleanTitle(t: String): String =
+        if (t.isEmpty() || Regex("(?i)^(New session|Child session|Новая сессия)").containsMatchIn(t)) "" else t
     private fun sessionTitle(sid: String): String {
         if (sid.isEmpty()) return ""
         titleCache[sid]?.let { return it }
+        if (titleCache.size > 200) titleCache.clear() // unbounded growth over weeks of use
         val t = try {
             val port = ServerState.port
             if (port <= 0) return ""
             val c = URL("http://127.0.0.1:$port/session/$sid").openConnection() as HttpURLConnection
             c.setRequestProperty("Authorization", Runtime.basic(ServerState.password))
-            c.connectTimeout = 2500; c.readTimeout = 2500
+            // Short: this runs on the SSE watcher thread, so a slow lookup stalls every other event.
+            c.connectTimeout = 1200; c.readTimeout = 1200
             val txt = c.inputStream.bufferedReader().use { it.readText() }
             JSONObject(txt).optString("title")
         } catch (_: Exception) { "" }
-        val clean = if (t.isEmpty() || Regex("(?i)^(New session|Child session|Новая сессия)").containsMatchIn(t)) "" else t
+        val clean = cleanTitle(t)
         if (clean.isNotEmpty()) titleCache[sid] = clean
         return clean
     }
@@ -168,6 +182,8 @@ class OpenCodeService : Service() {
     override fun onDestroy() {
         stopping = true
         ServerState.ready = false
+        watcherGen++
+        try { watcherConn?.disconnect() } catch (_: Exception) {}
         watcher?.interrupt()
         proc?.destroy()
         try { ProxyShim.stop() } catch (_: Exception) {}

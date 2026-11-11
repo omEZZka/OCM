@@ -39,7 +39,7 @@ O.chatInit=root=>{
   bus.on('msg',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd();O.runHook('onReceive',{message:m,sessionID:sid})});
   bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd()});
   bus.on('msg-removed',(sid,id)=>{const e=msgEls.get(id);if(e){e.remove();msgEls.delete(id)}});
-  bus.on('part-removed',(sid,m,pid)=>{const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
+  bus.on('part-removed',(sid,m,pid)=>{dropTimer(pid);const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
   bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend()}if(O.mm.run)renderMmProgress()});
   bus.on('perm',renderDock);bus.on('todo',sid=>{if(sid===S.sid)renderTodos()});
   bus.on('session',()=>{const k=revisionKey();if(k!==revKey)renderAll();else renderRevert()});
@@ -107,6 +107,9 @@ const pinBottom=ms=>{
 const revisionKey=()=>{const s=cur();return s&&s.revert?s.revert.messageID:''};
 
 function renderAll(){
+  // drop pending per-part render jobs: their DOM nodes are about to be replaced anyway
+  for(const t of timers.values())clearTimeout(t);
+  timers.clear();
   msgsEl.innerHTML='';msgEls.clear();partEls.clear();revKey=revisionKey();
   const list=S.sid?O.visibleMsgs(S.sid):[];
   if(draftSid!==S.sid){draftSid=S.sid;clearTimeout(draftTimer);ta.value=S.sid?(O.getDraft(S.sid)||''):'';autosize();updateSend()}
@@ -231,6 +234,7 @@ function render(el){
 function renderR(el,b){const p=el._p;const t=p.text||p.reasoning||p.thinking||'';if(b._t===t)return;b._t=t;O.mdInto(b,t);
   const run=!(p.time&&p.time.end);el._d.firstChild.textContent=run?'Думает…':'Размышления'}
 function sched(id,fn){if(timers.has(id))return;timers.set(id,setTimeout(()=>{timers.delete(id);fn();if(stick)scrollEnd()},100))}
+function dropTimer(id){const t=timers.get(id);if(t){clearTimeout(t);timers.delete(id)}}
 
 function metaUpdate(el,m){
   const meta=el.lastChild;const i=m.info;meta.textContent='';

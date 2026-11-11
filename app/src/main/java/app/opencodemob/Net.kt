@@ -45,6 +45,13 @@ object Net {
                     if (bytes.size < 200_000) o.put("body", String(bytes, Charsets.UTF_8))
                     else {
                         val dir = File(c.cacheDir, "resp").apply { mkdirs() }
+                        // Large payloads are spooled to disk and picked up by the UI via /_resp/<id>.
+                        // If the UI navigates away first, the file is never dropped: prune stale
+                        // ones here, whenever we write a new spool file.
+                        val cutoff = System.currentTimeMillis() - 10 * 60_000L
+                        dir.listFiles()?.forEach { f ->
+                            if (f.isFile && f.lastModified() < cutoff) try { f.delete() } catch (_: Exception) {}
+                        }
                         File(dir, id).writeBytes(bytes)
                         o.put("file", true)
                     }
@@ -60,24 +67,37 @@ object Net {
     fun sseStart(emit: (String, JSONObject) -> Unit) {
         sseStop()
         val g = ++sseGen
-        pool.execute {
-            while (g == sseGen) {
-                try {
-                    val req = Request.Builder().url("http://${base()}/global/event")
-                        .header("Authorization", auth()).header("Accept", "text/event-stream").build()
-                    val call = stream.newCall(req); sseCall = call
-                    call.execute().use { r ->
-                        if (!r.isSuccessful) throw IOException("sse ${r.code}")
-                        emit("sse", JSONObject().put("t", "open"))
-                        val src = r.body!!.source()
-                        while (g == sseGen) {
-                            val line = src.readUtf8Line() ?: break
-                            if (line.startsWith("data:")) emit("sse", JSONObject().put("t", "data").put("d", line.substring(5).trim()))
-                        }
+        pool.execute { sseLoop(g, emit) }
+    }
+
+    private fun sseLoop(g: Int, emit: (String, JSONObject) -> Unit) {
+        var backoff = 700L
+        while (g == sseGen) {
+            var connected = false
+            try {
+                val req = Request.Builder().url("http://${base()}/global/event")
+                    .header("Authorization", auth()).header("Accept", "text/event-stream").build()
+                val call = stream.newCall(req); sseCall = call
+                call.execute().use { r ->
+                    if (!r.isSuccessful) throw IOException("sse ${r.code}")
+                    connected = true
+                    backoff = 700L
+                    emit("sse", JSONObject().put("t", "open"))
+                    val src = r.body!!.source()
+                    while (g == sseGen) {
+                        val line = src.readUtf8Line() ?: break
+                        if (line.startsWith("data:")) emit("sse", JSONObject().put("t", "data").put("d", line.substring(5).trim()))
                     }
-                } catch (_: Exception) {}
-                if (g == sseGen) { emit("sse", JSONObject().put("t", "close")); try { Thread.sleep(1500) } catch (_: InterruptedException) {} }
-            }
+                }
+            } catch (_: InterruptedException) {
+                return
+            } catch (_: Exception) {}
+            if (g != sseGen) return
+            emit("sse", JSONObject().put("t", "close"))
+            // The server may still be booting (first launch after an install): back off instead of
+            // hammering it every 1.5s. Reset as soon as a stream is actually established.
+            try { Thread.sleep(if (connected) 700L else backoff) } catch (_: InterruptedException) { return }
+            if (!connected) backoff = (backoff * 2).coerceAtMost(10_000L)
         }
     }
 

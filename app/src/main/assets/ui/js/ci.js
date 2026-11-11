@@ -15,10 +15,15 @@ O.ciProviders=()=>Object.keys(PROVIDERS).map(id=>Object.assign({id},PROVIDERS[id
 O.ciState=()=>{try{return JSON.parse(OC.ciState())}catch{return{}}};
 O.ciRequest=(provider,method,path,body)=>new Promise((resolve,reject)=>{
   const id='ci_'+Date.now()+'_'+Math.random().toString(36).slice(2);
-  const fn=e=>{if(!e||e.id!==id)return;O.offCi&&O.offCi(fn);if(e.error)reject(new Error(e.error));else if(e.status>=200&&e.status<300)resolve(e.body||{});else reject(new Error(e.body&&e.body.message||('HTTP '+e.status)))};
+  const drop=()=>{const list=O.onCi||[];const i=list.indexOf(fn);if(i>=0)list.splice(i,1)};
+  // clear the watchdog on settle: it used to stay armed for 45s after every successful call
+  const timer=setTimeout(()=>{drop();reject(new Error('timeout'))},45000);
+  const fn=e=>{if(!e||e.id!==id)return;drop();clearTimeout(timer);
+    if(e.error)reject(new Error(e.error));
+    else if(e.status>=200&&e.status<300)resolve(e.body||{});
+    else reject(new Error(e.body&&e.body.message||('HTTP '+e.status)))};
   O.onCi=O.onCi||[];O.onCi.push(fn);
-  try{OC.ciRequest(id,provider,method,path,body?JSON.stringify(body):'')}catch(e){reject(e)}
-  setTimeout(()=>{const i=(O.onCi||[]).indexOf(fn);if(i>=0)(O.onCi||[]).splice(i,1);reject(new Error('timeout'))},45000);
+  try{OC.ciRequest(id,provider,method,path,body?JSON.stringify(body):'')}catch(e){drop();clearTimeout(timer);reject(e)}
 });
 O.ciToken=async(provider)=>{try{const r=O.ciState();return r[provider]&&r[provider].connected}catch{return false}};
 

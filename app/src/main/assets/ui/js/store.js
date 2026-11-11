@@ -1,15 +1,51 @@
 (function(){
 const O=window.OCM,api=O.api;
-const bus=O.bus={h:{},on(n,f){(this.h[n]=this.h[n]||[]).push(f)},emit(n,...a){(this.h[n]||[]).forEach(f=>{try{f(...a)}catch(e){console.error(n,e)}})}};
+const bus=O.bus={h:{},on(n,f){(this.h[n]=this.h[n]||[]).push(f);return()=>this.off(n,f)},
+  off(n,f){const a=this.h[n];if(!a)return;const i=a.indexOf(f);if(i>=0)a.splice(i,1)},
+  emit(n,...a){(this.h[n]||[]).slice().forEach(f=>{try{f(...a)}catch(e){console.error(n,e)}})}};
 const S=O.S={dir:'',sessions:[],sid:null,status:{},perms:[],questions:[],todos:{},diffs:{},
   providers:[],agents:[],commands:[],cfg:{},agent:'build',model:null,variant:null,mcp:{},lsp:[],branch:'',
   offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false},O.store.get('opts',{}))};
 O.saveOpts=()=>{O.store.set('opts',S.opts);document.documentElement.dataset.theme=S.opts.theme;document.documentElement.style.setProperty('--fs',S.opts.fs+'px')};
 
 // ---- IndexedDB key/value cache (offline reading) ----
-let dbp;const db=()=>dbp||(dbp=new Promise((res,rej)=>{const r=indexedDB.open('ocm',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}));
-O.kv={async get(k){try{const d=await db();return await new Promise(res=>{const q=d.transaction('kv').objectStore('kv').get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>res(undefined)})}catch{return undefined}},
-  async set(k,v){try{const d=await db();await new Promise(res=>{const t=d.transaction('kv','readwrite');t.objectStore('kv').put(v,k);t.oncomplete=res;t.onerror=res;t.onabort=res})}catch{}}};
+let dbp;
+const db=()=>{
+  if(dbp)return dbp;
+  dbp=new Promise((res,rej)=>{
+    let r;
+    try{r=indexedDB.open('ocm',1)}catch(e){rej(e);return}
+    r.onupgradeneeded=()=>{try{if(!r.result.objectStoreNames.contains('kv'))r.result.createObjectStore('kv')}catch(_){}};
+    r.onsuccess=()=>{
+      const d=r.result;
+      // a second tab / a profile switch can close the connection under us: reopen on demand
+      d.onclose=()=>{dbp=null};
+      d.onversionchange=()=>{try{d.close()}catch(_){}dbp=null};
+      res(d);
+    };
+    r.onerror=()=>rej(r.error);
+  }).catch(e=>{dbp=null;throw e});
+  return dbp;
+};
+const tx=(mode,fn)=>db().then(d=>new Promise(res=>{
+  let t;try{t=d.transaction('kv',mode)}catch(e){dbp=null;res(undefined);return}
+  try{fn(t.objectStore('kv'),res,t)}catch(e){res(undefined)}
+}));
+O.kv={
+  async get(k){return tx('readonly',(s,res)=>{const q=s.get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>res(undefined)}).catch(()=>undefined)},
+  async set(k,v){return tx('readwrite',(s,res,t)=>{t.oncomplete=()=>res(true);t.onerror=()=>res(false);t.onabort=()=>res(false);try{s.put(v,k)}catch(e){res(false)}}).catch(()=>false)},
+  async del(k){return tx('readwrite',(s,res,t)=>{t.oncomplete=()=>res(true);t.onerror=()=>res(false);try{s.delete(k)}catch(e){res(false)}}).catch(()=>false)},
+  async clear(){return tx('readwrite',(s,res,t)=>{t.oncomplete=()=>res(true);t.onerror=()=>res(false);try{s.clear()}catch(e){res(false)}}).catch(()=>false)}
+};
+
+// Some server builds send session.status as a plain string ("busy"/"idle") and others as an object.
+// Everything downstream reads `.type`, so normalise once here instead of in every consumer.
+const normStatus=v=>{
+  if(v==null)return{type:'idle'};
+  if(typeof v==='string')return{type:v};
+  if(typeof v==='object'){if(!v.type)v.type=(v.status&&typeof v.status==='string')?v.status:'busy';return v}
+  return{type:'idle'};
+};
 
 // ---- message store ----
 const M=new Map();
@@ -25,7 +61,29 @@ O.upsertPart=part=>{const s=O.msgs(part.sessionID);let m=s.idx.get(part.messageI
 O.visibleMsgs=sid=>{const s=O.msgs(sid),ses=S.sessions.find(x=>x.id===sid)||O.child(sid),rv=ses&&ses.revert&&ses.revert.messageID;
   return rv?s.list.filter(m=>m.info.id<rv):s.list};
 O.child=sid=>S.childSessions&&S.childSessions[sid];
-const saveMsgs=O.debounce(sid=>{const l=O.msgs(sid).list.slice(-250).map(m=>({info:m.info,parts:m.parts}));O.kv.set('msgs:'+sid,l)},2000);
+// Per-session debounce: a single shared timer used to swallow the writes of every other
+// session that changed within the same 2s window, so switching session quickly lost data.
+const saveTimers=new Map();
+const writeMsgs=sid=>{const l=O.msgs(sid).list.slice(-250).map(m=>({info:m.info,parts:m.parts}));O.kv.set('msgs:'+sid,l)};
+const saveMsgs=sid=>{
+  if(!sid)return;
+  const prev=saveTimers.get(sid);if(prev)clearTimeout(prev);
+  saveTimers.set(sid,setTimeout(()=>{
+    saveTimers.delete(sid);
+    writeMsgs(sid);
+  },2000));
+};
+// Frees in-memory message stores of sessions nobody looks at any more (long sessions, many children).
+O.dropMsgs=sid=>{if(!sid)return;const t=saveTimers.get(sid);if(t){clearTimeout(t);saveTimers.delete(sid)}M.delete(sid)};
+// Writes every pending (debounced) session now — used before dropping stores.
+const flushPending=()=>{for(const [k,t] of [...saveTimers]){clearTimeout(t);saveTimers.delete(k);try{writeMsgs(k)}catch(_){}}};
+const trimStore=()=>{if(M.size<=24)return;
+  const keep=new Set([S.sid].concat(S.sessions.slice(0,12).map(s=>s.id)).filter(Boolean));
+  for(const k of [...M.keys()]){if(M.size<=18)break;if(keep.has(k))continue;
+    // flush the pending debounce first, otherwise up to 2s of the newest messages are lost
+    if(saveTimers.has(k)){const t=saveTimers.get(k);clearTimeout(t);saveTimers.delete(k);try{writeMsgs(k)}catch(_){}}
+    M.delete(k)}
+};
 
 // ---- server events ----
 let liveSyncTimer=null;
@@ -46,24 +104,29 @@ O.syncSessionMessages=async(sid)=>{
 };
 O.startLiveSync=(sid)=>{
   if(liveSyncTimer)return;
+  let busy=false;
   liveSyncTimer=setInterval(async()=>{
-    if(!S.sid){O.stopLiveSync();return}
+    if(busy)return; // a slow status request used to overlap with the next tick
+    busy=true;
     try{
-      const stMap=await api('GET','/session/status',null,{timeout:4000});
-      if(stMap){
-        for(const k in stMap)S.status[k]=stMap[k];
-        if(!stMap[S.sid]||stMap[S.sid].type==='idle'){
-          S.status[S.sid]={type:'idle'};
-          bus.emit('status',S.sid);
-          O.stopLiveSync();
-          O.syncSessionMessages(S.sid);
-          return;
+      if(!S.sid){O.stopLiveSync();return}
+      try{
+        const stMap=await api('GET','/session/status',null,{timeout:4000});
+        if(stMap){
+          for(const k in stMap)S.status[k]=normStatus(stMap[k]);
+          if(!stMap[S.sid]||normStatus(stMap[S.sid]).type==='idle'){
+            S.status[S.sid]={type:'idle'};
+            bus.emit('status',S.sid);
+            O.stopLiveSync();
+            O.syncSessionMessages(S.sid);
+            return;
+          }
         }
-      }
-    }catch(_){}
-    const st=S.status[S.sid];
-    if(!st||st.type==='idle'){O.stopLiveSync();return}
-    O.syncSessionMessages(S.sid);
+      }catch(_){}
+      const st=S.status[S.sid];
+      if(!st||st.type==='idle'){O.stopLiveSync();return}
+      await O.syncSessionMessages(S.sid);
+    }finally{busy=false}
   },3000);
 };
 O.stopLiveSync=()=>{
@@ -80,11 +143,16 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
     if(i.parentID){(S.childSessions=S.childSessions||{})[i.id]=i;break}
     const k=S.sessions.findIndex(x=>x.id===i.id);if(k>=0)S.sessions[k]=i;else S.sessions.unshift(i);
     S.sessions.sort((a,b)=>b.time.updated-a.time.updated);bus.emit('sessions');if(i.id===S.sid)bus.emit('session');break}
-  case'session.deleted':S.sessions=S.sessions.filter(x=>x.id!==(p.info&&p.info.id));bus.emit('sessions');if(p.info&&p.info.id===S.sid){S.sid=null;bus.emit('open',null)}break;
-  case'session.status':
-    S.status[p.sessionID]=p.status;bus.emit('status',p.sessionID);
-    if(p.sessionID===S.sid&&p.status&&p.status.type!=='idle')O.startLiveSync(p.sessionID);
-    break;
+  case'session.deleted':{
+    const did=p.info&&p.info.id;
+    S.sessions=S.sessions.filter(x=>x.id!==did);
+    if(did){O.dropMsgs(did);try{O.kv.del('msgs:'+did)}catch(_){};if(S.childSessions)delete S.childSessions[did]}
+    bus.emit('sessions');if(did===S.sid){S.sid=null;O.stopLiveSync();bus.emit('open',null)}break}
+  case'session.status':{
+    const st=normStatus(p.status);
+    S.status[p.sessionID]=st;bus.emit('status',p.sessionID);
+    if(p.sessionID===S.sid&&st.type!=='idle')O.startLiveSync(p.sessionID);
+    break}
   case'session.idle':
     S.status[p.sessionID]={type:'idle'};bus.emit('status',p.sessionID);bus.emit('idle',p.sessionID);
     if(p.sessionID===S.sid){O.stopLiveSync();O.syncSessionMessages(p.sessionID)}
@@ -128,7 +196,24 @@ const normPerm=p=>({id:p.id,sessionID:p.sessionID,title:p.title||p.permission||p
 let upT=null;
 O.on('sse',d=>{if(d.t==='data')O.onServerEvent(d.d);else if(d.t==='open'){if(upT){clearTimeout(upT);upT=null}S.up=true;bus.emit('conn')}
   else if(d.t==='close'){S.up=false;if(!upT)upT=setTimeout(()=>{upT=null;if(!S.up)bus.emit('conn')},5000)}});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!S.up){try{OC.sseStart()}catch(e){}}});
+// Returning to the foreground: force a fresh stream. Throttled, because the native loop already
+// reconnects on its own and repeated restarts would cancel its backoff every time.
+let lastSseKick=0;
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){
+    // No point polling /session/status every 3s while the UI is not on screen: SSE keeps
+    // delivering events in the background, so nothing is missed.
+    O.stopLiveSync();
+    return;
+  }
+  if(!S.up){
+    const now=Date.now();
+    if(now-lastSseKick>=4000){lastSseKick=now;try{OC.sseStart()}catch(e){}}
+  }
+  // The status map may be stale after a long pause: let the poller verify, it stops itself
+  // on the first idle answer.
+  if(S.sid)O.startLiveSync(S.sid);
+});
 
 // ---- opencode account (Zen) status: known once checked, so hints never nag after a login ----
 O.checkAccount=async()=>{try{const r=await api('GET','/experimental/console/orgs',null,{timeout:10000});
@@ -307,14 +392,16 @@ O.loadSessions=async()=>{
   catch(e){const c=await O.kv.get('sessions:'+S.dir);if(c)remote=c;S.offline=true}
   const locals=O.localSessions();
   S.sessions=locals.concat(remote.filter(s=>!locals.some(x=>x.id===s.id)));
-  try{const st=await api('GET','/session/status');for(const k in st)S.status[k]=st[k]}catch{}
+  try{const st=await api('GET','/session/status');for(const k in st)S.status[k]=normStatus(st[k])}catch{}
   bus.emit('sessions')};
 O.loadPending=async()=>{
   try{const p=await api('GET','/permission');S.perms=(p||[]).map(normPerm)}catch{}
   try{const q=await api('GET','/question');S.questions=q||[]}catch{}
   bus.emit('perm')};
 O.openSession=async(sid,fresh)=>{
+  if(S.sid!==sid)O.stopLiveSync();
   S.sid=sid;O.store.set('sid.'+S.dir,sid);
+  trimStore();
   if(!sid){bus.emit('open',null);return}
   if(String(sid).startsWith('local_')){
     const s=O.msgs(sid);
@@ -343,6 +430,7 @@ O.openSession=async(sid,fresh)=>{
   if(fresh)return;
   const prevCount=s.list.length,prevLast=s.list.length?s.list[s.list.length-1].info.id:'';
   try{const arr=await api('GET','/session/'+sid+'/message',null,{timeout:120000});
+    if(S.sid!==sid)return; // the user switched away while the request was in flight
     s.list=[];s.idx=new Map();for(const m of arr){const x={info:m.info,parts:m.parts};s.list.push(x);s.idx.set(m.info.id,x)}
     if(!sesSaved){
       const lastRemote=[...s.list].reverse().find(x=>x.info&&x.info.providerID&&x.info.modelID);
@@ -363,7 +451,13 @@ O.newSession=async()=>{const s=await api('POST','/session',{});if(!S.sessions.so
 O.setDir=async(dir)=>{
   S.dir=dir;O.dir=dir;O.store.set('dir',dir);
   const rec=O.store.get('recent',[]).filter(x=>x!==dir);rec.unshift(dir);O.store.set('recent',rec.slice(0,12));
-  S.sessions=[];S.sid=null;S.perms=[];S.questions=[];S.diffs={};S.todos={};bus.emit('dir');
+  S.sessions=[];S.sid=null;S.perms=[];S.questions=[];S.diffs={};S.todos={};
+  O.stopLiveSync();
+  flushPending();
+  // Every in-memory message store belongs to the previous directory: keeping them wastes RAM and
+  // could mix messages between projects when ids collide.
+  for(const k of [...M.keys()])O.dropMsgs(k);
+  bus.emit('dir');
   await Promise.all([O.loadMeta(),O.loadSessions()]);
   const last=O.store.get('sid.'+dir);const pick=S.sessions.find(x=>x.id===last)||S.sessions[0];
   await O.openSession(pick?pick.id:null);bus.emit('files')};

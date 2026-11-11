@@ -71,22 +71,28 @@ let tt;O.toast=(m,ms)=>{let e=O.$('#toast');if(!e){e=h('div',{id:'toast'});docum
 const stack=[];O.sheets=stack;
 O.sheet=(title,body,opts)=>{opts=opts||{};
   const api={};
-  api.close=()=>{if(!api.root.isConnected)return;api.root.classList.remove('on');setTimeout(()=>{if(api.root.isConnected)api.root.remove()},260);const i=stack.indexOf(api);if(i>=0)stack.splice(i,1);opts.onClose&&opts.onClose()};
+  let closed=false;
+  api.close=()=>{if(closed)return;closed=true;api.root.classList.remove('on');
+    setTimeout(()=>{if(api.root.isConnected)api.root.remove()},260);
+    const i=stack.indexOf(api);if(i>=0)stack.splice(i,1);
+    // onClose used to run again on a second close() (back gesture + button tap), which
+    // unsubscribed/redrew things twice
+    try{opts.onClose&&opts.onClose()}catch(e){console.error('sheet onClose',e)}};
   
   const handle=(!opts.drawer&&!opts.full)?h('div',{class:'sh-drag-handle'}):null;
   const header=opts.hud
     ?h('div',{class:'sh-header-row'},
-        h('button',{class:'sh-close-btn',onclick:api.close},O.icon('x')),
+        h('button',{class:'sh-close-btn',onclick:()=>api.close()},O.icon('x')),
         h('span',{class:'sh-title'},title),
         opts.actions||h('span',{style:{width:'32px'}}))
     :h('div',{class:'sh-h'},
-        h('button',{class:'ibtn',onclick:api.close},O.icon(opts.drawer?'x':'chevL')),
+        h('button',{class:'ibtn',onclick:()=>api.close()},O.icon(opts.drawer?'x':'chevL')),
         h('b',{class:'grow'},title),
         opts.actions||null);
 
   const box=h('div',{class:'sheet'+(opts.full?' full':'')+(opts.drawer?' drawer':'')},
     handle,header,h('div',{class:'sh-b'},body));
-  const back=h('div',{class:'sh-back',onclick:api.close});
+  const back=h('div',{class:'sh-back',onclick:()=>api.close()});
   api.root=h('div',{class:'sh-root'},back,box);
   api.box=box;api.body=box.querySelector('.sh-b');
   document.body.append(api.root);stack.push(api);

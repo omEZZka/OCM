@@ -336,6 +336,9 @@ O.mmRoleEditor=(r,done,opts)=>{
 // ---- orchestration ----
 O.mm={run:null};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// `/session/status` returns a string on some server builds and an object with `.type` on others.
+const statusType=x=>typeof x==='string'?x:(x&&x.type)||'';
+const statusIs=(x,t)=>statusType(x)===t;
 const PLAN_TAG='[МУЛЬТИМОДАЛЬНЫЙ РЕЖИМ]';
 const fmtClock=ms=>{const d=new Date(ms);const p=n=>String(n).padStart(2,'0');return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())};
 
@@ -349,7 +352,9 @@ async function mmWaitIdle(sids,run,timeoutMs){
       const st=await api('GET','/session/status',null,{timeout:6000});
       for(const id of [...pending]){
         if(run.roleAborts&&run.roleAborts.has(id)){try{await api('POST','/session/'+id+'/abort',{})}catch(e){};pending.delete(id);continue}
-        const x=st[id];if(!x||x.type==='idle'||x.type==='error')pending.delete(id)}
+        // server builds differ: status may be a string or an object with `.type`
+        const t=statusType(st[id]);
+        if(!t||t==='idle'||t==='error')pending.delete(id)}
       if(!pending.size)return;
     }catch(e){}
     await sleep(2500);
@@ -471,7 +476,9 @@ O.mmExportReport=()=>{
 O.mmRoleActions=job=>{
   if(!job)return;
   const name=job.role&&job.role.name||O.tr('role','роль');
-  const done=!job.sid||!S.status[job.sid]||S.status[job.sid].type==='idle';
+  // A job without a session id (subagent mode) lives inside the main session: its liveness comes
+  // from job.state, not from S.status, otherwise the "stop" button was always disabled.
+  const done=job.sid?(!S.status[job.sid]||S.status[job.sid].type==='idle'):!(job.state==='running'||job.state==='queued');
   const canOpen=!!job.sid;
   const body=h('div',null,
     h('div',{class:'note'},O.tr('Role: ','Роль: ')+name+(job.subagent?(' · @'+job.subagent):'')+(job.sid?'':' · '+O.tr('runs in the main session','работает в основной сессии'))),
@@ -681,7 +688,7 @@ O.mmSend=async(text,parts)=>{
       await post({messageID:O.mid(),model:lead,parts:[{type:'text',text:planInstr}]});
       await mmWaitIdle([sid],run);
       if(run.abort)throw new Error('aborted');
-      let err=false;try{const st=await api('GET','/session/status',null,{timeout:6000});err=!!(st[sid]&&st[sid].type==='error')}catch(e){}
+      let err=false;try{const st=await api('GET','/session/status',null,{timeout:6000});err=statusIs(st[sid],'error')}catch(e){}
       planText=await mmLastAssistant(sid);
       plan=err?null:mmParsePlan(planText,mm);
       if(plan&&plan.length){leadUsed=lead;break}
@@ -689,7 +696,9 @@ O.mmSend=async(text,parts)=>{
       if(!err)break; // direct answer (no plan) — done
       leadUsed=lead
     }
-    if(!plan||!plan.length){O.mm.run=null;return true} // lead answered directly — done
+    // lead answered directly (no plan) — done. emit() is required, otherwise the progress pill and
+    // the running timer stay on screen until some unrelated event happens to refresh them.
+    if(!plan||!plan.length){O.mm.run=null;emit();return true}
     const confirmed=await mmConfirmPlan(mm,plan);
     if(!confirmed){O.mm.run=null;emit();return true}
     plan=confirmed;
@@ -708,21 +717,28 @@ O.mmSend=async(text,parts)=>{
         tasks.map((t,i)=>(i+1)+'. '+t.subagent+' → '+t.task).join('\n')+
         '\n\nВызови task для КАЖДОЙ задачи (несколько вызовов подряд). В description пиши краткое описание, в prompt — полное задание для субагента. '+
         'В исходном запросе пользователя: «'+userText+'». Дождись результатов и затем дай сводный ответ.';
-      const planWithRoles=plan.map(t=>({role:t.role,task:t.task}));
       const delegInstr=PLAN_TAG+'\n'+delegation;
       await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:delegInstr}]});
       // live tracking of the running subagent while the lead works
+      let tracking=true;
       const tracker=setInterval(async()=>{
+        if(!tracking)return;
         try{
           const running=await mmRunningTask(sid);
+          if(!tracking)return;
           if(running){
-            const j=run.jobs.find(x=>x.subagent===running);
-            if(j&&j.state!=='done'){j.state='running';j.started=j.started||Date.now();emit()}
+            const j=run.jobs.find(x=>x.subagent===running&&x.state!=='done'&&x.state!=='stopped');
+            if(j&&j.state!=='running'){j.state='running';j.started=j.started||Date.now();emit()}
           }
         }catch(e){}
       },1500);
-      await mmWaitIdle([sid],run,1800000);
-      clearInterval(tracker);
+      try{
+        await mmWaitIdle([sid],run,1800000);
+      }finally{
+        // an aborted or timed-out run used to leave this interval polling the server forever
+        tracking=false;
+        clearInterval(tracker);
+      }
       if(run.abort)throw new Error('aborted');
       // collect per-subagent results from the session messages
       const collected=await mmCollectTasks(sid,run);
@@ -762,7 +778,7 @@ O.mmSend=async(text,parts)=>{
       const j=jobs[x];if(!j.sid)continue;
       if(run.roleAborts&&run.roleAborts.has(j.sid)){jobs[x]={sid:null,role:j.role,err:O.tr('stopped by user','остановлена пользователем')};continue}
       run.currentRole=j.role.name;emit();
-      let err=false;try{const st=await api('GET','/session/status',null,{timeout:6000});err=!!(st[j.sid]&&st[j.sid].type==='error')}catch(e){}
+      let err=false;try{const st=await api('GET','/session/status',null,{timeout:6000});err=statusIs(st[j.sid],'error')}catch(e){}
       if(!err)continue;
       let t='';try{t=await mmLastAssistant(j.sid)}catch(e){}
       if(t.trim())continue; // errored but produced content — keep it

@@ -21,9 +21,20 @@ O.filesInit=root=>{
   );
   bus.on('files',O.debounce(()=>O.refreshFiles(false),600));bus.on('dir',()=>{exp.clear();cache.clear();treeEl.textContent='';titleEl.textContent=O.basename(S.dir)||'/'});
   bus.on('idle',()=>O.refreshFiles(false))};
+// Directory listings are cached in IndexedDB for offline use. Without an index the cache grew
+// forever (one key per directory ever opened, in every project), so keep a per-project list of the
+// paths we wrote and prune the ones that have since disappeared from the current tree.
+const idxKey=()=>'files:idx:'+S.dir;
+async function rememberIdx(p){
+  try{
+    const idx=(await O.kv.get(idxKey()))||[];
+    if(!idx.includes(p)){idx.push(p);await O.kv.set(idxKey(),idx)}
+    if(idx.length>120){const drop=idx.splice(0,idx.length-120);await O.kv.set(idxKey(),idx);for(const q of drop)await O.kv.del('files:'+S.dir+':'+q)}
+  }catch(_){}
+}
 async function list(p){
   const tries=p==='.'?['.','']:[p];
-  for(const t of tries){try{const n=await api('GET','/file?path='+encodeURIComponent(t));cache.set(p,sortN(n));O.kv.set('files:'+S.dir+':'+p,n);return}catch(e){}}
+  for(const t of tries){try{const n=await api('GET','/file?path='+encodeURIComponent(t));cache.set(p,sortN(n));O.kv.set('files:'+S.dir+':'+p,n);rememberIdx(p);return}catch(e){}}
   const c=await O.kv.get('files:'+S.dir+':'+p);if(c)cache.set(p,sortN(c))}
 O.refreshFiles=async force=>{titleEl.textContent=O.basename(S.dir)||'/';
   if(force)cache.clear();
@@ -32,13 +43,16 @@ O.refreshFiles=async force=>{titleEl.textContent=O.basename(S.dir)||'/';
   draw()};
 function draw(){
   const fr=document.createDocumentFragment();
+  const walkSeen=new Set();
   if(filterQuery){
     const matches=[];
-    const searchWalk=p=>{(cache.get(p)||[]).forEach(n=>{
+    // depth guard: a symlink loop or a stray self-reference in a listing must not hang the UI
+    const seen=new Set();
+    const searchWalk=(p,depth)=>{(cache.get(p)||[]).forEach(n=>{
       if(n.name.toLowerCase().includes(filterQuery))matches.push(n);
-      if(n.type==='directory')searchWalk(n.path);
+      if(n.type==='directory'&&depth<12&&!seen.has(n.path)){seen.add(n.path);searchWalk(n.path,depth+1)}
     })};
-    searchWalk('.');
+    searchWalk('.',0);
     if(!matches.length){
       fr.append(h('div',{class:'mut',style:{padding:'24px',textAlign:'center'}},'Ничего не найдено по запросу "'+filterQuery+'"'));
     }else{
@@ -64,6 +78,8 @@ function draw(){
     return;
   }
   const walk=(p,depth)=>{(cache.get(p)||[]).forEach(n=>{
+    if(depth>14)return;
+    if(n.type==='directory'){if(walkSeen.has(n.path))return;walkSeen.add(n.path)}
     const isDir=n.type==='directory',isOpen=isDir&&exp.has(n.path),st=gst[n.path];
     const isHtml=!isDir&&(n.name.endsWith('.html')||n.name.endsWith('.htm'));
     const row=h('div',{class:'tn file-row-modern'+(n.ignored?' ign':'')+(st==='modified'?' m':st==='added'?' a':''),style:{paddingLeft:(10+depth*14)+'px'}},

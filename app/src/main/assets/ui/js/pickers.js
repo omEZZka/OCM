@@ -25,7 +25,9 @@ O.openSessions=()=>{
     navItem('sliders',O.tr('Settings','Настройки'),()=>O.openSettings()),
     navItem('refresh',O.tr('Restart server','Перезапуск сервера'),()=>restartApp()));
   const newBtn=h('button',{class:'btn pri wide',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));
-  const s=O.sheet(O.tr('Navigation & Sessions','Навигация и сессии'),h('div',null,nav,newBtn,h('div',{style:{height:'12px'}}),q,tagBar,list),{drawer:true});
+  const offs=[];
+  const s=O.sheet(O.tr('Navigation & Sessions','Навигация и сессии'),h('div',null,nav,newBtn,h('div',{style:{height:'12px'}}),q,tagBar,list),{drawer:true,
+    onClose:()=>{offs.splice(0).forEach(f=>{try{f()}catch(_){}})}});
   function drawTags(){
     tagBar.textContent='';
     const tags=O.sessionTagList();
@@ -48,7 +50,7 @@ O.openSessions=()=>{
         b?h('span',{class:'spin',style:{flex:'none'}}):null,
         x.parentID?h('span',{class:'sess-badge sub',title:O.tr('Subagent session','Сессия субагента')},O.icon('bot')):null,
         h('button',{class:'ibtn s',style:{flex:'none'},onclick:()=>sessActions(x)},O.icon('dots'))))})}
-  draw();bus.on('sessions',()=>{if(s.root.isConnected)draw()});bus.on('perm',()=>{if(s.root.isConnected)draw()})};
+  draw();offs.push(bus.on('sessions',()=>{if(s.root.isConnected)draw()}),bus.on('perm',()=>{if(s.root.isConnected)draw()}))};
 function importSessionFile(){
   const inp=h('input',{type:'file',accept:'application/json,.json,.ocmjson',style:{display:'none'}});
   inp.onchange=()=>{const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();

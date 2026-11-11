@@ -6,6 +6,18 @@ const cfg={read(){const t=O.native.cfgRead();if(!t.trim())return{obj:{},raw:''};
 const restartBar=()=>h('button',{class:'btn wide',style:{marginTop:'12px'},onclick:()=>{OC.restartServer();O.toast('Перезапуск сервера...');O.back()}},O.icon('refresh'),'Перезапустить сервер для применения');
 const sub=(t,b,o)=>O.sheet(t,b,Object.assign({full:true},o));
 
+// "picked" (native file picker) is a global event, but every screen that reacts to it used to add
+// one more permanent listener: reopening Settings → Plugins N times meant N redraws of dead sheets.
+const pickWatchers=[];
+O.on('picked',d=>{
+  for(let i=pickWatchers.length-1;i>=0;i--){
+    const w=pickWatchers[i];
+    if(!w.sheet||!w.sheet.root.isConnected){pickWatchers.splice(i,1);continue}
+    try{w.fn(d)}catch(_){}
+  }
+});
+const watchPicked=(sheet,fn)=>pickWatchers.push({sheet,fn});
+
 // ---- main ----
 // ---- main ----
 O.openSettings=()=>{
@@ -274,7 +286,7 @@ function openAgents(){
     up('Файл агента (.md)','Добавляется в список ваших агентов','agent'),up('Файл команды (.md)','Добавляет /команду','command'),list));
   const draw=()=>{list.textContent='';[['skills','Навыки'],['agents','Агенты'],['commands','Команды']].forEach(([d,t])=>{const r=O.native.ls(CFG+'/'+d);if(r.items&&r.items.length){list.append(h('div',{class:'grp'},t));
     r.items.filter(x=>!x.dir).forEach(x=>list.append(O.listRow('doc',x.name,'',h('button',{class:'ibtn s',onclick:async e=>{e.stopPropagation();if(await O.confirm('Удалить '+x.name+'?','','Удалить',true)){O.native.fs('delete',CFG+'/'+d+'/'+x.name);draw();O.loadMeta()}}},O.icon('trash')),()=>editFile(CFG+'/'+d+'/'+x.name,x.name))))}})};
-  draw();O.on('picked',()=>{if(s.root.isConnected)draw()})}
+  draw();watchPicked(s,()=>draw())}
 function editFile(path,title){const r=O.native.readText(path);const ta=h('textarea',{class:'mono',rows:18});ta.value=r.ok?r.text:'';
   const s=O.sheet(title,h('div',null,ta,h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:()=>{const w=O.native.fs('mkdir',O.dirname(path));const x=O.native.writeText(path,ta.value);if(x.ok){O.toast('Сохранено',1200);s.close();O.loadMeta()}else O.toast(x.err||'Не удалось')}},'Сохранить')),{full:true})}
 
@@ -324,7 +336,7 @@ O.openPlugins=()=>{const body=h('div');const s=sub('Плагины',body);
     (r.items||[]).filter(x=>!x.dir).forEach(x=>body.append(O.listRow('code',x.name,'',h('button',{class:'ibtn s',onclick:e=>{e.stopPropagation();O.native.fs('delete',CFG+'/plugins/'+x.name);draw()}},O.icon('trash')))));
     body.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>OC.pickFile('plugin','')},O.icon('up'),'Загрузить файл плагина (.js / .ts)'),
       h('div',{class:'note',style:{marginTop:'10px'}},'npm-плагины установятся автоматически при следующем запуске сервера.'),restartBar())};
-  draw();O.on('picked',()=>{if(s.root.isConnected)draw()})};
+  draw();watchPicked(s,()=>draw())};
 
 // ---- raw config ----
 function openConfig(){const c=cfg.read();const ta=h('textarea',{class:'mono',rows:20,spellcheck:'false'});ta.value=c.raw||'{\n}\n';
@@ -403,7 +415,10 @@ O.openAccount=()=>{
     body.append(box);
     let url=null,code=null,fin=false;
     const cancel=()=>{if(!fin){fin=true;busy=false;try{OC.authCancel()}catch{};drawIdle()}};
-    O.on('authlogin',d=>{if(!box.isConnected)return;
+    let offAuth=null;
+    offAuth=O.on('authlogin',d=>{
+      // the sheet was closed or replaced: unhook instead of leaving a permanent no-op listener
+      if(!box.isConnected){try{offAuth&&offAuth()}catch(_){}return}
       if(d.stage==='url'){url=d.url;code=d.code;
         box.textContent='';
         box.append(h('div',{class:'note'},'Открываем страницу opencode.ai. На ней нажмите «Continue with Google» или «Continue with GitHub» и подтвердите разрешение — код уже вписан автоматически.'),
@@ -645,6 +660,10 @@ At the very end of EVERY response, you MUST output a separate line with line add
 +N -M
 (If no files were edited, output: +0 -0)`;
 
+// Writes AGENTS.md / README.md into every profile location. Called on each send, but the content
+// almost never changes — remember what was written per path and skip identical writes (6 files x
+// every message was pure blocking I/O on the WebView thread).
+let readmeWrote={};
 O.updateReadmeForModel = (modelID) => {
   try {
     const curMid = modelID || (S.model ? S.model.modelID : null);
@@ -673,12 +692,14 @@ O.updateReadmeForModel = (modelID) => {
       targets.push(S.dir + '/README.md');
     }
 
-    targets.forEach(path => {
+    for (const path of targets) {
+      if (readmeWrote[path] === content) continue;
       try {
         O.native.fs('mkdir', O.dirname(path));
-        O.native.writeText(path, content);
+        const r = O.native.writeText(path, content);
+        if (r && r.ok) readmeWrote[path] = content;
       } catch (_) {}
-    });
+    }
   } catch (_) {}
 };
 

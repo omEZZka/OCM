@@ -15,7 +15,10 @@ class BackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             Backup.runAutoBackup(ctx, uid, pw)
             Result.success()
         } catch (_: Exception) {
-            Result.retry()
+            // A wrong password or a full disk does not fix itself: endless retries just burn
+            // battery. Skip this cycle after three attempts but keep the periodic schedule alive
+            // (Result.failure() would cancel the periodic work permanently).
+            if (runAttemptCount < 3) Result.retry() else Result.success()
         }
     }
 

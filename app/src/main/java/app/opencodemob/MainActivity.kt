@@ -140,7 +140,11 @@ class MainActivity : ComponentActivity() {
                         val relPath = url.path!!.removePrefix("/_preview/").ifEmpty { "index.html" }
                         val previewDir = File(cacheDir, "preview")
                         val file = File(previewDir, relPath)
-                        if (file.exists() && file.isFile) {
+                        // keep the preview sandboxed: no ../ escapes out of the preview dir
+                        val inSandbox = try {
+                            file.canonicalPath.startsWith(previewDir.canonicalPath + File.separator)
+                        } catch (_: Exception) { false }
+                        if (inSandbox && file.exists() && file.isFile) {
                             val mime = when (file.extension.lowercase()) {
                                 "html", "htm" -> "text/html"
                                 "css" -> "text/css"
@@ -1199,16 +1203,37 @@ class MainActivity : ComponentActivity() {
                 val parts = Regex("\"([^\"]*)\"|'([^']*)'|(\\S+)").findAll(args).map {
                     it.groupValues[1].ifEmpty { it.groupValues[2].ifEmpty { it.groupValues[3] } }
                 }.filter { it.isNotEmpty() }.toList()
-                val cmd = mutableListOf("/usr/bin/git", "-C", dir.ifEmpty { "/root" })
-                cmd += parts
-                val p = Runtime.prootCmd(this@MainActivity, u, cmd)
+                // git must never wait for credentials or a pager inside the sandbox: that used to
+                // block the WebView thread forever. /bin/sh is always present in the rootfs (unlike
+                // /usr/bin/env), and single quotes keep every argument literal.
+                val q = { a: String -> "'" + a.replace("'", "'\\''") + "'" }
+                val script = "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true GIT_EDITOR=true GIT_PAGER=cat LC_ALL=C; " +
+                    "exec /usr/bin/git -C " + q(dir.ifEmpty { "/root" }) + parts.joinToString("") { " " + q(it) } + " </dev/null"
+                val p = Runtime.prootCmd(this@MainActivity, u, listOf("/bin/sh", "-c", script))
                 val out = StringBuilder()
-                java.io.BufferedReader(java.io.InputStreamReader(p.inputStream, Charsets.UTF_8)).use { r ->
-                    var line = r.readLine()
-                    while (line != null) { out.append(line).append('\n'); line = r.readLine() }
+                val limit = 512 * 1024
+                val reader = Thread {
+                    try {
+                        java.io.BufferedReader(java.io.InputStreamReader(p.inputStream, Charsets.UTF_8)).use { r ->
+                            var line = r.readLine()
+                            while (line != null) {
+                                if (out.length < limit) out.append(line).append('\n')
+                                line = r.readLine()
+                            }
+                        }
+                    } catch (_: Exception) {}
                 }
-                val code = p.waitFor()
-                JSONObject().put("ok", code == 0).put("code", code).put("out", out.toString()).toString()
+                reader.isDaemon = true
+                reader.start()
+                // `pull`/`push` on a slow network can take minutes; kill after 120s so the UI unblocks.
+                val finished = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
+                if (!finished) {
+                    try { p.destroyForcibly() } catch (_: Exception) {}
+                    JSONObject().put("ok", false).put("err", "git timed out").put("out", out.toString()).toString()
+                } else {
+                    val code = try { p.exitValue() } catch (_: Exception) { -1 }
+                    JSONObject().put("ok", code == 0).put("code", code).put("out", out.toString()).toString()
+                }
             }
         } catch (e: Exception) {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
