@@ -74,9 +74,22 @@ echo "$TAG" > "$WORK/oc/version"
 
 echo "== 3/3 rootfs (Ubuntu 24.04 arm64) =="
 docker rm -f ocroot >/dev/null 2>&1 || true
-docker run --platform linux/arm64 --name ocroot -v "$WORK/oc:/oc:ro" ubuntu:24.04 bash -euc '
+# Emulated arm64 containers occasionally lose DNS on GitHub runners ("Could not resolve
+# ports.ubuntu.com"). Pin public resolvers and retry the index fetch before giving up.
+docker run --platform linux/arm64 --name ocroot --dns 1.1.1.1 --dns 8.8.8.8 -v "$WORK/oc:/oc:ro" ubuntu:24.04 bash -euc '
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update
+  if ! getent hosts ports.ubuntu.com >/dev/null 2>&1; then
+    echo "resolv.conf:"; cat /etc/resolv.conf || true
+    printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\n" > /etc/resolv.conf
+  fi
+  apt_ok=0
+  for i in 1 2 3 4 5; do
+    if apt-get update; then apt_ok=1; break; fi
+    echo "apt-get update failed (attempt $i), retrying..."
+    printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\n" > /etc/resolv.conf
+    sleep "$((i*10))"
+  done
+  [ "$apt_ok" = "1" ] || { echo "ERROR: apt index unreachable after retries"; exit 1; }
   apt-get install -y --no-install-recommends ca-certificates curl git ripgrep openssh-client \
     python3 nodejs npm unzip zip less nano procps
   install -m755 /oc/opencode /usr/local/bin/opencode
@@ -85,7 +98,10 @@ docker run --platform linux/arm64 --name ocroot -v "$WORK/oc:/oc:ro" ubuntu:24.0
 
   # Pre-seed official models registry in rootfs for instant offline boot
   mkdir -p /root/.cache/opencode
-  curl -fsSL "https://models.opencode.ai/api.json" -o /root/.cache/opencode/models.json || true
+  for i in 1 2 3; do
+    curl -fsSL --retry 2 --connect-timeout 15 "https://models.opencode.ai/api.json" -o /root/.cache/opencode/models.json && break
+    sleep 5
+  done || true
 
   apt-get clean
   rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /var/cache/apt/*
