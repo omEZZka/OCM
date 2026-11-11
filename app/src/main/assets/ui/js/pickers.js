@@ -153,7 +153,14 @@ O.openModels=()=>{
   let providerFilter='';
   const provBar=h('div',{style:{display:'flex',gap:'6px',overflowX:'auto',marginBottom:'8px'}});
   const bulkRow=h('div',{style:{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}});
-  const container=h('div',null,q,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,effortCard,connectCard);
+  const profNames=Object.keys(O.modelProfiles());
+  const profBar=h('div',{style:{display:'flex',gap:'6px',overflowX:'auto',marginBottom:'8px'}});
+  if(profNames.length){
+    profBar.append(h('span',{class:'mut s',style:{alignSelf:'center'}},O.tr('Profiles','Профили')+':'));
+    profNames.forEach(n=>profBar.append(h('button',{class:'chip',onclick:()=>{O.applyModelProfile(n);draw()}},O.icon('star'),h('span',null,n))));
+  }
+  const folderBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelFolders(()=>draw())},O.icon('folder'),O.tr('Folders & profiles','Папки и профили'));
+  const container=h('div',null,q,profBar,folderBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,effortCard,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
 
   function hiddenRow(){
@@ -240,6 +247,10 @@ O.openModels=()=>{
       );
 
       const ctx=x.m&&x.m.limit&&x.m.limit.context,parts=[];
+      // provider first: several providers expose models with identical names (e.g. "gpt-4o"),
+      // so the list was impossible to navigate without it
+      const provName=x.pname||(x.pid==='opencode'?'OpenCode Zen':x.pid);
+      parts.push(provName);
       if(ctx)parts.push(O.fmtK(ctx)+' context');
       if(x.m&&(x.m.modalities&&x.m.modalities.includes('image')||x.m.attachment!==false))parts.push('images');
       if(x.m&&(x.m.reasoning||x.m.variants))parts.push('reasoning');
@@ -268,7 +279,29 @@ O.openModels=()=>{
       return row;
     };
 
-        // Pinned models — always at the very top (unless a filter is active).
+    // ---- user folders (pinned folders float; their models are removed from the flat list) ----
+    const folders=O.modelFolders();
+    const inFolder=new Set();
+    folders.forEach(f=>(f.keys||[]).forEach(k=>inFolder.add(k)));
+    const sortedFolders=[...folders].sort((a,b)=>{
+      const pa=O.isModelFolderPinned(a.id)?0:1,pb=O.isModelFolderPinned(b.id)?0:1;
+      if(pa!==pb)return pa-pb;
+      return (a.order||0)-(b.order||0)||String(a.name).localeCompare(String(b.name));
+    });
+    sortedFolders.forEach(f=>{
+      const members=(f.keys||[]).map(k=>items.find(x=>x.pid+'/'+x.mid===k)).filter(Boolean);
+      if(!members.length&&filterText)return;
+      const pinnedF=O.isModelFolderPinned(f.id);
+      const head=h('div',{class:'model-group-head',style:{display:'flex',alignItems:'center',gap:'6px'}},
+        O.icon(pinnedF?'pin':'folder',pinnedF?'pin-ic':''),
+        h('span',{class:'grow'},f.name+' ('+members.length+')'));
+      const card=h('div',{class:'group-card'});
+      if(members.length)members.forEach(x=>card.append(rowFor(x)));
+      else card.append(h('div',{class:'mut s',style:{padding:'10px 12px'}},O.tr('Empty folder. Long-press a model → Add to folder.','Папка пуста. Долгое нажатие на модель → Добавить в папку.')));
+      listEl.append(head,card);
+    });
+
+    // Pinned models — always at the very top (unless a filter is active).
     if(!filterText){
       const pinnedKeys=O.pinnedModels();
       const pinned=pinnedKeys.map(k=>items.find(x=>x.pid+'/'+x.mid===k)).filter(Boolean);
@@ -293,6 +326,8 @@ O.openModels=()=>{
     const groups=[];
     const byPid=new Map();
     items.forEach(x=>{
+      if(filterText&&inFolder.has(x.pid+'/'+x.mid))return; // filtered search shows folder hits above
+      if(inFolder.has(x.pid+'/'+x.mid))return;               // already listed inside its folder
       let g=byPid.get(x.pid);
       if(!g){g={pid:x.pid,pname:x.pname||x.pid,items:[]};byPid.set(x.pid,g);groups.push(g)}
       g.items.push(x);
@@ -312,8 +347,24 @@ O.openModels=()=>{
 function modelActions(x,redraw){
   const key=x.pid+'/'+x.mid;
   const pinned=O.isModelPinned(key);
+  const folder=O.modelFolderOf(key);
+  const folders=O.modelFolders();
+  const folderItems=[
+    {label:folder?O.tr('Move to another folder…','Переместить в другую папку…'):O.tr('Add to folder…','Добавить в папку…'),icon:'folder',fn:()=>{
+      const items=folders.filter(f=>f.id !== (folder&&folder.id)).map(f=>({label:f.name,icon:'folder',fn:()=>O.addModelToFolder(key,f.id)&&redraw()}));
+      items.push({label:O.tr('New folder…','Новая папка…'),icon:'plus',fn:async()=>{
+        const n=await O.ask(O.tr('New folder','Новая папка'),O.tr('Folder name','Название папки'));
+        if(!n)return;const f=O.createModelFolder(n);O.addModelToFolder(key,f.id);redraw();
+      }});
+      if(folder)items.push({label:O.tr('Remove from folder','Убрать из папки'),icon:'x',fn:()=>{O.removeModelFromFolder(key,folder.id);redraw()}});
+      O.actions(folder?folder.name:O.tr('Folder','Папка'),items);
+    }},
+    {label:O.tr('Manage folders…','Управление папками…'),icon:'sliders',fn:()=>O.openModelFolders(redraw)},
+    {label:O.tr('Create model profile here','Сделать профилем модели'),icon:'star',fn:()=>O.openModelProfiles(redraw)}
+  ];
   O.actions(x.name||x.mid,[
     {label:pinned?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'pin',fn:()=>{O.toggleModelPin(key);redraw()}},
+    ...folderItems,
     {label:O.tr('Start chat in another session','Начать диалог в другой сессии'),icon:'plus',fn:async()=>{
       try{
         const ses=await O.newSession();
@@ -331,6 +382,109 @@ function modelActions(x,redraw){
     }}
   ]);
 }
+
+// ---- model folders & profiles ----
+O.openModelFolders=(onDone)=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Model folders','Папки моделей'),body,{full:true,onClose:()=>{onDone&&onDone()}});
+  const draw=()=>{
+    body.textContent='';
+    const folders=O.modelFolders();
+    body.append(h('div',{class:'note'},O.tr('Folders group models across providers. Pinned folders float to the top of the model list; a model belongs to one folder.','Папки объединяют модели разных провайдеров. Закреплённые папки поднимаются в начало списка моделей; модель может быть только в одной папке.')));
+    if(!folders.length)body.append(h('div',{class:'mut',style:{padding:'12px'}},O.tr('No folders yet','Папок пока нет')));
+    folders.sort((a,b)=>(a.order||0)-(b.order||0)).forEach((f,i)=>{
+      const pinnedF=O.isModelFolderPinned(f.id);
+      body.append(h('div',{class:'settings-row'},
+        h('button',{class:'settings-row-icon',style:{background:'transparent',border:'none',padding:0},onclick:()=>{O.toggleModelFolderPin(f.id);draw()}},O.icon(pinnedF?'pin':'folder',pinnedF?'pin-ic':'')),
+        h('div',{class:'settings-row-text'},h('b',null,f.name),h('span',null,(f.keys||[]).length+' '+O.tr('models','моделей')+(pinnedF?' · '+O.tr('pinned','закреплена'):''))),
+        h('button',{class:'ibtn s',title:O.tr('Up','Вверх'),onclick:()=>{O.moveModelFolder(f.id,-1);draw()}},O.icon('chevD')),
+        h('button',{class:'ibtn s',title:O.tr('Rename','Переименовать'),onclick:async()=>{const v=await O.ask(O.tr('Rename folder','Переименование папки'),null,f.name);if(v){O.renameModelFolder(f.id,v);draw()}}},O.icon('edit')),
+        h('button',{class:'ibtn s',title:O.tr('Delete','Удалить'),onclick:async()=>{if(await O.confirm(O.tr('Delete folder?','Удалить папку?'),f.name,O.tr('Delete','Удалить'),true)){O.deleteModelFolder(f.id);draw()}}},O.icon('trash'))));
+    });
+    body.append(h('button',{class:'btn pri wide',style:{marginTop:'12px'},onclick:async()=>{
+      const n=await O.ask(O.tr('New folder','Новая папка'),O.tr('Folder name','Название папки'));
+      if(!n)return;O.createModelFolder(n);draw();
+    }},O.icon('plus'),O.tr('New folder','Новая папка')),
+    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{s.close();O.openModelAssign()}},O.icon('check'),O.tr('Assign models to folders','Разложить модели по папкам')));
+    body.append(h('div',{class:'grp',style:{marginTop:'16px'}},O.tr('Profiles','Профили')));
+    body.append(h('div',{class:'note'},O.tr('A profile stores one main model plus its fallback chain, e.g. "fast" vs "quality".','Профиль хранит основную модель и цепочку резервных, например «быстро» и «качественно».')));
+    const profs=O.modelProfiles();
+    Object.keys(profs).forEach(name=>{
+      const p=profs[name];
+      body.append(h('div',{class:'settings-row'},
+        h('div',{class:'settings-row-icon purple'},O.icon('star')),
+        h('div',{class:'settings-row-text'},h('b',null,name),h('span',null,(p.main||'')+(p.fallbacks&&p.fallbacks.length?'  +'+(p.fallbacks.length)+' fallback':''))),
+        h('button',{class:'btn sm',onclick:()=>{O.applyModelProfile(name);s.close()}},O.tr('Apply','Применить')),
+        h('button',{class:'ibtn s',onclick:()=>{O.setModelProfile(name,null);draw()}},O.icon('trash'))));
+    });
+    body.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:async()=>{
+      const name=await O.ask(O.tr('Profile name','Название профиля'),O.tr('e.g. fast, quality','например: быстро, качество'));
+      if(!name)return;
+      if(!S.model)return O.toast(O.tr('Select a model first','Сначала выберите модель'),2500);
+      O.setModelProfile(name.trim(),{main:S.model.providerID+'/'+S.model.modelID,fallbacks:O.fallbackModels().slice(0,5)});
+      O.toast(O.tr('Profile saved','Профиль сохранён'),1800);draw();
+    }},O.icon('plus'),O.tr('Save current model as profile','Сохранить текущую модель как профиль')));
+  };
+  draw();
+};
+O.openModelProfiles=redraw=>O.openModelFolders(redraw);
+
+// Auto-suggest a model for the current prompt (code / images / long context / cheap).
+O.suggestModel=text=>{
+  const t=String(text||'').toLowerCase();
+  const all=O.allModels().filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
+  if(!all.length)return null;
+  const hasImg=/(скриншот|картинк|изображен|фото|screenshot|image|png|jpg|ui-?kit|макет)/.test(t);
+  const wantsCheap=/(быстро|дешев|cheap|fast|черновик|draft)/.test(t);
+  const wantsBig=/(рефактор|архитектур|весь проект|refactor|whole repo|перепиши|мигрир)/.test(t)||t.length>1200;
+  const score=x=>{
+    let s=0;
+    const m=x.m||{};
+    const ctx=(m.limit&&m.limit.context)||0;
+    if(hasImg&&(m.modalities&&m.modalities.includes('image')))s+=60;
+    if(hasImg&&!(m.modalities&&m.modalities.includes('image')))s-=40;
+    if(wantsBig&&ctx)s+=Math.min(40,ctx/50000);
+    if(wantsCheap&&O.isModelFree(x))s+=45;
+    if(wantsCheap&&m.cost&&m.cost.input>0)s-=30;
+    if(m.reasoning||m.variants)s+=8;
+    if(O.isModelFree(x))s+=6;
+    return s;
+  };
+  const best=[...all].sort((a,b)=>score(b)-score(a))[0];
+  return best&&score(best)>0?best:null;
+};
+
+// Bulk assignment: tap a model to cycle its folder, with a folder picker per tap.
+O.openModelAssign=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Assign models','Разложить модели'),body,{full:true});
+  const draw=()=>{
+    body.textContent='';
+    const folders=O.modelFolders();
+    const all=O.allModels().filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
+    if(!folders.length){body.append(h('div',{class:'note'},O.tr('Create a folder first in Model folders.','Сначала создайте папку в разделе «Папки моделей».')));return}
+    const q=h('input',{placeholder:O.tr('Filter models...','Фильтр моделей...')});
+    const list=h('div');
+    body.append(q,list);
+    const render=()=>{
+      list.textContent='';
+      const f=(q.value||'').toLowerCase();
+      all.filter(x=>!f||(x.name+' '+x.mid+' '+(x.pname||x.pid)).toLowerCase().includes(f)).forEach(x=>{
+        const key=x.pid+'/'+x.mid, cur=O.modelFolderOf(key);
+        list.append(h('button',{class:'model-row',onclick:()=>{
+          O.actions(x.name||x.mid,[...folders.map(fo=>({label:fo.name,icon:'folder',fn:()=>{O.addModelToFolder(key,fo.id);draw()}})),
+            cur?{label:O.tr('Remove from folder','Убрать из папки'),icon:'x',fn:()=>{O.removeModelFromFolder(key,cur.id);draw()}}:null]);
+        }},
+          h('div',{class:'model-row-left'},
+            h('span',{class:'model-row-title'},x.name||x.mid),
+            h('span',{class:'model-row-sub'},(x.pname||x.pid)+(cur?' → '+cur.name:' · '+O.tr('no folder','без папки')))),
+          cur?O.icon('folder'):null));
+      });
+    };
+    q.addEventListener('input',render);render();
+  };
+  draw();
+};
 
 O.openAllModelsCatalog=()=>O.openModels();
 

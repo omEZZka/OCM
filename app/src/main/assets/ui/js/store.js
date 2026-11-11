@@ -320,6 +320,58 @@ O.sortModelsByProvider=items=>{
     return String(a.name||a.mid).localeCompare(String(b.name||b.mid));
   });
 };
+// ---- model folders: user-defined groups of models that can be pinned as one block ----
+// A folder is {id,name,order,keys:[...],color} and is only a view over `pid/mid` keys, so a folder
+// survives provider renames and model churn.
+O.modelFolders=()=>{
+  const l=O.store.get('modelFolders',[]);
+  return Array.isArray(l)?l.filter(f=>f&&f.id):[];
+};
+O.modelFolderOf=key=>{const f=O.modelFolders().find(x=>(x.keys||[]).includes(key));return f||null};
+O.saveModelFolders=l=>{O.store.set('modelFolders',(l||[]).slice(0,60));bus.emit('meta')};
+O.createModelFolder=name=>{
+  const f={id:'fld_'+Date.now().toString(36),name:String(name||'').trim()||O.tr('New folder','Новая папка'),keys:[],order:O.modelFolders().length,color:''};
+  const l=O.modelFolders();l.push(f);O.saveModelFolders(l);return f;
+};
+O.renameModelFolder=(id,name)=>{const l=O.modelFolders();const f=l.find(x=>x.id===id);if(!f)return;f.name=String(name||'').trim()||f.name;O.saveModelFolders(l)};
+O.deleteModelFolder=id=>O.saveModelFolders(O.modelFolders().filter(x=>x.id!==id));
+O.moveModelFolder=(id,delta)=>{
+  const l=O.modelFolders();const i=l.findIndex(x=>x.id===id);if(i<0)return;
+  const j=Math.max(0,Math.min(l.length-1,i+delta));if(i===j)return;
+  const [f]=l.splice(i,1);l.splice(j,0,f);l.forEach((x,k)=>x.order=k);O.saveModelFolders(l);
+};
+// A key lives in at most one folder: adding it here removes it from any other folder.
+O.addModelToFolder=(key,folderId)=>{
+  const l=O.modelFolders();
+  for(const f of l){if(f.id!==folderId&&(f.keys||[]).includes(key))f.keys=f.keys.filter(k=>k!==key)}
+  const f=l.find(x=>x.id===folderId);if(!f)return;
+  if(!(f.keys||[]).includes(key))f.keys.push(key);
+  O.saveModelFolders(l);
+};
+O.removeModelFromFolder=(key,folderId)=>{
+  const l=O.modelFolders();const f=l.find(x=>x.id===folderId);if(!f)return;
+  f.keys=(f.keys||[]).filter(k=>k!==key);O.saveModelFolders(l);
+};
+O.pinnedModelFolders=()=>O.store.get('pinnedModelFolders',[]);
+O.isModelFolderPinned=id=>O.pinnedModelFolders().includes(id);
+O.toggleModelFolderPin=id=>{
+  const l=O.pinnedModelFolders();const i=l.indexOf(id);
+  if(i>=0)l.splice(i,1);else l.push(id);
+  O.store.set('pinnedModelFolders',l);bus.emit('meta');
+};
+// Everything inside the pinned folders floats above the normal list (handled by the picker).
+
+// ---- model preference profiles: quick / balanced / quality ----
+O.modelProfiles=()=>O.store.get('modelProfiles',{});
+O.modelProfile=name=>{const p=O.modelProfiles()[name];return p&&p.main?p:null};
+O.setModelProfile=(name,prof)=>{const all=O.modelProfiles();if(prof)all[name]=prof;else delete all[name];O.store.set('modelProfiles',all);bus.emit('meta')};
+O.applyModelProfile=async name=>{
+  const p=O.modelProfile(name);if(!p)return O.toast(O.tr('Profile is empty','Профиль пуст'),2500);
+  const i=p.main.indexOf('/');if(i<1)return;
+  O.setModel(p.main.slice(0,i),p.main.slice(i+1));
+  if(Array.isArray(p.fallbacks))O.setFallbackModels(p.fallbacks);
+  O.toast(O.tr('Profile applied: ','Профиль применён: ')+name,1800);
+};
 O.hiddenModels=()=>O.store.get('hiddenModels',[]);
 O.isModelHidden=k=>O.hiddenModels().includes(k);
 O.hideModel=k=>{const l=O.hiddenModels();if(!l.includes(k))l.push(k);O.store.set('hiddenModels',l);bus.emit('meta')};

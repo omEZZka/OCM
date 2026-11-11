@@ -592,6 +592,23 @@ function updateChips(){
   else if(m)mName=m.modelID;
   const spanMo=modelChip.querySelector('span');
   if(spanMo)spanMo.textContent=mName;
+  if(modelChip){
+    const prof=Object.keys(O.modelProfiles()).find(k=>{
+      const p=O.modelProfile(k);return p&&m&&p.main===(m.providerID+'/'+m.modelID);
+    });
+    modelChip.classList.toggle('has-profile',!!prof);
+    modelChip.title=prof?(O.tr('Profile: ','Профиль: ')+prof):'';
+  }
+  // long-press on the model chip: quick profile switching without opening the whole list
+  if(modelChip&&!modelChip._profLp){
+    modelChip._profLp=1;
+    O.longPress(modelChip,()=>{
+      const names=Object.keys(O.modelProfiles());
+      const items=names.map(n=>({label:n,icon:'star',fn:()=>O.applyModelProfile(n)}));
+      items.push({label:O.tr('Manage folders & profiles…','Папки и профили…'),icon:'sliders',fn:()=>O.openModelFolders()});
+      O.actions(O.tr('Model profiles','Профили моделей'),items);
+    });
+  }
   const nokey=!m&&!S.offline&&S.up;
   nokeyEl.classList.toggle('hide',!nokey);
   ta.disabled=!!S.offline&&!S.up;
