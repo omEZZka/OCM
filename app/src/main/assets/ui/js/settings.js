@@ -79,8 +79,15 @@ O.openSettings=()=>{
       if(v){O.native.startOverlay&&O.native.startOverlay()}
       else{O.native.stopOverlay&&O.native.stopOverlay()}
     });
+  const onlyBusyRow=O.toggleRow('zap',O.tr('Only while working','Только во время работы'),
+    O.tr('Hide the bubble a few seconds after the agent goes idle','Скрывать пузырь через пару секунд после завершения'),
+    O.store.get('overlayOnlyBusy',false),v=>{
+      O.store.set('overlayOnlyBusy',v);
+      // the service reads this flag from Prefs through the bridge
+      try{if(window.OC&&OC.setFlag)OC.setFlag('overlay_only_busy',v)}catch(_){}
+    });
   const detailRow=O.toggleRow('code',O.tr('Expand Tool Details','Детали инструментов'),O.tr('Show commands, output and file diffs','Команды, вывод терминала и правки'),S.opts.details,v=>{S.opts.details=v;O.saveOpts();O.chat.renderAll()});
-  appCard.append(langRow,themeRow,thinkRow,detailRow,overlayRow);
+  appCard.append(langRow,themeRow,thinkRow,detailRow,overlayRow,onlyBusyRow);
   body.append(appCard);
 
   // 4. Notifications & Sounds

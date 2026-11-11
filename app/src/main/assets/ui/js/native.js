@@ -78,6 +78,7 @@ O.native={
   startOverlay:()=>{try{OC.startOverlay()}catch(_){}},
   stopOverlay:()=>{try{OC.stopOverlay()}catch(_){}},
   overlayState:()=>{try{return j(OC.overlayState())||{}}catch(_){return{}}},
+  setOverlayState:o=>{try{if(OC.setOverlayState)OC.setOverlayState(JSON.stringify(o||{}))}catch(_){}},
   state:()=>j(OC.state())||{}
 };
 O.openUrl=u=>{if(/^https?:\/\//i.test(u)&&!/appassets\.androidplatform\.net/i.test(u))OC.openLink(u)};

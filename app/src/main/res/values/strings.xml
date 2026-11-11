@@ -14,4 +14,9 @@
     <string name="overlay_idle">OpenCode</string>
     <string name="overlay_working">Работает</string>
     <string name="overlay_stopping">Останавливаю…</string>
+    <string name="overlay_channel">Плавающий пузырь агента</string>
+    <string name="overlay_open">Чат</string>
+    <string name="overlay_stop">Стоп</string>
+    <string name="overlay_new">Новый</string>
+    <string name="overlay_only_busy">Только во время работы</string>
 </resources>

@@ -215,6 +215,33 @@ document.addEventListener('visibilitychange',()=>{
   if(S.sid)O.startLiveSync(S.sid);
 });
 
+// ---- overlay bubble state ----
+// The floating bubble lives in a separate Android service, so it reads its state from Prefs. Push a
+// compact snapshot whenever the agent state, MM phase or pending confirmations change.
+let overlayPushT=0;
+const pushOverlay=()=>{
+  if(!O.native.setOverlayState)return;
+  const now=Date.now();
+  if(now-overlayPushT<700)return; // coalesce bursts of deltas
+  overlayPushT=now;
+  const busy=Object.keys(S.status).some(k=>S.status[k]&&S.status[k].type!=='idle');
+  const r=O.mm&&O.mm.run;
+  const jobs=(r&&r.jobs||[]).map(j=>j.state==='done'?'done':j.state==='running'?'running':j.state==='error'||j.err?'error':j.state==='stopped'?'stopped':'queued').join(',');
+  O.native.setOverlayState({
+    phase:r?({plan:O.tr('Planning','Планирование'),role:(r.currentRole||''),synth:O.tr('Synthesis','Синтез')}[r.phase]||r.phase||''):'',
+    jobs,
+    attention:!!(S.perms.length||S.questions.length),
+    error:false
+  });
+};
+// Push once right after boot so the bubble is not stale for a second.
+setTimeout(()=>{try{pushOverlay()}catch(_){}},1200);
+O.pushOverlay=pushOverlay;
+bus.on('status',pushOverlay);
+bus.on('perm',pushOverlay);
+bus.on('mm:progress',pushOverlay);
+bus.on('sessions',pushOverlay);
+
 // ---- opencode account (Zen) status: known once checked, so hints never nag after a login ----
 O.checkAccount=async()=>{try{const r=await api('GET','/experimental/console/orgs',null,{timeout:10000});
   const em=r&&r.orgs&&r.orgs.length?[...new Set(r.orgs.map(o=>o.accountEmail))][0]:null;

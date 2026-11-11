@@ -1187,6 +1187,17 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface fun stopOverlay() { OverlayService.stop(this@MainActivity) }
 
+        /** Publishes the live agent state for the floating bubble (phase, role dots, attention). */
+        @JavascriptInterface fun setOverlayState(json: String) {
+            try {
+                val o = JSONObject(json)
+                Prefs.put(this@MainActivity, "overlay_phase", o.optString("phase", ""))
+                Prefs.put(this@MainActivity, "overlay_jobs", o.optString("jobs", ""))
+                Prefs.putFlag(this@MainActivity, "overlay_attention", o.optBoolean("attention", false))
+                Prefs.putFlag(this@MainActivity, "overlay_error", o.optBoolean("error", false))
+            } catch (_: Exception) {}
+        }
+
         @JavascriptInterface fun overlayState(): String = try {
             JSONObject().put("allowed", Settings.canDrawOverlays(this@MainActivity))
                 .put("running", Prefs.flag(this@MainActivity, "overlay_enabled", false))
@@ -1514,6 +1525,6 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        val FLAG_KEYS = listOf("snd_done", "snd_action", "snd_quota", "noseccomp")
+        val FLAG_KEYS = listOf("snd_done", "snd_action", "snd_quota", "noseccomp", "overlay_only_busy")
     }
 }
