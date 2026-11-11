@@ -38,7 +38,12 @@ class OverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "stop") { stopSelf(); return START_NOT_STICKY }
+        if (intent?.action == "stop") {
+            Prefs.putFlag(this, "overlay_enabled", false)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (!android.provider.Settings.canDrawOverlays(this)) { stopSelf(); return START_NOT_STICKY }
         startForegroundCompat()
         if (root == null) attach()
         startTicker()
@@ -166,6 +171,8 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         stopTicker()
+        // If the system killed the service (e.g. after a reboot) keep the user's preference so it can
+        // be restored; only an explicit stop clears `overlay_enabled`.
         try { root?.let { wm?.removeView(it) } } catch (_: Exception) {}
         root = null
         super.onDestroy()
@@ -180,6 +187,9 @@ class OverlayService : Service() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
             } catch (_: Exception) {}
         }
-        fun stop(ctx: Context) { try { ctx.stopService(Intent(ctx, OverlayService::class.java)) } catch (_: Exception) {} }
+        fun stop(ctx: Context) {
+            Prefs.putFlag(ctx, "overlay_enabled", false)
+            try { ctx.stopService(Intent(ctx, OverlayService::class.java)) } catch (_: Exception) {}
+        }
     }
 }

@@ -81,8 +81,11 @@ class MainActivity : ComponentActivity() {
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { onPicked(it) }
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { emit("perms", JSONObject()) }
     // overlay bubble showing the live agent state over other apps (see OverlayService)
-    private val overlayPerm = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        if (r.resultCode == Activity.RESULT_OK) startOverlay()
+    private val overlayPerm = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        // Settings returns RESULT_CANCELED even after the user grants the permission,
+        // so re-check the real state instead of trusting the result code.
+        if (Settings.canDrawOverlays(this)) startOverlay()
+        else emit("perms", JSONObject())
     }
 
     private val chooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -250,7 +253,7 @@ class MainActivity : ComponentActivity() {
                 val bytes = cr.openInputStream(u)?.use { it.readBytes() } ?: continue
                 if (bytes.size > 8 * 1024 * 1024) continue
                 val name = queryName(u) ?: ("shared-" + System.currentTimeMillis())
-                files.put(JSONObject()
+                files.add(JSONObject()
                     .put("mime", mime)
                     .put("filename", name)
                     .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))
@@ -259,7 +262,11 @@ class MainActivity : ComponentActivity() {
         if (text.isBlank() && files.isEmpty()) return
         ui.postDelayed({
             val o = JSONObject().put("text", text)
-            if (files.isNotEmpty()) o.put("files", files)
+            if (files.isNotEmpty()) {
+                val arr = org.json.JSONArray()
+                files.forEach { arr.put(it) }
+                o.put("files", arr)
+            }
             emit("share", o)
         }, 500)
     }
@@ -1170,7 +1177,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        @JavascriptInterface fun startOverlay() { this@MainActivity.startOverlay() }
+        @JavascriptInterface fun startOverlay() {
+            runOnUiThread {
+                if (!Settings.canDrawOverlays(this@MainActivity)) {
+                    overlayPerm.launch(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                } else this@MainActivity.startOverlay()
+            }
+        }
 
         @JavascriptInterface fun stopOverlay() { OverlayService.stop(this@MainActivity) }
 
