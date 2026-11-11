@@ -19,4 +19,5 @@
     <string name="overlay_stop">Стоп</string>
     <string name="overlay_new">Новый</string>
     <string name="overlay_only_busy">Только во время работы</string>
+    <string name="notif_mm_title">Мультимодальный агент</string>
 </resources>

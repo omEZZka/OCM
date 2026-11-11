@@ -319,6 +319,17 @@ O.mmRoleEditor=(r,done,opts)=>{
     h('div',{class:'settings-row-icon'},O.icon(r.icon||'bot')),
     h('div',{class:'settings-row-text'},h('b',null,O.tr('Role icon','Иконка роли'))),
     h('div',{class:'fchips'},MM_ICONS.map(ic=>h('button',{class:'chip',style:r.icon===ic?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>{r.icon=ic;draw()}},O.icon(ic)))));
+  // Role kind: a normal worker, a judge that reviews the others, or a router that only decides.
+  const kindSeg=h('div',{class:'seg',style:{margin:'0 0 10px'}},
+    ...[['worker',O.tr('Worker','Исполнитель')],['judge',O.tr('Judge','Судья')],['router',O.tr('Router','Роутер')]].map(([k,label])=>
+      h('button',{class:(r.kind||'worker')===k?'on':'',onclick:e=>{
+        r.kind=k;
+        kindSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===e.currentTarget));
+      }},label)));
+  const kindNote=h('div',{class:'note',style:{margin:'0 2px 10px'}},
+    (r.kind==='judge')?O.tr('The judge receives every role result and returns a verdict with fixes. It does not edit files.','Судья получает результаты всех ролей и возвращает вердикт с замечаниями. Файлы не правит.')
+    :(r.kind==='router')?O.tr('The router only decides who does what; it produces the task plan instead of doing work.','Роутер только решает, кому что делать: выдаёт план задач вместо выполнения работы.')
+    :O.tr('A normal role: does its task and returns a result.','Обычная роль: выполняет задачу и возвращает результат.'));
   const modelRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(r.model,m=>{r.model=m;draw()},opts)},
     h('div',{class:'settings-row-icon purple'},O.icon('cpu')),
     h('div',{class:'settings-row-text'},h('b',null,O.tr('Role model','Модель роли')),
@@ -347,6 +358,8 @@ O.mmRoleEditor=(r,done,opts)=>{
     h('div',{class:'field'},h('label',null,O.tr('Prompt (optional)','Промпт (необязательно)')),promptTa),
     h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Subagent','Субагент')),
     h('div',{class:'settings-card'},subRow),
+    h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Role kind','Тип роли')),
+    kindSeg,kindNote,
     h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Appearance','Внешний вид')),
     h('div',{class:'settings-card'},colorRow,iconRow),
     h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Role model','Модель роли')),
@@ -355,11 +368,39 @@ O.mmRoleEditor=(r,done,opts)=>{
       r.name=nameInp.value.trim();
       if(!r.name){O.toast(O.tr('Enter a role name','Введите название роли'));return}
       r.prompt=promptTa.value.trim();
+      r.kind=r.kind||'worker';
       r.backups=r.backups.slice(0,10);
       done(true,r);s.close();
     }},O.tr('Save','Сохранить')));
   draw();
 };
+
+// A judge role reviews the results of the workers and returns a verdict with concrete fixes.
+// It runs in its own child session so it can see the whole picture without touching files.
+async function mmRunJudge(mm,run,role,userText,results,parentSid,leadMain,onPhase){
+  if(!role)return '';
+  const model=O.mmRoleModels(role).model||leadMain;
+  try{
+    onPhase&&onPhase(O.tr('Judge: ','Судья: ')+role.name);
+    const cs=await api('POST','/session',{parentID:parentSid,title:mm.name+' · '+role.name});
+    const rtext='Ты — «'+(role.name||'Judge')+'», судья команды «'+mm.name+'».\n'+(role.prompt||'')+
+      '\n\nПроверь результаты остальных ролей: что сделано верно, что пропущено, что сломано. '+
+      'Верни вердикт списком с конкретными правками. Файлы не меняй.\n\n'+
+      'Исходный запрос пользователя: «'+userText+'»\n\nРезультаты ролей:\n\n'+results;
+    await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model,parts:[{type:'text',text:rtext}]},{timeout:30000});
+    run.jobs.push({sid:cs.id,role,task:O.tr('Review all role results','Проверить результаты ролей'),started:Date.now(),state:'running'});
+    onPhase&&onPhase(O.tr('Judge: ','Судья: ')+role.name);
+    await mmWaitIdle([cs.id],run,900000);
+    const verdict=await mmLastAssistant(cs.id).catch(()=>'');
+    const j=run.jobs[run.jobs.length-1];
+    if(j){j.result=verdict;j.state=verdict?'done':'error';j.finished=Date.now()}
+    return verdict;
+  }catch(e){
+    const j=run.jobs[run.jobs.length-1];
+    if(j){j.state='error';j.err=e.message||String(e);j.finished=Date.now()}
+    return '';
+  }
+}
 
 // ---- orchestration ----
 O.mm={run:null,last:null};
@@ -504,6 +545,25 @@ O.mmQuickEditRole=(roleName,mode,done)=>{
   });
 };
 
+// Debug view: the exact prompt that was sent to each role (useful when a role behaves oddly).
+O.mmDebugPrompts=()=>{
+  const r=O.mm.run||(O.mm.last&&O.mm.last.run);
+  const jobs=(r&&r.jobs)||[];
+  const body=h('div');
+  const s=O.sheet(O.tr('Role prompts','Промпты ролей'),body,{full:true});
+  if(!jobs.length){body.append(h('div',{class:'mut',style:{padding:'16px'}},O.tr('No runs yet','Запусков ещё не было')));return}
+  jobs.forEach((j,i)=>{
+    const name=(j.role&&j.role.name)||('role '+(i+1));
+    const text=j.prompt||O.tr('(not recorded — enable debug before the run)','(не записан — нужен запуск с включённой отладкой)');
+    body.append(h('div',{class:'settings-row',style:{alignItems:'flex-start'}},
+      h('div',{class:'settings-row-icon purple'},O.icon((j.role&&j.role.icon)||'bot')),
+      h('div',{class:'settings-row-text',style:{flex:1}},
+        h('b',null,name),
+        h('div',{class:'mono s',style:{whiteSpace:'pre-wrap',marginTop:'6px'}},text)),
+      h('button',{class:'ibtn s',onclick:()=>O.native.copy(text)},O.icon('copy'))));
+  });
+};
+
 // Markdown report of the last MM run: tasks -> roles -> results
 O.mmReport=()=>{
   const r=O.mm.run;const mm=O.mmActive();
@@ -534,7 +594,8 @@ O.mmExportReport=()=>{
   if(!md||md.split('\n').length<3)return O.toast(O.tr('Nothing to export yet','Пока нечего экспортировать'),2000);
   O.actions(O.tr('Export MM report','Экспорт отчёта MM'),[
     {label:O.tr('Copy Markdown','Скопировать Markdown'),icon:'copy',fn:()=>O.native.copy(md)},
-    {label:O.tr('Share file/text','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(md);else O.native.copy(md)}}]);
+    {label:O.tr('Share file/text','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(md);else O.native.copy(md)}},
+    {label:O.tr('Role prompts (debug)','Промпты ролей (отладка)'),icon:'code',fn:()=>O.mmDebugPrompts()}]);
 };
 
 // Actions for one role: open its session (only in session mode) or stop that model
@@ -592,11 +653,18 @@ O.mmGraphData=()=>{
   };
 };
 O.openMmGraph=async()=>{
+  const wrap=h('div');
+  const seg=h('div',{class:'seg',style:{margin:'10px 10px 6px'}},
+    h('button',{class:'on',onclick:e=>{mode='graph';mark(e.currentTarget);draw()}},O.tr('Graph','Граф')),
+    h('button',{onclick:e=>{mode='timeline';mark(e.currentTarget);draw()}},O.tr('Timeline','Таймлайн')));
+  const mark=b=>seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  let mode='graph';
   const body=h('div',{class:'mm-graph-wrap'});
   const svgNS='http://www.w3.org/2000/svg';
   let sheet=null;
   const draw=()=>{
     body.textContent='';
+    if(mode==='timeline'){drawTimeline();return}
     const g=O.mmGraphData();
     if(!g){body.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('The multimodal agent is not running','Мультимодальный агент не запущен')));return}
     const rows=g.nodes.length;
@@ -685,8 +753,38 @@ O.openMmGraph=async()=>{
       h('span',null,h('i',{class:'lg err'}),O.tr('failed','ошибка')),
       h('span',null,O.tr('tap a role for actions','нажмите на роль для действий'))));
   };
+  // Timeline: who worked when, as horizontal bars on a shared time axis. Much easier to read than
+  // the graph when a run involved many roles with retries.
+  const drawTimeline=()=>{
+    const r=O.mm.run||(O.mm.last&&O.mm.last.run);
+    const jobs=(r&&r.jobs)||[];
+    if(!jobs.length){body.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('No roles have run yet','Роли ещё не запускались')));return}
+    const now=Date.now();
+    const start=Math.min(...jobs.map(j=>j.started||now));
+    const end=Math.max(now,...jobs.map(j=>j.finished||(j.state==='done'?now:now)));
+    const span=Math.max(1000,end-start);
+    const list=h('div',{class:'group-card',style:{margin:'0 10px'}});
+    jobs.forEach(j=>{
+      const s0=j.started||start;
+      const s1=j.finished||now;
+      const left=Math.max(0,(s0-start)/span*100);
+      const width=Math.max(2,(s1-s0)/span*100);
+      const color=(j.role&&j.role.color)||(j.state==='done'?'#22c55e':j.state==='error'?'#ef4444':j.state==='stopped'?'#71717a':'#fab283');
+      const dur=Math.max(0,Math.round((s1-s0)/1000));
+      list.append(h('div',{style:{padding:'8px 10px'}},
+        h('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}},
+          O.icon((j.role&&j.role.icon)||'bot'),
+          h('b',{style:{fontSize:'12.5px'}},(j.role&&j.role.name)||'role'),
+          h('span',{class:'mut s',style:{marginLeft:'auto'}},dur+'s'+(j.state?' · '+j.state:''))),
+        h('div',{style:{position:'relative',height:'8px',borderRadius:'4px',background:'var(--bg3)',overflow:'hidden'}},
+          h('i',{style:{position:'absolute',left:left+'%',width:width+'%',top:0,bottom:0,background:color,borderRadius:'4px',opacity:j.state==='queue'?0.4:0.9}}))));
+    });
+    body.append(h('div',{class:'note',style:{margin:'0 12px 8px'}},O.tr('Bar length is wall-clock time. Retries appear as separate bars.','Длина полосы — реальное время. Повторы видны отдельными полосами.')),
+      list);
+  };
   draw();
-  sheet=O.sheet(O.tr('Multimodal agent graph','Граф мультимодального агента'),body,{full:true});
+  sheet=O.sheet(O.tr('Multimodal agent graph','Граф мультимодального агента'),h('div',null,seg,wrap),{full:true});
+  wrap.append(body);
   const t=setInterval(()=>{if(!sheet||!sheet.root.isConnected){clearInterval(t);return}draw()},1500);
 };
 
@@ -768,6 +866,9 @@ O.mmSend=async(text,parts)=>{
     // lead answered directly (no plan) — done. emit() is required, otherwise the progress pill and
     // the running timer stay on screen until some unrelated event happens to refresh them.
     if(!plan||!plan.length){O.mm.run=null;emit();return true}
+    // Routers do not execute: they only take part in planning, so their tasks are dropped.
+    plan=plan.filter(t=>!t.role||(t.role.kind||'worker')!=='router');
+    if(!plan.length){O.mm.run=null;emit();return true}
     const confirmed=await mmConfirmPlan(mm,plan);
     if(!confirmed){O.mm.run=null;emit();return true}
     plan=confirmed;
@@ -811,12 +912,21 @@ O.mmSend=async(text,parts)=>{
       if(run.abort)throw new Error('aborted');
       // collect per-subagent results from the session messages
       const collected=await mmCollectTasks(sid,run);
-      run.jobs.forEach(j=>{const c=collected[j.subagent||j.role.name];if(c){j.result=c;j.state='done'}
-        else if(j.state!=='stopped'){j.state='error';j.err=O.tr('no result','нет ответа')}});
+      run.jobs.forEach(j=>{const c=collected[j.subagent||j.role.name];if(c){j.result=c;j.state='done';j.finished=Date.now()}
+        else if(j.state==='running'||j.state==='queued'){j.state='error';j.err=O.tr('no result','нет ответа');j.finished=Date.now()}});
       emit();
+      // judge pass (optional): reviews everything before the lead writes the final answer
+      const judgeRole=(mm.roles||[]).find(r=>(r.kind||'worker')==='judge');
+      let verdict='';
+      if(judgeRole){
+        const res=run.jobs.map(j=>'['+(j.role&&j.role.name||'?')+']:\n'+(j.result||O.tr('(no result)','(нет ответа)'))).join('\n\n');
+        verdict=await mmRunJudge(mm,run,judgeRole,userText,res,sid,leadUsed||leadMain,ph=>{run.currentRole=ph;emit()});
+        if(run.abort)throw new Error('aborted');
+      }
       // final synthesis
       run.phase='synth';run.phaseStart=Date.now();run.currentRole=O.tr('Synthesis','Синтез');emit();
-      const results=run.jobs.map(j=>'['+(j.role&&j.role.name||'?')+']:\n'+(j.result||O.tr('(no result)','(нет ответа)'))).join('\n\n');
+      const results=run.jobs.map(j=>'['+(j.role&&j.role.name||'?')+']:\n'+(j.result||O.tr('(no result)','(нет ответа)'))).join('\n\n')+
+        (verdict?('\n\n[Вердикт судьи]:\n'+verdict):'');
       const finInstr=PLAN_TAG+' — ФИНАЛ\nСубагенты команды «'+mm.name+'» отработали задачи. Их результаты:\n\n'+results+
         '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ: что сделано и итог. Без служебных пометок.';
       await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:finInstr}]});
@@ -833,7 +943,7 @@ O.mmSend=async(text,parts)=>{
         const rtext='Ты — «'+t.role.name+'» в команде «'+mm.name+'».\n'+(t.role.prompt||'')+
           '\n\nЗадача от координатора: '+t.task+'\nИсходный запрос пользователя: «'+userText+'»\n\nВыполни свою часть и дай конкретный результат.';
         await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:O.mmRoleModels(t.role).model||leadMain,parts:[{type:'text',text:rtext}]},{timeout:30000});
-        jobs.push({sid:cs.id,role:t.role,task:t.task,started:Date.now()});
+        jobs.push({sid:cs.id,role:t.role,task:t.task,started:Date.now(),prompt:rtext});
         O.toast(O.tr('Role started: ','Роль запущена: ')+t.role.name,1800);
       }catch(e){jobs.push({sid:null,role:t.role,task:t.task,err:e.message||String(e)})}
     }
@@ -841,6 +951,7 @@ O.mmSend=async(text,parts)=>{
     // step 3: wait for all roles
     run.phase='role';run.phaseStart=Date.now();emit();
     await mmWaitIdle(jobs.filter(j=>j.sid).map(j=>j.sid),run);
+    jobs.forEach(j=>{if(!j.finished)j.finished=Date.now()});
     if(run.abort)throw new Error('aborted');
     // step 3.5: fallback per failed role — up to 3 backup models each (sequentially)
     for(let x=0;x<jobs.length;x++){
@@ -868,17 +979,26 @@ O.mmSend=async(text,parts)=>{
           if(t2.trim()){jobs[x]={sid:cs2.id,role:j.role,task:j.task};done=true;break}
         }catch(e){}
       }
-      if(!done){try{await api('DELETE','/session/'+j.sid,{})}catch(e){}jobs[x]={sid:null,role:j.role,err:O.tr('primary and backup models failed','основная и запасные модели не сработали')}}
+      if(!done){try{await api('DELETE','/session/'+j.sid,{})}catch(e){}jobs[x]={sid:null,role:j.role,err:O.tr('primary and backup models failed','основная и запасные модели не сработали'),started:j.started,finished:Date.now()}}
     }
-    // step 4: final synthesis by the lead model
-    run.phase='synth';run.phaseStart=Date.now();run.currentRole='Синтез';emit();
     const results=[];
     for(const j of jobs){
       if(!j.sid){results.push('['+j.role.name+']: (ошибка запуска: '+(j.err||'нет ответа')+')');continue}
       let t='';try{t=await mmLastAssistant(j.sid)}catch(e){}
       results.push('['+j.role.name+']:\n'+(t||'(нет ответа)'));
     }
+    // judge pass before the lead writes the final answer
+    const judgeRole=(mm.roles||[]).find(r=>(r.kind||'worker')==='judge');
+    let verdict='';
+    if(judgeRole){
+      run.jobs=jobs;
+      verdict=await mmRunJudge(mm,run,judgeRole,userText,results.join('\n\n'),sid,leadUsed||leadMain,ph=>{run.currentRole=ph;emit()});
+      if(run.abort)throw new Error('aborted');
+    }
+    // step 4: final synthesis by the lead model
+    run.phase='synth';run.phaseStart=Date.now();run.currentRole='Синтез';emit();
     const finInstr=PLAN_TAG+' — ФИНАЛ\nРоли команды «'+mm.name+'» завершили подзадачи. Их результаты:\n\n'+results.join('\n\n')+
+      (verdict?('\n\n[Вердикт судьи]:\n'+verdict):'')+
       '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ для пользователя: что сделано и итог. Без служебных пометок.';
     await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:finInstr}]});
     O.mm.last={run,resumable:null};

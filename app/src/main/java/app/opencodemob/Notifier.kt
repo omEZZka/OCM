@@ -52,6 +52,37 @@ object Notifier {
         try { NotificationManagerCompat.from(c).notify(1, runtime(c, text)) } catch (_: SecurityException) {}
     }
 
+    private var lastProgress = 0L
+
+    /**
+     * Live progress of a multimodal run: "role 2 of 4" plus a determinate bar. Uses its own low
+     * importance notification id so it never replaces the "needs action" one, and is throttled
+     * because role transitions can be frequent.
+     */
+    fun progress(c: Context, phase: String, done: Int, total: Int, sessionId: String = "") {
+        val now = System.currentTimeMillis()
+        if (now - lastProgress < 900 && done < total) return
+        lastProgress = now
+        if (total <= 0) { cancelProgress(c); return }
+        val id = 9
+        val text = if (phase.isNotEmpty()) "$phase · $done/$total" else "$done/$total"
+        val b = NotificationCompat.Builder(c, DONE)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(c.getString(R.string.notif_mm_title))
+            .setContentText(text)
+            .setOngoing(done < total)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setProgress(total, done, false)
+            .setContentIntent(open(c, sessionId))
+        try { NotificationManagerCompat.from(c).notify(id, b.build()) } catch (_: SecurityException) {}
+    }
+
+    fun cancelProgress(c: Context) {
+        lastProgress = 0L
+        try { NotificationManagerCompat.from(c).cancel(9) } catch (_: SecurityException) {}
+    }
+
     fun event(c: Context, kind: String, title: String, text: String, sessionId: String = "", sessionTitle: String = "", permissionId: String = "", questionId: String = "") {
         if (!Prefs.flag(c, "snd_$kind")) return
         beep(kind)

@@ -2,19 +2,19 @@ package app.opencodemob
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
-import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.os.SystemClock
 import android.view.View
 import androidx.core.content.ContextCompat
 
 /**
- * The floating bubble itself: a 46dp circle that keeps a ring for the current agent state and a
- * pulsing dot while work is in progress. When a label is set (working / MM role) the view widens
- * into a pill and draws up to four job dots underneath.
+ * The floating bubble itself: a 46dp circle that keeps a ring for the current agent state, a pulsing
+ * dot while work is in progress, and up to four small job markers.
+ *
+ * No text at all: only colours carry the meaning, so the bubble stays a perfect circle and never
+ * covers what is next to it. The legend lives in Settings → Appearance.
  *
  * Everything is drawn manually so the overlay stays one lightweight view: no layout passes, no
  * ripple, and zero invalidations while idle.
@@ -37,17 +37,6 @@ class OverlayBubble(context: Context) : View(context) {
         strokeCap = Paint.Cap.ROUND
     }
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textSize = dp(12f)
-        typeface = Typeface.DEFAULT_BOLD
-        isSubpixelText = true
-    }
-    private val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF9CA3AF.toInt()
-        textSize = dp(9.5f)
-        isSubpixelText = true
-    }
     private val icon: Drawable? = ContextCompat.getDrawable(context, R.drawable.ic_tile_server)
 
     var working: Boolean = false
@@ -60,22 +49,6 @@ class OverlayBubble(context: Context) : View(context) {
     var stateColor: Int = IDLE
         set(v) { field = v; invalidate() }
 
-    var label: String? = null
-        set(v) {
-            val t = v?.takeIf { it.isNotBlank() }
-            if (field == t) return
-            field = t
-            requestLayout(); invalidate()
-        }
-
-    var sublabel: String? = null
-        set(v) {
-            val t = v?.takeIf { it.isNotBlank() }
-            if (field == t) return
-            field = t
-            requestLayout(); invalidate()
-        }
-
     var jobs: List<String> = emptyList()
         set(v) {
             if (field == v) return
@@ -85,16 +58,9 @@ class OverlayBubble(context: Context) : View(context) {
 
     private val bubble get() = dp(46f)
 
-    private fun textWidth(): Float {
-        var w = 0f
-        label?.let { w = w.coerceAtLeast(textPaint.measureText(it)) }
-        if (jobs.isNotEmpty()) w = w.coerceAtLeast(jobs.size.coerceAtMost(4) * dp(9f))
-        return w
-    }
-
+    // Colour markers only: the bubble never grows into a pill, so it cannot cover content next to it.
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val extra = if (label != null || jobs.isNotEmpty()) dp(9f) + textWidth() + dp(12f) else 0f
-        setMeasuredDimension((bubble + extra).toInt(), bubble.toInt())
+        setMeasuredDimension(bubble.toInt(), bubble.toInt())
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -133,31 +99,28 @@ class OverlayBubble(context: Context) : View(context) {
             canvas.drawCircle(cx + r * 0.60f, cy - r * 0.60f, dp(3f) + dp(2.4f) * (1f - phase), dotPaint)
             // ~25 fps is enough for the sweep dot and keeps the overlay cheap on battery
             postInvalidateDelayed(40)
-        } else if (label != null || jobs.isNotEmpty()) {
+        } else if (jobs.isNotEmpty()) {
             postInvalidateDelayed(2000) // nothing animates; keep the static ring fresh
         }
 
-        val x = bubble + dp(9f)
-        label?.let {
-            val y = if (jobs.isNotEmpty() || sublabel != null) cy - dp(3f) else cy + textPaint.textSize / 3f
-            canvas.drawText(it, x, y, textPaint)
-        }
-        sublabel?.let { canvas.drawText(it, x, cy + dp(9f), subPaint) }
-
+        // Job markers: up to four tiny dots along the bottom edge, inside the circle.
         if (jobs.isNotEmpty()) {
-            var dx = x + dp(1f)
-            val dy = if (label != null) cy + dp(9f) else cy
-            jobs.take(4).forEach { st ->
-                dotPaint.alpha = 255
+            val shown = jobs.take(4)
+            val gap = dp(7f)
+            val total = gap * (shown.size - 1)
+            var dx = cx - total / 2f
+            val dy = cy + r * 0.52f
+            dotPaint.alpha = 255
+            shown.forEach { st ->
                 dotPaint.color = when (st) {
                     "done" -> 0xFF22C55E.toInt()
                     "running" -> stateColor
                     "error" -> ERROR
                     "stopped" -> 0xFF71717A.toInt()
-                    else -> 0xFF3F3F46.toInt()
+                    else -> 0xFF52525B.toInt()
                 }
-                canvas.drawCircle(dx + dp(3f), dy, dp(3f), dotPaint)
-                dx += dp(9f)
+                canvas.drawCircle(dx, dy, dp(2.6f), dotPaint)
+                dx += gap
             }
         }
     }

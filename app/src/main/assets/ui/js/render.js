@@ -159,5 +159,57 @@ O.codeLines=(text,lang)=>{let html;try{html=lang&&hljs.getLanguage(lang)?hljs.hi
 O.codeView=(text,path)=>{const lines=text.split('\n');const big=lines.length>4000;const use=big?lines.slice(0,4000).join('\n'):text;
   const hl=O.codeLines(use,big?null:O.langOf(path));const box=h('div',{class:'code-view'});
   const fr=document.createDocumentFragment();hl.forEach((l,i)=>{const row=h('div',{class:'ln'},h('i',null,i+1),h('span',{html:l||' '}));fr.append(row)});box.append(fr);
-  if(big)box.append(h('div',{class:'mut s',style:{padding:'8px 12px'}},'Показаны первые 4000 строк'));return box};
+  if(big)box.append(h('div',{class:'mut s',style:{padding:'8px 12px'}},'Показаны первые 4000 строк'));
+  // Minimap: a thin column on the right showing the file's shape (indentation + non-empty lines).
+  // It doubles as a scrollbar — tapping a spot jumps to that part of the file.
+  if(hl.length>60){
+    const wrap=h('div',{style:{position:'relative',display:'flex',flex:1,minHeight:0,overflow:'hidden'}});
+    const holder=box.parentNode;
+    if(holder)holder.replaceChild(wrap,box);
+    wrap.append(box);
+    const map=h('div',{style:{flex:'0 0 46px',position:'relative',overflow:'hidden',background:'var(--bg2)',borderLeft:'1px solid var(--line)',cursor:'pointer'}});
+    const canvas=h('canvas',{style:{width:'100%',height:'100%',display:'block'}});
+    map.append(canvas);
+    wrap.append(map);
+    const paintMap=()=>{
+      const dpr=Math.min(2,window.devicePixelRatio||1);
+      canvas.width=46*dpr;canvas.height=Math.max(1,map.clientHeight)*dpr;
+      const g=canvas.getContext('2d');g.scale(dpr,dpr);
+      g.clearRect(0,0,46,map.clientHeight);
+      const n=hl.length, step=map.clientHeight/n;
+      const accent=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()||'#fab283';
+      g.fillStyle=accent;
+      for(let i=0;i<n;i++){
+        const line=hl[i].replace(/<[^>]*>/g,'');
+        if(!line.trim())continue;
+        const indent=(line.match(/^\s*/)||[''])[0].length;
+        const x=4+Math.min(26,indent*1.1);
+        const w=Math.min(34-x,(line.trim().length/6)|0)||2;
+        g.globalAlpha=0.55;
+        g.fillRect(x,i*step,Math.max(1,w),Math.max(0.7,step));
+      }
+      // viewport indicator
+      const total=box.scrollHeight||1;
+      const top=(box.scrollTop/total)*map.clientHeight;
+      const hgt=Math.max(8,(box.clientHeight/total)*map.clientHeight);
+      g.globalAlpha=0.16;g.fillStyle='#fff';g.fillRect(0,top,46,hgt);
+    };
+    const ro=new ResizeObserver(()=>paintMap());ro.observe(map);
+    requestAnimationFrame(paintMap);
+    map.addEventListener('click',e=>{
+      const rect=map.getBoundingClientRect();
+      const pct=(e.clientY-rect.top)/rect.height;
+      box.scrollTop=pct*(box.scrollHeight-box.clientHeight);
+    });
+    map.addEventListener('pointermove',e=>{
+      if(e.buttons!==1)return;
+      const rect=map.getBoundingClientRect();
+      const pct=(e.clientY-rect.top)/rect.height;
+      box.scrollTop=pct*(box.scrollHeight-box.clientHeight);
+    });
+    // repaint the viewport marker while scrolling (throttled: it is only decoration)
+    const onScroll=()=>{if(map._t)return;map._t=requestAnimationFrame(()=>{map._t=0;paintMap()})};
+    box.addEventListener('scroll',onScroll,{passive:true});
+  }
+  return box};
 })();

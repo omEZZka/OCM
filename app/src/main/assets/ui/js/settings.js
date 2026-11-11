@@ -79,6 +79,16 @@ O.openSettings=()=>{
       if(v){O.native.startOverlay&&O.native.startOverlay()}
       else{O.native.stopOverlay&&O.native.stopOverlay()}
     });
+  const legendDot=(color,label)=>h('span',{style:{display:'inline-flex',alignItems:'center',gap:'5px',marginRight:'10px',fontSize:'11.5px',color:'var(--mut)'}},
+    h('i',{style:{width:'8px',height:'8px',borderRadius:'50%',background:color,display:'inline-block'}}),label);
+  const overlayLegend=h('div',{class:'note',style:{margin:'2px 2px 8px',lineHeight:'1.9'}},
+    h('div',{style:{marginBottom:'2px'}},O.tr('Bubble colours:','Цвета пузыря:')),
+    h('div',null,
+      legendDot('#71717a',O.tr('idle','простой')),
+      legendDot('#fab283',O.tr('working','работает')),
+      legendDot('#f59e0b',O.tr('waiting for you','ждёт ответа')),
+      legendDot('#ef4444',O.tr('error','ошибка'))),
+    h('div',{style:{marginTop:'4px',fontSize:'11px'}},O.tr('Small dots under the icon are the multimodal roles: green done, accent running, grey queued.','Точки под иконкой — роли мультимодального агента: зелёная готова, акцентная работает, серая в очереди.')));
   const onlyBusyRow=O.toggleRow('zap',O.tr('Only while working','Только во время работы'),
     O.tr('Hide the bubble a few seconds after the agent goes idle','Скрывать пузырь через пару секунд после завершения'),
     O.store.get('overlayOnlyBusy',false),v=>{
@@ -87,7 +97,7 @@ O.openSettings=()=>{
       try{if(window.OC&&OC.setFlag)OC.setFlag('overlay_only_busy',v)}catch(_){}
     });
   const detailRow=O.toggleRow('code',O.tr('Expand Tool Details','Детали инструментов'),O.tr('Show commands, output and file diffs','Команды, вывод терминала и правки'),S.opts.details,v=>{S.opts.details=v;O.saveOpts();O.chat.renderAll()});
-  appCard.append(langRow,themeRow,thinkRow,detailRow,overlayRow,onlyBusyRow);
+  appCard.append(langRow,themeRow,thinkRow,detailRow,overlayRow,overlayLegend,onlyBusyRow);
   body.append(appCard);
 
   // 4. Notifications & Sounds

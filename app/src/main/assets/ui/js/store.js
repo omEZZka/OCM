@@ -347,6 +347,44 @@ O.sortModelsByProvider=items=>{
     return String(a.name||a.mid).localeCompare(String(b.name||b.mid));
   });
 };
+// ---- API key ring: several keys per provider, rotated when one runs out of quota ----
+// Keys live in localStorage (not in the exported settings) and are written into the server's
+// auth.json one at a time; the rest wait their turn.
+O.keyRing=()=>O.store.get('keyRing',{});
+O.keyRingOf=pid=>(O.keyRing()[pid]||[]);
+O.keyRingSet=(pid,list)=>{
+  const all=O.keyRing();
+  const clean=(list||[]).map(k=>String(k||'').trim()).filter(Boolean).slice(0,8);
+  if(clean.length)all[pid]=clean;else delete all[pid];
+  O.store.set('keyRing',all);
+};
+O.keyRingIndex=pid=>O.store.get('keyRingIdx.'+pid,0);
+O.keyRingActive=pid=>{const l=O.keyRingOf(pid);return l.length?l[Math.min(O.keyRingIndex(pid),l.length-1)]:''};
+// Writes the given key into auth.json and asks the server to reload providers.
+O.applyProviderKey=async(pid,key)=>{
+  try{
+    const r=O.native.readText('/root/.local/share/opencode/auth.json');
+    let o={};
+    try{o=JSON.parse((r&&r.text)||'{}')}catch(_){o={}}
+    o[pid]=Object.assign({},o[pid]||{},{type:'api',key});
+    const w=O.native.writeText('/root/.local/share/opencode/auth.json',JSON.stringify(o,null,2));
+    if(!w||!w.ok)throw new Error((w&&w.err)||O.tr('Cannot write auth.json','Не удалось записать auth.json'));
+    try{await api('POST','/instance/dispose',null)}catch(_){}
+    await O.loadMeta();
+    return true;
+  }catch(e){O.toast(e.message||String(e),4000);return false}
+};
+// Next key for the provider of the given model: used automatically on quota errors.
+O.rotateProviderKey=async(pid,quiet)=>{
+  const list=O.keyRingOf(pid);
+  if(list.length<2)return false;
+  const idx=(O.keyRingIndex(pid)+1)%list.length;
+  O.store.set('keyRingIdx.'+pid,idx);
+  const ok=await O.applyProviderKey(pid,list[idx]);
+  if(ok&&!quiet)O.toast(O.tr('Switched to key ','Переключился на ключ ')+(idx+1)+'/'+list.length,2500);
+  return ok;
+};
+
 // ---- model folders: user-defined groups of models that can be pinned as one block ----
 // A folder is {id,name,order,keys:[...],color} and is only a view over `pid/mid` keys, so a folder
 // survives provider renames and model churn.
@@ -448,6 +486,30 @@ O.pickDefaults=()=>{
   }
   S.variant=v;
 };
+// Cycling through models with a swipe needs a stable, meaningful order: use the same order the
+// picker shows, but without hidden models and without the folder grouping (flat list).
+O.cycleModel=dir=>{
+  const all=O.allModels().filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
+  if(!all.length)return;
+  let list=O.sortModelsByProvider(all);
+  const onlyFree=O.store.get('onlyFreeModels',true);
+  const free=list.filter(x=>O.isModelFree(x));
+  if(onlyFree&&free.length)list=free;
+  // pinned models first, like the picker
+  const pinned=O.pinnedModels();
+  if(pinned.length){
+    const p=list.filter(x=>pinned.includes(x.pid+'/'+x.mid));
+    const rest=list.filter(x=>!pinned.includes(x.pid+'/'+x.mid));
+    if(p.length)list=p.concat(rest);
+  }
+  const cur=S.model?S.model.providerID+'/'+S.model.modelID:'';
+  let i=list.findIndex(x=>x.pid+'/'+x.mid===cur);
+  if(i<0)i=dir>0?-1:0;
+  const next=list[(i+(dir>0?1:list.length-1))%list.length];
+  if(!next)return;
+  O.setModel(next.pid,next.mid);
+  O.toast(O.tr('Model: ','Модель: ')+(next.name||next.mid),1400);
+};
 O.setModel=(pid,mid)=>{
   S.model={providerID:pid,modelID:mid};
   O.store.set('model.'+S.agent,S.model);
@@ -541,9 +603,29 @@ O.setDir=async(dir)=>{
   const last=O.store.get('sid.'+dir);const pick=S.sessions.find(x=>x.id===last)||S.sessions[0];
   await O.openSession(pick?pick.id:null);bus.emit('files')};
 O.sessionTitle=s=>s?(s.title&&!/^(New session|Child session|Новая сессия) - /.test(s.title)?s.title:'Новая сессия'):'OpenCode';
+// One-line summary for the sessions drawer: tokens spent and what is left in the context window.
+O.sessionStats=sid=>{
+  const u=O.contextUsage(sid);
+  const msgs=O.msgs(sid).list;
+  let tok=0,cost=0;
+  for(const m of msgs){
+    const i=m.info;
+    if(i&&i.tokens)tok+=(i.tokens.input||0)+(i.tokens.output||0)+(i.tokens.reasoning||0);
+    if(i&&typeof i.cost==='number')cost+=i.cost;
+  }
+  return{tok,cost,pct:u?u.pct:null,lim:u?u.lim:null};
+};
 O.contextUsage=sid=>{const l=O.visibleMsgs(sid);for(let i=l.length-1;i>=0;i--){const x=l[i].info;if(x.role==='assistant'&&x.tokens&&(x.tokens.input||x.tokens.output)){
   const t=x.tokens,tot=(t.input||0)+(t.output||0)+(t.reasoning||0)+((t.cache&&t.cache.read)||0)+((t.cache&&t.cache.write)||0);
-  const mi=O.modelInfo(x.providerID,x.modelID),lim=mi&&mi.limit&&mi.limit.context;return{tot,pct:lim?Math.round(tot*100/lim):null}}}return null};
+  const mi=O.modelInfo(x.providerID,x.modelID),lim=mi&&mi.limit&&mi.limit.context;
+  return{tot,pct:lim?Math.round(tot*100/lim):null,lim:lim||null}}}return null};
+// Context left in the window, for one session or for the active one (used by model list & drawer).
+O.contextLeft=sid=>{
+  const u=O.contextUsage(sid||S.sid);
+  if(!u||!u.lim)return null;
+  const left=Math.max(0,u.lim-u.tot);
+  return{left,lim:u.lim,pct:Math.round(left*100/u.lim),usedPct:u.pct};
+};
 // ---- "continue generation" ----
 // OpenCode has no dedicated continue endpoint, so we resume by sending a single synthetic prompt
 // with `noReply:false` and an explicit instruction. The last assistant text is passed as context so

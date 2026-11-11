@@ -279,8 +279,6 @@ class OverlayService : Service() {
         val b = bubble ?: return
         val p = params ?: return
         val busy = Prefs.flag(this, "widget_running", false)
-        val title = Prefs.get(this, "widget_title", "")
-        val phase = Prefs.get(this, "overlay_phase", "")
         val jobsRaw = Prefs.get(this, "overlay_jobs", "")
         val perm = Prefs.flag(this, "overlay_attention", false)
         val err = Prefs.flag(this, "overlay_error", false)
@@ -292,18 +290,9 @@ class OverlayService : Service() {
             busy -> OverlayBubble.ACCENT
             else -> OverlayBubble.IDLE
         }
-        if (busy) {
-            b.label = when {
-                phase.isNotEmpty() && title.isNotEmpty() -> phase + " · " + title.take(18)
-                phase.isNotEmpty() -> phase
-                title.isNotEmpty() -> title.take(22)
-                else -> getString(R.string.overlay_working)
-            }
-        } else b.label = null
+        // No text on the bubble: only the ring colour, the pulse and the job markers carry state.
         b.jobs = jobsRaw.split(',').filter { it.isNotBlank() }.take(4)
-        b.sublabel = null
-        // WRAP_CONTENT windows do not always re-measure on requestLayout alone: push the new size.
-        val sig = (b.label ?: "") + "|" + b.jobs.joinToString(",")
+        val sig = b.jobs.joinToString(",")
         if (sig != lastSig) {
             lastSig = sig
             try { wm?.updateViewLayout(b, p) } catch (_: Exception) {}

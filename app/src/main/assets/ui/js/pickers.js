@@ -8,6 +8,14 @@ O.sessionPending=sid=>{
   const p=(S.perms||[]).filter(x=>x.sessionID===sid).length;
   return {q,p};
 };
+// "Working set": sessions the user marked as active work. They get a badge and float above the rest.
+O.workSessions=()=>O.store.get('workSessions',[]);
+O.isWorkSession=id=>O.workSessions().includes(id);
+O.toggleWorkSession=id=>{
+  const l=O.workSessions();const i=l.indexOf(id);
+  if(i>=0)l.splice(i,1);else l.push(id);
+  O.store.set('workSessions',l);bus.emit('sessions');
+};
 O.pinnedSessions=()=>O.store.get('pinned',[]);
 O.isPinned=id=>O.pinnedSessions().includes(id);
 O.togglePin=id=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i>=0)l.splice(i,1);else l.push(id);O.store.set('pinned',l);bus.emit('sessions');};
@@ -35,16 +43,48 @@ O.openSessions=()=>{
     tagBar.append(chip(O.tr('All','Все'),''),...tags.map(t=>chip('#'+t,t)));
     tagBar.classList.toggle('hide',!tags.length);
   }
+  // session line: token spend, and remaining context when the model limit is known
+  const sessionStatBit=x=>{
+    const st=O.sessionStats?O.sessionStats(x.id):null;
+    if(!st||!st.tok)return '';
+    let s='  ·  '+O.fmtK(st.tok)+' tok';
+    if(st.pct!=null)s+=' ('+st.pct+'%)';
+    if(st.cost>0)s+=' · $'+st.cost.toFixed(2);
+    return s;
+  };
+  // Date buckets keep a long session list readable without any extra taps.
+  const dayKey=ts=>{
+    if(!ts)return '';
+    const d=new Date(ts),n=new Date();
+    const day=(a)=>new Date(a.getFullYear(),a.getMonth(),a.getDate()).getTime();
+    const diff=Math.round((day(n)-day(d))/86400000);
+    if(diff<=0)return O.tr('Today','Сегодня');
+    if(diff===1)return O.tr('Yesterday','Вчера');
+    if(diff<7)return O.tr('This week','На этой неделе');
+    if(diff<31)return O.tr('This month','В этом месяце');
+    return d.toLocaleDateString(undefined,{year:'numeric',month:'long'});
+  };
   function draw(){list.textContent='';drawTags();const f=q.value.toLowerCase();
     const items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f)&&(!activeTag||O.sessionTag(x.id)===activeTag));
     items.sort((a,b)=>{const pa=O.isPinned(a.id)?0:1,pb=O.isPinned(b.id)?0:1;if(pa!==pb)return pa-pb;return (b.time&&b.time.updated||0)-(a.time&&a.time.updated||0)});
     if(!items.length)list.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('No sessions yet','Сессий пока нет')));
-    items.forEach(x=>{const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,pin=O.isPinned(x.id),tag=O.sessionTag(x.id);
+    // grouping is applied only while browsing (no search); searching keeps the flat, ranked list
+    let lastGroup=null;
+    items.forEach(x=>{
+      if(!f){
+        const g=O.isWorkSession(x.id)?O.tr('Working set','Рабочие'):dayKey(x.time&&x.time.updated);
+        if(g!==lastGroup){
+          lastGroup=g;
+          list.append(h('div',{class:'grp',style:{marginTop:lastGroup===g?'0':'10px'}},g));
+        }
+      }
+      const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,pin=O.isPinned(x.id),tag=O.sessionTag(x.id);
+      const isWork=O.isWorkSession(x.id);
       const pend=O.sessionPending(x.id);
       list.append(h('div',{class:'settings-row'+(x.id===S.sid?' on':'')},
         h('button',{class:'settings-row-text',onclick:()=>{s.close();O.openSession(x.id)}},
-          h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},pin?O.icon('pin','pin-ic'):null,h('span',null,O.sessionTitle(x)),x.local?h('span',{class:'mut s'},'· offline'):null),
-          h('span',null,(tag?'#'+tag+'  ':'')+O.ago(x.time.updated)+(sm&&(sm.additions||sm.deletions)?'  +'+sm.additions+' -'+sm.deletions:''))),
+          h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},pin?O.icon('pin','pin-ic'):null,h('span',null,O.sessionTitle(x)),isWork?h('span',{class:'sess-badge work',title:O.tr('Working set','Рабочая сессия')},O.icon('star')):null,x.local?h('span',{class:'mut s'},'· offline'):null),
+          h('span',null,(tag?'#'+tag+'  ':'')+O.ago(x.time.updated)+(sm&&(sm.additions||sm.deletions)?'  +'+sm.additions+' -'+sm.deletions:'')+sessionStatBit(x))),
         pend.q?h('span',{class:'sess-badge q',title:O.tr('Question pending','Ждёт ответа на вопрос')},O.icon('at'),pend.q>1?h('i',null,pend.q):null):null,
         pend.p?h('span',{class:'sess-badge p',title:O.tr('Permission pending','Ждёт разрешения')},O.icon('excl'),pend.p>1?h('i',null,pend.p):null):null,
         b?h('span',{class:'spin',style:{flex:'none'}}):null,
@@ -69,6 +109,7 @@ async function restartApp(){
 }
 function sessActions(x){O.actions(O.sessionTitle(x),[
   {label:O.isPinned(x.id)?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'star',fn:()=>{O.togglePin(x.id)}},
+  {label:O.isWorkSession(x.id)?O.tr('Remove from working set','Убрать из рабочих'):O.tr('Mark as working','Отметить как рабочую'),icon:'zap',fn:()=>{O.toggleWorkSession(x.id)}},
   {label:O.sessionTag(x.id)?('#'+O.sessionTag(x.id)+' · '+O.tr('change folder/tag','сменить папку/тег')):O.tr('Folder / tag','Папка / тег'),icon:'folder',fn:async()=>{
     const cur=O.sessionTag(x.id);
     const tags=O.sessionTagList();
@@ -252,7 +293,14 @@ O.openModels=()=>{
       // so the list was impossible to navigate without it
       const provName=x.pname||(x.pid==='opencode'?'OpenCode Zen':x.pid);
       parts.push(provName);
-      if(ctx)parts.push(O.fmtK(ctx)+' context');
+      if(ctx){
+        parts.push(O.fmtK(ctx)+' context');
+        // remaining context is only meaningful for the model currently in use
+        if(isSel){
+          const cl=O.contextLeft&&O.contextLeft();
+          if(cl)parts.push(O.tr('left','осталось')+' '+O.fmtK(cl.left)+' ('+cl.pct+'%)');
+        }
+      }
       if(x.m&&(x.m.modalities&&x.m.modalities.includes('image')||x.m.attachment!==false))parts.push('images');
       if(x.m&&(x.m.reasoning||x.m.variants))parts.push('reasoning');
       if(!isFree&&x.m&&x.m.cost&&typeof x.m.cost.input==='number'&&x.m.cost.input>0){
@@ -608,12 +656,23 @@ O.openConnect=async()=>{
     O.actions(name(p),[...ms.map(x=>({label:x.m.label||(x.m.type==='oauth'?'Войти':'API-ключ'),icon:x.m.type==='oauth'?'user':'key',fn:()=>go(x)})),
       conn.has(p.id)?{label:'Отключить',icon:'trash',danger:true,fn:()=>disconnect(p)}:null])};
   const keyForm=p=>{const inp=h('input',{type:'password',placeholder:'Вставьте API-ключ',autocapitalize:'off',autocorrect:'off'});
-    const sh=O.sheet(name(p),h('div',null,h('div',{class:'field'},h('label',null,'API-ключ'),inp),
+    const ring=O.keyRingOf(p.id);
+  const ringCard=h('div',null,
+    h('div',{class:'grp',style:{marginTop:'12px'}},O.tr('Key ring','Несколько ключей')),
+    h('div',{class:'note'},O.tr('Add more keys of the same provider: on a quota error the app switches to the next one automatically instead of failing the prompt.','Добавьте несколько ключей одного провайдера: при исчерпании квоты приложение само переключится на следующий, вместо ошибки запроса.')),
+    ring.length?h('div',{class:'fchips',style:{margin:'6px 0'}},ring.map((k,i)=>h('span',{class:'chip keep',style:{fontSize:'12px'}},
+      ('#'+(i+1)+' · '+k.slice(0,4)+'…'+k.slice(-4)),
+      h('button',{class:'chip-x',style:{marginLeft:'4px',opacity:'.55'},onclick:()=>{O.keyRingSet(p.id,ring.filter((_,j)=>j!==i));sh.close();keyForm(p)}},O.icon('x'))))):null);
+  const sh=O.sheet(name(p),h('div',null,h('div',{class:'field'},h('label',null,'API-ключ'),inp),ringCard,
       p.id==='opencode'?h('div',{class:'note',style:{margin:'8px 0'}},'Получите ключ Zen на opencode.ai/zen. Бесплатные модели работают и без него.'):null,
       h('button',{class:'btn pri wide',onclick:async()=>{
         const key=inp.value.trim();if(!key)return;
         try{
           await api('PUT','/auth/'+p.id,{type:'api',key});
+          // keep it in the ring as the active key so rotation has something to switch to
+          const old=O.keyRingOf(p.id).filter(k=>k!==key);
+          O.keyRingSet(p.id,[key].concat(old));
+          O.store.set('keyRingIdx.'+p.id,0);
           if(p.id==='openrouter'||p.id==='groq'){
             try{
               const t=O.native.cfgRead();let obj={};try{if(t.trim())obj=O.parseJsonc(t)}catch{}
@@ -654,6 +713,7 @@ O.openConnect=async()=>{
     }catch(e){view.textContent=e.message}};
   const disconnect=async p=>{const r=O.native.readText('/root/.local/share/opencode/auth.json');
     try{const o=JSON.parse(r.text||'{}');delete o[p.id];const w=O.native.writeText('/root/.local/share/opencode/auth.json',JSON.stringify(o,null,2));if(!w.ok)throw new Error(w.err||'ошибка записи');
+      O.keyRingSet(p.id,[]);O.store.remove('keyRingIdx.'+p.id);
       try{await api('POST','/instance/dispose',null)}catch{}await O.loadMeta();conn.delete(p.id);draw();O.toast('Отключено')}catch(e){O.toast(e.message)}}};
 
 // ---- status: MCP / LSP / plugins ----

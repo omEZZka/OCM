@@ -162,8 +162,13 @@ class OpenCodeService : Service() {
                 if (st == "busy" || st == "running" || st == "retry") {
                     val title = props.optString("title").ifEmpty { "Задача выполняется" }
                     WidgetUpdater.set(this, title, if (sid.isNotEmpty()) "Сессия ${sid.take(8)}" else "OpenCode работает", true)
+                    // The UI publishes MM progress in Prefs; mirror it into a determinate notification.
+                    val mmDone = Prefs.get(this, "overlay_jobs", "").split(',').count { it == "done" }
+                    val mmAll = Prefs.get(this, "overlay_jobs", "").split(',').count { it.isNotBlank() }
+                    if (mmAll > 0) Notifier.progress(this, Prefs.get(this, "overlay_phase", ""), mmDone, mmAll, sid)
                 } else if (st == "idle") {
                     WidgetUpdater.idle(this)
+                    Notifier.cancelProgress(this)
                 }
             }
             type == "session.idle" -> {

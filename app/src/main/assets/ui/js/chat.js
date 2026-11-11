@@ -670,6 +670,14 @@ function updateChips(){
     modelChip.classList.toggle('has-profile',!!prof);
     modelChip.title=prof?(O.tr('Profile: ','Профиль: ')+prof):'';
   }
+  // Swipe the model chip left/right to cycle models: no need to open the full list.
+  if(modelChip&&!modelChip._swipe){
+    modelChip._swipe=1;
+    O.swipe(modelChip,d=>{
+      if(d==='left')O.cycleModel(1);
+      else if(d==='right')O.cycleModel(-1);
+    },{threshold:36});
+  }
   // long-press on the model chip: quick profile switching without opening the whole list
   if(modelChip&&!modelChip._profLp){
     modelChip._profLp=1;
@@ -819,6 +827,11 @@ async function onSend(){
         lastErr=e;
         const s=O.msgs(sid);s.list=s.list.filter(x=>x.info.id!==mid);s.idx.delete(mid);const el=msgEls.get(mid);if(el){el.remove();msgEls.delete(mid)}
         const retryable=quotaRe.test(String(e.message))||!e.status||e.status>=429;
+        // Quota exhausted: try the next key of the same provider before falling back to another model.
+        if(quotaRe.test(String(e.message))&&O.keyRingOf(mdl.providerID).length>1){
+          const rotated=await O.rotateProviderKey(mdl.providerID,true);
+          if(rotated){i--;continue} // retry the same model with the fresh key
+        }
         if(i<chain.length-1&&retryable){
           O.toast(O.tr('Model unavailable, trying fallback...','Модель недоступна, пробую резервную…')+' '+(chain[i+1].modelID||''),2500);
           continue;

@@ -2652,6 +2652,7 @@ a:hover {
 .mm-graph-ctrl .btn.sm{display:inline-flex;align-items:center;gap:4px}
 
 .sess-badge.sub{background:rgba(168,85,247,0.16);color:#a855f7}
+.sess-badge.work{background:rgba(250,178,131,0.16);color:var(--acc)}
 .mm-graph-node[style*="--role-color"] .mm-graph-box{stroke:var(--role-color)}
 .mm-graph-node[style*="--role-color"].busy .mm-graph-box{fill:rgba(56,189,248,0.10)}
 .chip[style*="--role-color"]{border-color:var(--role-color)}
