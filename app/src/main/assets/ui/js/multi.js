@@ -192,6 +192,23 @@ O.openMultimodal=()=>{
   redraw();
 };
 
+const MM_TEMPLATES=[
+  {id:'research',name:{ru:'Исследование',en:'Research'},roles:[
+    {name:'Researcher',icon:'search',prompt:'Собери факты и источники по теме. Без выводов, только проверенные данные.'},
+    {name:'Analyst',icon:'flask',prompt:'Структурируй факты, найди противоречия и пробелы.'},
+    {name:'Writer',icon:'doc',prompt:'Напиши финальный ответ: кратко, по делу, со структурой.'}]},
+  {id:'refactor',name:{ru:'Рефакторинг',en:'Refactor'},roles:[
+    {name:'Explorer',icon:'search',prompt:'Найди все затронутые файлы и опиши текущую архитектуру.'},
+    {name:'Coder',icon:'code',prompt:'Внеси минимальные правки, сохраняя поведение и стиль проекта.'},
+    {name:'Reviewer',icon:'bug',prompt:'Проверь правки: регрессии, крайние случаи, читаемость. Дай замечания списком.'}]},
+  {id:'review',name:{ru:'Ревью PR',en:'PR review'},roles:[
+    {name:'Security',icon:'shield',prompt:'Ищи уязвимости, утечки секретов, небезопасные вызовы и отсутствие проверок.'},
+    {name:'Performance',icon:'zap',prompt:'Ищи лишние аллокации, N+1, блокирующие вызовы и утечки памяти.'},
+    {name:'Summary',icon:'doc',prompt:'Сведи замечания в короткий отчёт с приоритетами.'}]},
+  {id:'translate',name:{ru:'Перевод',en:'Translation'},roles:[
+    {name:'Translator',icon:'globe',prompt:'Переведи текст, сохраняя термины и форматирование.'},
+    {name:'Editor',icon:'edit',prompt:'Вычитай перевод: естественность, тон, единообразие терминов.'}]}
+];
 // ---- editor ----
 O.mmEditor=(a,done)=>{
   const isNew=!a;
@@ -463,23 +480,6 @@ O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new
 
 // ---- visual team builder: edit roles straight from the graph ----
 // Team templates: a starting point that is editable after insertion.
-const MM_TEMPLATES=[
-  {id:'research',name:{ru:'Исследование',en:'Research'},roles:[
-    {name:'Researcher',icon:'search',prompt:'Собери факты и источники по теме. Без выводов, только проверенные данные.'},
-    {name:'Analyst',icon:'flask',prompt:'Структурируй факты, найди противоречия и пробелы.'},
-    {name:'Writer',icon:'doc',prompt:'Напиши финальный ответ: кратко, по делу, со структурой.'}]},
-  {id:'refactor',name:{ru:'Рефакторинг',en:'Refactor'},roles:[
-    {name:'Explorer',icon:'search',prompt:'Найди все затронутые файлы и опиши текущую архитектуру.'},
-    {name:'Coder',icon:'code',prompt:'Внеси минимальные правки, сохраняя поведение и стиль проекта.'},
-    {name:'Reviewer',icon:'bug',prompt:'Проверь правки: регрессии, крайние случаи, читаемость. Дай замечания списком.'}]},
-  {id:'review',name:{ru:'Ревью PR',en:'PR review'},roles:[
-    {name:'Security',icon:'shield',prompt:'Ищи уязвимости, утечки секретов, небезопасные вызовы и отсутствие проверок.'},
-    {name:'Performance',icon:'zap',prompt:'Ищи лишние аллокации, N+1, блокирующие вызовы и утечки памяти.'},
-    {name:'Summary',icon:'doc',prompt:'Сведи замечания в короткий отчёт с приоритетами.'}]},
-  {id:'translate',name:{ru:'Перевод',en:'Translation'},roles:[
-    {name:'Translator',icon:'globe',prompt:'Переведи текст, сохраняя термины и форматирование.'},
-    {name:'Editor',icon:'edit',prompt:'Вычитай перевод: естественность, тон, единообразие терминов.'}]}
-];
 O.mmApplyTemplate=(mm,tplId)=>{
   const t=MM_TEMPLATES.find(x=>x.id===tplId);
   if(!t||!mm)return;
