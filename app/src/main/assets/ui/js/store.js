@@ -517,6 +517,53 @@ O.sessionTitle=s=>s?(s.title&&!/^(New session|Child session|Новая сесс�
 O.contextUsage=sid=>{const l=O.visibleMsgs(sid);for(let i=l.length-1;i>=0;i--){const x=l[i].info;if(x.role==='assistant'&&x.tokens&&(x.tokens.input||x.tokens.output)){
   const t=x.tokens,tot=(t.input||0)+(t.output||0)+(t.reasoning||0)+((t.cache&&t.cache.read)||0)+((t.cache&&t.cache.write)||0);
   const mi=O.modelInfo(x.providerID,x.modelID),lim=mi&&mi.limit&&mi.limit.context;return{tot,pct:lim?Math.round(tot*100/lim):null}}}return null};
+// ---- "continue generation" ----
+// OpenCode has no dedicated continue endpoint, so we resume by sending a single synthetic prompt
+// with `noReply:false` and an explicit instruction. The last assistant text is passed as context so
+// the model resumes exactly where the stream was cut (stop button, quota, network, app kill).
+O.lastAssistant=(sid)=>{
+  const l=O.visibleMsgs(sid||S.sid);
+  for(let i=l.length-1;i>=0;i--){
+    const m=l[i];
+    if(m.info.role!=='assistant')continue;
+    const t=m.parts.filter(p=>p.type==='text'&&!p.synthetic).map(p=>p.text).join('\n').trim();
+    return {msg:m,text:t};
+  }
+  return null;
+};
+O.canContinue=(sid)=>{
+  const st=S.status[sid||S.sid];
+  if(st&&st.type!=='idle')return false; // already generating
+  const last=O.lastAssistant(sid);
+  if(!last)return false;
+  // Only offer it when the previous answer was actually interrupted (no completion time) or
+  // ended with an abort/error.
+  if(last.msg.info.error)return true;
+  return !(last.msg.info.time&&last.msg.info.time.completed);
+};
+O.continueGeneration=async(sid,opts)=>{
+  sid=sid||S.sid;
+  if(!sid||!S.model)return O.toast(O.tr('Select a model first','Сначала выберите модель'),2500);
+  const last=O.lastAssistant(sid);
+  if(!last)return O.toast(O.tr('Nothing to continue','Нечего продолжать'),2000);
+  const tail=last.text.slice(-4000);
+  const instr=opts&&opts.custom?opts.custom:
+    'Продолжи ровно с того места, где предыдущий ответ был оборван. Не повторяй уже написанное, '+
+    'не начинай заново, не добавляй вступлений или извинений. Продолжай сразу с текста.';
+  const parts=[];
+  if(tail)parts.push({type:'text',text:'[Предыдущий ответ, оборван на этом месте]:\n…'+tail+'\n…'});
+  parts.push({type:'text',text:instr});
+  const mid=O.mid();
+  const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:S.model});
+  m.local=true;m.parts=parts.map((p,i)=>Object.assign({id:'prt_local_cont'+i,sessionID:sid,messageID:mid},p));
+  m.synthetic=true;
+  try{
+    await api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,parts},{timeout:60000});
+    bus.emit('msg',sid,m);
+    O.toast(O.tr('Continuing…','Продолжаю…'),1500);
+  }catch(e){O.toast(e.message||String(e),4000)}
+};
+
 O.replyPermission=async(p,r)=>{
   const tries=[()=>api('POST','/permission/'+p.id+'/reply',{reply:r}),()=>api('POST','/session/'+p.sessionID+'/permissions/'+p.id,{response:r}),()=>api('POST','/api/session/'+p.sessionID+'/permission/'+p.id+'/reply',{reply:r})];
   for(const t of tries){try{await t();S.perms=S.perms.filter(x=>x.id!==p.id);bus.emit('perm');return}catch(e){if(e.status!==404&&e.status!==405&&e.status!==400)throw e}}

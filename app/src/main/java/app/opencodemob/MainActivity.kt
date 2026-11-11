@@ -80,6 +80,11 @@ class MainActivity : ComponentActivity() {
 
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { onPicked(it) }
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { emit("perms", JSONObject()) }
+    // overlay bubble showing the live agent state over other apps (see OverlayService)
+    private val overlayPerm = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        if (r.resultCode == Activity.RESULT_OK) startOverlay()
+    }
+
     private val chooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         fileCb?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(r.resultCode, r.data)); fileCb = null
     }
@@ -223,15 +228,48 @@ class MainActivity : ComponentActivity() {
 
     private fun handleShareIntent(intent: Intent?) {
         if (intent == null) return
-        if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_PROCESS_TEXT) return
+        val action = intent.action
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE && action != Intent.ACTION_PROCESS_TEXT) return
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)
             ?: intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
-            ?: return
-        if (text.isBlank()) return
+            ?: ""
+        // Collect shared files (images, PDFs, several attachments) and hand them to the UI as
+        // data URLs so they can be attached to the composer exactly like picked files.
+        val uris = ArrayList<Uri>()
+        if (action == Intent.ACTION_SEND_MULTIPLE) {
+            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
+        }
+        val files = ArrayList<JSONObject>()
+        for (u in uris.take(8)) {
+            try {
+                val cr = contentResolver
+                val mime = cr.getType(u) ?: "application/octet-stream"
+                val bytes = cr.openInputStream(u)?.use { it.readBytes() } ?: continue
+                if (bytes.size > 8 * 1024 * 1024) continue
+                val name = queryName(u) ?: ("shared-" + System.currentTimeMillis())
+                files.put(JSONObject()
+                    .put("mime", mime)
+                    .put("filename", name)
+                    .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))
+            } catch (_: Exception) {}
+        }
+        if (text.isBlank() && files.isEmpty()) return
         ui.postDelayed({
-            emit("share", JSONObject().put("text", text))
+            val o = JSONObject().put("text", text)
+            if (files.isNotEmpty()) o.put("files", files)
+            emit("share", o)
         }, 500)
     }
+
+    /** Original display name for a content:// uri (falls back to the last path segment). */
+    private fun queryName(uri: Uri): String? = try {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
+        } ?: uri.lastPathSegment
+    } catch (_: Exception) { uri.lastPathSegment }
 
     private fun handleWidgetIntent(intent: Intent?) {
         val act = intent?.getStringExtra("widget_action") ?: return
@@ -270,6 +308,11 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         unlockHighRefreshRate()
         emit("perms", JSONObject())
+    }
+
+    private fun startOverlay() {
+        Prefs.putFlag(this, "overlay_enabled", true)
+        OverlayService.start(this)
     }
 
     private fun unlockHighRefreshRate() {
@@ -919,6 +962,7 @@ class MainActivity : ComponentActivity() {
             put("installed", Runtime.isInstalled(this@MainActivity))
             put("core", Updater.installedCore(this@MainActivity))
             put("perms", perms()); put("flags", flags()); put("ready", ServerState.ready)
+            put("overlay", try { Settings.canDrawOverlays(this@MainActivity) } catch (_: Exception) { false })
         }.toString()
 
         // --- account / lifecycle ---
@@ -1120,9 +1164,21 @@ class MainActivity : ComponentActivity() {
                     "files" -> startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, pkg))
                     "install" -> startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, pkg))
                     "battery" -> startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, pkg))
+                    "overlay" -> if (Settings.canDrawOverlays(this@MainActivity)) this@MainActivity.startOverlay()
+                    else overlayPerm.launch(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg))
                 }
             }
         }
+
+        @JavascriptInterface fun startOverlay() { this@MainActivity.startOverlay() }
+
+        @JavascriptInterface fun stopOverlay() { OverlayService.stop(this@MainActivity) }
+
+        @JavascriptInterface fun overlayState(): String = try {
+            JSONObject().put("allowed", Settings.canDrawOverlays(this@MainActivity))
+                .put("running", Prefs.flag(this@MainActivity, "overlay_enabled", false))
+                .toString()
+        } catch (e: Exception) { JSONObject().put("allowed", false).put("running", false).toString() }
 
         @JavascriptInterface fun setFlag(key: String, value: Boolean) {
             if (key in FLAG_KEYS) Prefs.putFlag(this@MainActivity, key, value)
@@ -1234,6 +1290,88 @@ class MainActivity : ComponentActivity() {
                     val code = try { p.exitValue() } catch (_: Exception) { -1 }
                     JSONObject().put("ok", code == 0).put("code", code).put("out", out.toString()).toString()
                 }
+            }
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
+        }
+
+        /**
+         * Snapshot of the working tree into a shadow git repo, so any prompt can be rolled back.
+         * Uses `git stash create` semantics but keeps the objects: a commit is created in a
+         * separate GIT_DIR so the user's own repository index/history is never touched.
+         */
+        @JavascriptInterface fun checkpointCreate(dir: String, label: String): String = try {
+            val u = uid()
+            if (!Runtime.isInstalled(this@MainActivity)) JSONObject().put("ok", false).put("err", "runtime not installed").toString()
+            else {
+                // Inside proot the profile home is mounted at /root, so the shadow repo must be
+                // addressed with the guest path, not the host one.
+                val id = System.currentTimeMillis().toString()
+                val q = { a: String -> "'" + a.replace("'", "'\\''") + "'" }
+                val script = buildString {
+                    append("export GIT_DIR=/root/.ocm/checkpoints/repo GIT_WORK_TREE=").append(q(dir.ifEmpty { "/root" }))
+                    append(" GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C; ")
+                    append("mkdir -p /root/.ocm/checkpoints/repo/info; ")
+                    // build artifacts and dependency trees are regenerable: excluding them keeps the
+                    // shadow repo small and makes restore fast
+                    append("printf 'node_modules/\n.git/\ndist/\nbuild/\n.cache/\ntmp/\n*.log\n' > /root/.ocm/checkpoints/repo/info/exclude; ")
+                    append("git rev-parse --git-dir >/dev/null 2>&1 || git init -q; ")
+                    append("git add -A >/dev/null 2>&1; ")
+                    append("git -c user.name=OCM -c user.email=bot@ocm.local commit -q -m ").append(q(label.ifEmpty { "checkpoint" })).append(" --allow-empty 2>&1; ")
+                    append("git rev-parse HEAD")
+                }
+                val p = Runtime.prootCmd(this@MainActivity, u, listOf("/bin/sh", "-c", script))
+                val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
+                val done = p.waitFor(90, java.util.concurrent.TimeUnit.SECONDS)
+                if (!done) try { p.destroyForcibly() } catch (_: Exception) {}
+                val sha = out.lines().lastOrNull { it.length in 7..64 && it.all { c -> c.isLetterOrDigit() } } ?: ""
+                if (sha.isEmpty()) JSONObject().put("ok", false).put("err", "checkpoint failed: " + out.take(300)).toString()
+                else {
+                    try {
+                        java.io.File(Runtime.home(this@MainActivity, u), ".ocm/checkpoints/index.tsv").appendText(
+                            id + "\t" + sha + "\t" + dir + "\t" + label.replace('\t', ' ').replace('\n', ' ') + "\n"
+                        )
+                    } catch (_: Exception) {}
+                    JSONObject().put("ok", true).put("id", id).put("sha", sha).toString()
+                }
+            }
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
+        }
+
+        @JavascriptInterface fun checkpointList(): String = try {
+            val u = uid()
+            val meta = java.io.File(Runtime.home(this@MainActivity, u), ".ocm/checkpoints/index.tsv")
+            val arr = org.json.JSONArray()
+            if (meta.isFile) {
+                meta.readLines().filter { it.isNotBlank() }.takeLast(200).reversed().forEach { line ->
+                    val p = line.split('\t')
+                    if (p.size >= 3) arr.put(JSONObject().put("id", p[0]).put("sha", p[1]).put("dir", p[2]).put("label", if (p.size > 3) p[3] else ""))
+                }
+            }
+            JSONObject().put("ok", true).put("items", arr).toString()
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
+        }
+
+        /** Restores the working tree of `dir` to a checkpoint (tracked files only). */
+        @JavascriptInterface fun checkpointRestore(dir: String, sha: String): String = try {
+            val u = uid()
+            if (!Runtime.isInstalled(this@MainActivity)) JSONObject().put("ok", false).put("err", "runtime not installed").toString()
+            else {
+                val q = { a: String -> "'" + a.replace("'", "'\\''") + "'" }
+                val script = buildString {
+                    append("export GIT_DIR=/root/.ocm/checkpoints/repo GIT_WORK_TREE=").append(q(dir.ifEmpty { "/root" }))
+                    append(" GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C; ")
+                    append("git checkout -f ").append(q(sha)).append(" -- . 2>&1; ")
+                    append("git clean -fdq 2>&1; ")
+                    append("echo RESTORED")
+                }
+                val p = Runtime.prootCmd(this@MainActivity, u, listOf("/bin/sh", "-c", script))
+                val out = p.inputStream.bufferedReader().use { it.readText() }
+                val done = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
+                if (!done) try { p.destroyForcibly() } catch (_: Exception) {}
+                JSONObject().put("ok", done && out.contains("RESTORED")).put("out", out.takeLast(4000)).toString()
             }
         } catch (e: Exception) {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()

@@ -34,12 +34,12 @@ async function rememberIdx(p){
 }
 async function list(p){
   const tries=p==='.'?['.','']:[p];
-  for(const t of tries){try{const n=await api('GET','/file?path='+encodeURIComponent(t));cache.set(p,sortN(n));O.kv.set('files:'+S.dir+':'+p,n);rememberIdx(p);return}catch(e){}}
+  for(const t of tries){try{const n=await api('GET','/file?path='+encodeURIComponent(t),null,{cache:true,ttl:800});cache.set(p,sortN(n));O.kv.set('files:'+S.dir+':'+p,n);rememberIdx(p);return}catch(e){}}
   const c=await O.kv.get('files:'+S.dir+':'+p);if(c)cache.set(p,sortN(c))}
 O.refreshFiles=async force=>{titleEl.textContent=O.basename(S.dir)||'/';
   if(force)cache.clear();
   await list('.');for(const p of exp)if(!cache.has(p)||force)await list(p);
-  try{const st=await api('GET','/file/status');gst={};(st||[]).forEach(f=>gst[f.path]=f.status);S.gstatus=gst}catch{}
+  try{const st=await api('GET','/file/status',null,{cache:true,ttl:700});gst={};(st||[]).forEach(f=>gst[f.path]=f.status);S.gstatus=gst}catch{}
   draw()};
 function draw(){
   const fr=document.createDocumentFragment();
@@ -131,12 +131,135 @@ O.openFile=async n=>{const rel=typeof n==='string'?n:n.path,abs=typeof n==='stri
   catch(e){const r=O.native.readText(abs);if(r.ok)text=r.text;else body.textContent='Не удаётся открыть файл: '+(e.message||'')}
   paint()};
 
+// ---- "why is it broken": gather the error context and send it as one prompt ----
+O.diagnoseError=async rawText=>{
+  const text=String(rawText||'').trim();
+  const parts=[];
+  parts.push(text?'Ниже ошибка из моей среды. Разберись, почему она возникает, и предложи конкретное исправление.\n\n```\n'+text.slice(0,6000)+'\n```':
+    'Собери диагностику проекта и объясни, что сломано и как это исправить.');
+  // attach the current diff and the last few tool outputs from the session as context
+  const diffs=S.diffs[S.sid]||[];
+  if(diffs.length){
+    const files=diffs.slice(0,6).map(d=>'- '+(d.file||d.path||'?')+' (+'+(d.additions||0)+'/-'+(d.deletions||0)+')').join('\n');
+    parts.push('Файлы, изменённые в этой сессии:\n'+files);
+  }
+  const msgs=O.visibleMsgs(S.sid);
+  for(let i=msgs.length-1,found=0;i>=0&&found<3;i--){
+    for(const p of msgs[i].parts){
+      if(p.type==='tool'&&p.state&&p.state.status==='error'){
+        const out=String(p.state.output||p.state.error||'').slice(0,1500);
+        if(out){parts.push('Ошибка инструмента `'+(p.tool||'')+'`:\n```\n'+out+'\n```');found++}
+      }
+    }
+  }
+  const payload=parts.join('\n\n');
+  if(O.insertText)O.insertText(payload);
+  O.setTab('chat');
+  O.toast(O.tr('Diagnostic prompt prepared — edit and send','Диагностический запрос готов — отредактируйте и отправьте'),3000);
+};
+
+// ---- repository map: size, line count and change frequency per top-level area ----
+O.openRepoMap=async()=>{
+  const body=h('div',null,h('div',{class:'mut',style:{padding:'12px'}},O.tr('Building map…','Собираю карту…')));
+  const s=O.sheet(O.tr('Repository map','Карта репозитория'),body,{full:true});
+  const walk=async(path,depth,acc)=>{
+    if(depth>3)return;
+    const r=O.native.ls(path);
+    if(!r||!r.items)return;
+    for(const it of r.items){
+      if(it.name==='node_modules'||it.name==='.git'||it.name==='build'||it.name==='dist'||it.name==='.cache')continue;
+      const p=(path==='/'?'':path)+'/'+it.name;
+      if(it.dir){await walk(p,depth+1,acc);continue}
+      acc.files.push({path:p,size:it.size||0,top:(path||'.').replace(/^\//,'')});
+    }
+  };
+  const acc={files:[]};
+  await walk(S.dir,0,acc);
+  // commit frequency per top-level area (last 200 commits, cheap enough)
+  const freq={};
+  try{
+    const r=O.native.gitRun(S.dir,'log --name-only --pretty=format: -200');
+    if(r&&r.ok&&r.out){
+      r.out.split('\n').forEach(line=>{
+        line=line.trim();if(!line)return;
+        const top=line.includes('/')?line.slice(0,line.indexOf('/')):'.';
+        freq[top]=(freq[top]||0)+1;
+      });
+    }
+  }catch(_){}
+  const byTop={};
+  acc.files.forEach(f=>{
+    const top=f.top==='.'?'.':(f.top.split('/')[0]||'.');
+    const g=byTop[top]||(byTop[top]={files:0,bytes:0,changes:0});
+    g.files++;g.bytes+=f.size;g.changes=freq[top]||0;
+  });
+  const rows=Object.entries(byTop).sort((a,b)=>b[1].bytes-a[1].bytes);
+  const totalBytes=rows.reduce((n,r)=>n+r[1].bytes,0)||1;
+  body.textContent='';
+  body.append(h('div',{class:'note'},O.tr('Largest areas first. "Changes" comes from the last 200 commits — hot spots deserve tests.','Сначала самые крупные области. «Изменения» — из последних 200 коммитов: горячие места стоит покрыть тестами.')));
+  const card=h('div',{class:'group-card'});
+  rows.forEach(([name,g])=>{
+    const share=Math.round(g.bytes*100/totalBytes);
+    const bar=h('div',{style:{height:'6px',borderRadius:'3px',background:'var(--bg3)',overflow:'hidden',marginTop:'6px'}},
+      h('div',{style:{height:'100%',width:Math.max(2,share)+'%',background:g.changes>40?'#ef4444':g.changes>15?'#f59e0b':'var(--acc)'}}));
+    card.append(h('div',{class:'settings-row'},
+      h('div',{class:'settings-row-icon'},O.icon('folder')),
+      h('div',{class:'settings-row-text'},
+        h('b',null,name),
+        h('span',null,g.files+' '+O.tr('files','файлов')+' · '+O.fmtK(g.bytes)+'B · '+share+'%'+(g.changes?' · '+g.changes+' '+O.tr('changes','правок'):'')),
+        bar)));
+  });
+  body.append(card);
+};
+
+// ---- checkpoints (shadow git snapshots of the working tree) ----
+let cpJob=null;
+O.checkpointBeforeSend=text=>{
+  if(!O.native.checkpointCreate)return;
+  // one snapshot in flight at a time; the label is the first line of the prompt
+  if(cpJob)return;
+  const label=String(text||'').split('\n')[0].slice(0,80);
+  cpJob=setTimeout(()=>{
+    try{O.native.checkpointCreate(S.dir,label)}catch(_){}
+    cpJob=null;
+  },400);
+};
+O.openCheckpoints=()=>{
+  const body=h('div',null,h('div',{class:'mut',style:{padding:'12px'}},O.tr('Loading…','Загрузка…')));
+  const s=O.sheet(O.tr('Project checkpoints','Точки восстановления'),body,{full:true});
+  const draw=()=>{
+    const r=O.native.checkpointList();
+    const items=(r&&r.items)||[];
+    body.textContent='';
+    body.append(h('div',{class:'note'},O.tr('A snapshot is taken before every prompt. Restoring rewrites tracked files and removes files created since then — inside the current project only.','Снимок делается перед каждым запросом. Восстановление перезаписывает файлы и удаляет созданные позже — только внутри текущего проекта.')));
+    if(!items.length){body.append(h('div',{class:'mut',style:{padding:'16px'}},O.tr('No snapshots yet','Снимков пока нет')));return}
+    const card=h('div',{class:'group-card'});
+    items.filter(x=>!x.dir||x.dir===S.dir||true).slice(0,100).forEach(x=>{
+      const d=new Date(Number(x.id)||Date.now());
+      card.append(h('div',{class:'settings-row'},
+        h('div',{class:'settings-row-icon'},O.icon('undo')),
+        h('div',{class:'settings-row-text'},h('b',null,d.toLocaleString()),h('span',null,(x.label||'—')+'  ·  '+x.sha.slice(0,8))),
+        h('button',{class:'btn sm',onclick:async()=>{
+          if(!await O.confirm(O.tr('Restore this snapshot?','Восстановить этот снимок?'),O.tr('Files changed since then will be reverted.','Изменения после этого момента будут отменены.'),O.tr('Restore','Восстановить'),true))return;
+          const rr=O.native.checkpointRestore(x.dir||S.dir,x.sha);
+          if(rr&&rr.ok){O.toast(O.tr('Restored','Восстановлено'),2000);O.refreshFiles(true);O.refreshChanges(true);s.close()}
+          else O.toast((rr&&rr.err)||O.tr('Restore failed','Не удалось восстановить'),4000);
+        }},O.tr('Restore','Восстановить'))));
+    });
+    body.append(card);
+  };
+  setTimeout(draw,50);
+};
+
 // ---- changes ----
 let chEl,chMode='session',chList;
 O.changesInit=root=>{
   chList=h('div',{style:{flex:1,overflow:'auto',padding:'6px 8px'}});
   const seg=h('div',{class:'seg',style:{margin:'8px 10px'}},h('button',{class:'on',onclick:e=>{chMode='session';mark(e.target);O.refreshChanges()}},'Эта сессия'),h('button',{onclick:e=>{chMode='git';mark(e.target);O.refreshChanges()}},'Статус Git'));
   const mark=b=>{seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b))};
+  const cpBtn=h('button',{class:'ibtn s',style:{marginLeft:'4px'},title:O.tr('Checkpoints','Точки восстановления'),onclick:()=>O.openCheckpoints()},O.icon('undo'));
+  const mapBtn=h('button',{class:'ibtn s',title:O.tr('Repository map','Карта репозитория'),onclick:()=>O.openRepoMap()},O.icon('branch'));
+  seg.append(cpBtn,mapBtn);
   root.append(seg,chList);
   bus.on('diff',sid=>{if(sid===S.sid)O.refreshChanges(true)});bus.on('open',()=>O.refreshChanges(true));bus.on('files',O.debounce(()=>O.refreshChanges(false),800))};
 O.changesCount=()=>(S.diffs[S.sid]||[]).length;

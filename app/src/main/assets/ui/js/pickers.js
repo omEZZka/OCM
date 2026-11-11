@@ -160,7 +160,8 @@ O.openModels=()=>{
     profNames.forEach(n=>profBar.append(h('button',{class:'chip',onclick:()=>{O.applyModelProfile(n);draw()}},O.icon('star'),h('span',null,n))));
   }
   const folderBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelFolders(()=>draw())},O.icon('folder'),O.tr('Folders & profiles','Папки и профили'));
-  const container=h('div',null,q,profBar,folderBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,effortCard,connectCard);
+  const compareBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelCompare()},O.icon('branch'),O.tr('Compare models on one prompt','Сравнить модели на одном запросе'));
+  const container=h('div',null,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,effortCard,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
 
   function hiddenRow(){
@@ -486,6 +487,71 @@ O.openModelAssign=()=>{
   draw();
 };
 
+// Run the same prompt on 2–3 models in parallel and show the answers side by side.
+O.openModelCompare=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Compare models','Сравнение моделей'),body,{full:true});
+  const chosen=new Set();
+  const promptInp=h('textarea',{rows:4,placeholder:O.tr('Prompt to send to every model…','Запрос, который уйдёт во все модели…')});
+  const status=h('div',{class:'mut s',style:{margin:'8px 0'}});
+  const results=h('div');
+  const list=h('div',{style:{maxHeight:'38vh',overflow:'auto',border:'1px solid var(--line)',borderRadius:'10px',padding:'4px'}});
+  const all=O.allModels().filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
+  all.forEach(x=>{
+    const key=x.pid+'/'+x.mid;
+    const row=h('button',{class:'model-row',onclick:()=>{
+      if(chosen.has(key))chosen.delete(key);else if(chosen.size<3)chosen.add(key);
+      row.classList.toggle('on',chosen.has(key));
+    }},
+      h('div',{class:'model-row-left'},
+        h('span',{class:'model-row-title'},x.name||x.mid),
+        h('span',{class:'model-row-sub'},(x.pname||x.pid))),
+      chosen.has(key)?O.icon('check','model-check'):null);
+    if(S.model&&key===S.model.providerID+'/'+S.model.modelID){chosen.add(key);row.classList.add('on')}
+    list.append(row);
+  });
+  const runBtn=h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:async()=>{
+    const text=promptInp.value.trim();
+    if(!text)return O.toast(O.tr('Enter a prompt','Введите запрос'),2000);
+    if(chosen.size<1)return O.toast(O.tr('Pick at least one model','Выберите хотя бы одну модель'),2000);
+    runBtn.disabled=true;results.textContent='';status.textContent=O.tr('Running…','Выполняю…');
+    const keys=[...chosen];
+    const cols=keys.map(k=>{
+      const i=k.indexOf('/'),pid=k.slice(0,i),mid=k.slice(i+1);
+      const col=h('div',{class:'card',style:{flex:'1 1 320px',minWidth:'260px',padding:'10px'}},
+        h('b',{style:{fontSize:'12px'}},pid+'/'+mid),
+        h('div',{class:'mut s',style:{margin:'6px 0'}},'…'),
+        h('pre',{class:'term-pre',style:{whiteSpace:'pre-wrap',maxHeight:'none',margin:0}},''));
+      results.append(col);
+      return {k,col,pid,mid,out:col.querySelector('pre'),meta:col.querySelector('.mut')};
+    });
+    const t0=Date.now();
+    await Promise.all(cols.map(async c=>{
+      try{
+        // A throwaway session per model keeps the comparison out of the user's history.
+        const ses=await O.api('POST','/session',{title:'Compare · '+(c.mid)});
+        await O.api('POST','/session/'+ses.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:{providerID:c.pid,modelID:c.mid},parts:[{type:'text',text}]},{timeout:30000});
+        // poll until idle, then read the final assistant text
+        const deadline=Date.now()+180000;
+        while(Date.now()<deadline){
+          await new Promise(r=>setTimeout(r,1200));
+          const st=await O.api('GET','/session/status',null,{timeout:5000,cache:false}).catch(()=>null);
+          const x=st&&st[ses.id],t=typeof x==='string'?x:(x&&x.type);
+          if(!t||t==='idle'||t==='error')break;
+        }
+        const arr=await O.api('GET','/session/'+ses.id+'/message',null,{timeout:20000,cache:false});
+        let txt='';for(const m of arr||[])if(m.info&&m.info.role==='assistant'){const t2=(m.parts||[]).filter(p=>p.type==='text').map(p=>p.text).join('\n');if(t2.trim())txt=t2}
+        c.out.textContent=txt||O.tr('(no answer)','(нет ответа)');
+        c.meta.textContent=((Date.now()-t0)/1000).toFixed(1)+'s · '+O.fmtK((txt||'').length)+' chars';
+        try{await O.api('DELETE','/session/'+ses.id)}catch(_){}
+      }catch(e){c.out.textContent=String(e.message||e);c.meta.textContent=O.tr('error','ошибка')}
+    }));
+    status.textContent=O.tr('Done','Готово');runBtn.disabled=false;
+  }},O.icon('play'),O.tr('Run on selected','Запустить на выбранных'));
+  body.append(h('div',{class:'note'},O.tr('Answers run in temporary sessions and are deleted afterwards. Pick up to 3 models.','Ответы выполняются во временных сессиях и затем удаляются. Выберите до 3 моделей.')),
+    promptInp,list,runBtn,status,results);
+};
+
 O.openAllModelsCatalog=()=>O.openModels();
 
 O.openAgents=()=>{const ags=O.primaryAgents();
@@ -506,10 +572,24 @@ O.openConnect=async()=>{
   let all=[],conn=new Set(),auth={};
   try{const r=await api('GET','/provider');all=r.all||[];conn=new Set(r.connected||[]);try{auth=await api('GET','/provider/auth')}catch{}}catch(e){body.textContent=e.message;return}
   const name=p=>p.id==='opencode'?'OpenCode Zen':(p.name||p.id);
+  // provider health snapshot shows a dot next to each provider that has a recent check
+  const health=O.providerHealth?O.providerHealth():null;
+  const healthOf=pid=>{
+    const it=health&&health.items&&health.items[pid];
+    if(!it)return null;
+    return it.ok?'ok':'bad';
+  };
   const q=search('Поиск провайдеров',()=>draw()),list=h('div');
   const draw=()=>{list.textContent='';const f=q.value.toLowerCase();
     const sorted=[...all].sort((a,b)=>{const ca=conn.has(a.id)?0:1,cb=conn.has(b.id)?0:1;if(ca!==cb)return ca-cb;const pa=POP.indexOf(a.id),pb=POP.indexOf(b.id);return(pa<0?99:pa)-(pb<0?99:pb)||name(a).localeCompare(name(b))});
-    sorted.filter(p=>!f||(name(p)+p.id).toLowerCase().includes(f)).forEach(p=>list.append(O.listRow('cloud',name(p),p.id==='opencode'?'Бесплатные модели без ключа — добавьте ключ Zen для платных':p.id,conn.has(p.id)?O.icon('check','ok'):null,()=>pick(p))))};
+    sorted.filter(p=>!f||(name(p)+p.id).toLowerCase().includes(f)).forEach(p=>{
+      const hs=healthOf(p.id);
+      const right=h('span',{style:{display:'flex',alignItems:'center',gap:'6px'}},
+        hs?h('i',{title:hs==='ok'?O.tr('Connected models found','Модели найдены'):O.tr('No models / check failed','Нет моделей / проверка не удалась'),
+          style:{width:'7px',height:'7px',borderRadius:'50%',background:hs==='ok'?'#22c55e':'#ef4444'}}):null,
+        conn.has(p.id)?O.icon('check','ok'):null);
+      list.append(O.listRow('cloud',name(p),p.id==='opencode'?'Бесплатные модели без ключа — добавьте ключ Zen для платных':p.id,right,()=>pick(p)));
+    })};
   body.textContent='';
   if(S.account&&S.account.email){
     body.append(O.listRow('user',S.account.email,'Аккаунт opencode подключён — квота Zen персональная',O.icon('check','ok'),()=>{s.close();O.openAccount()}));
@@ -520,6 +600,7 @@ O.openConnect=async()=>{
   }
   body.append(h('button',{class:'btn wide',style:{margin:'8px 0'},onclick:()=>O.openCustomProvider(s)},O.icon('cpu'),'Свой провайдер / Прозвон моделей'));
   body.append(q,list);draw();
+  if(O.checkProviders)O.checkProviders(false);
   const after=async()=>{try{await api('POST','/instance/dispose',null)}catch{}await O.loadMeta();O.toast('Подключено');s.close()};
   const pick=p=>{const ms=(auth[p.id]||[]).map((m,i)=>({m,i}));if(!ms.length)ms.push({m:{type:'api',label:'API-ключ'},i:0});
     const go=x=>x.m.type==='oauth'?oauth(p,x):keyForm(p);
@@ -605,7 +686,24 @@ O.openCustomProvider=parentSheet=>{
     h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='groq';nameInp.value='Groq';urlInp.value='https://api.groq.com/openai/v1'}},O.icon('zap'),'Groq'),
     h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='openrouter';nameInp.value='OpenRouter';urlInp.value='https://openrouter.ai/api/v1'}},O.icon('globe'),'OpenRouter'),
     h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='ollama';nameInp.value='Ollama (Local)';urlInp.value='http://127.0.0.1:11434/v1'}},O.icon('llama'),'Ollama'),
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='together';nameInp.value='Together AI';urlInp.value='https://api.together.xyz/v1'}},'Together'));
+    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='together';nameInp.value='Together AI';urlInp.value='https://api.together.xyz/v1'}},'Together'),
+    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='lmstudio';nameInp.value='LM Studio';urlInp.value='http://127.0.0.1:1234/v1';keyInp.value=''}},O.icon('laptop'),'LM Studio'),
+    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='llamacpp';nameInp.value='llama.cpp';urlInp.value='http://127.0.0.1:8080/v1';keyInp.value=''}},O.icon('cpu'),'llama.cpp'));
+
+  // One-tap local model server inside the proot runtime: downloads nothing, uses the model path the
+  // user already has and explains exactly which command it runs.
+  const localBar=h('div',{class:'note',style:{margin:'4px 0 12px'}},
+    h('div',null,O.tr('Local model in the built-in Linux runtime:','Локальная модель во встроенном Linux-окружении:')),
+    h('div',{class:'mono s',style:{wordBreak:'break-all',marginTop:'4px'}},'llama-server -m /root/models/model.gguf --port 8080 --host 127.0.0.1'),
+    h('div',{style:{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}},
+      h('button',{class:'btn sm',type:'button',onclick:()=>{
+        // start llama.cpp in the term panel; the user pastes the command once
+        O.setTab('term');
+        setTimeout(()=>O.termRun&&O.termRun('llama-server -m /root/models/model.gguf --port 8080 --host 127.0.0.1'),250);
+      }},O.icon('terminal'),O.tr('Run in Terminal','Запустить в терминале')),
+      h('button',{class:'btn sm',type:'button',onclick:()=>{
+        idInp.value='llamacpp';nameInp.value='llama.cpp (local)';urlInp.value='http://127.0.0.1:8080/v1';keyInp.value='';
+      }},O.icon('check'),O.tr('Use as provider','Использовать как провайдера'))));
 
   const probeBtn=h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:async()=>{
     let url=urlInp.value.trim().replace(/\/+$/,'');if(!url)return O.toast('Введите Base URL');
@@ -667,7 +765,7 @@ O.openCustomProvider=parentSheet=>{
   },O.icon('check'),'Сохранить и подключить');
 
   const sh=O.sheet('Свой провайдер / Прозвон моделей',h('div',null,
-    presets,
+    presets,localBar,
     h('div',{class:'field'},h('label',null,'ID провайдера (латиница)'),idInp),
     h('div',{class:'field'},h('label',null,'Отображаемое имя'),nameInp),
     h('div',{class:'field'},h('label',null,'Base URL (OpenAI-совместимый)'),urlInp),

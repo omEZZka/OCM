@@ -260,12 +260,18 @@ O.on('server',d=>{
 });
 
 O.on('share',d=>{
-  if(!d||!d.text)return;
+  if(!d||(!d.text&&!(d.files&&d.files.length)))return;
   const go=()=>{
     if(!built){setTimeout(go,200);return}
     O.setTab('chat');
-    if(O.insertText)O.insertText(d.text);
-    O.toast(O.tr('Shared text inserted','Текст из другого приложения вставлен'),1800);
+    if(d.text&&O.insertText)O.insertText(d.text);
+    // shared images/PDFs become normal attachments in the composer
+    if(Array.isArray(d.files)&&d.files.length&&O.chatAttach){
+      O.chatAttach(d.files);
+      O.toast(O.tr('Attached files: ','Вложено файлов: ')+d.files.length,2000);
+    }else if(d.text){
+      O.toast(O.tr('Shared text inserted','Текст из другого приложения вставлен'),1800);
+    }
   };
   go();
 });

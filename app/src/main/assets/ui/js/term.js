@@ -18,6 +18,8 @@ O.termInit=root=>{
     mk('|',send('|')),mk('/',send('/')),mk('-',send('-')),mk('~',send('~')),mk('$',send('$')),mk('^C',send('\x03')),mk('^D',send('\x04')),
     h('button',{onclick:()=>{const t=OC.pasteText();if(t&&wsid)OC.wsSend(wsid,t)}},O.icon('copy')));
   sPane=h('div',{style:{display:'none',flexDirection:'column',flex:1,minHeight:0}},xwrap,keys);
+  // Lets other modules push a command straight into the shell tab (e.g. a local llama.cpp server).
+  O.termRun=cmd=>{setSub('shell');const go=()=>{if(!wsid)return setTimeout(go,300);OC.wsSend(wsid,String(cmd)+'\r')};setTimeout(go,150)};
   const tabs=h('div',{class:'tsub'},subBtns.agent=h('button',{class:'on',onclick:()=>setSub('agent')},'Агент'),subBtns.shell=h('button',{onclick:()=>setSub('shell')},'Shell'),h('span',{class:'grow'}),
     h('button',{class:'ibtn s',onclick:restart},O.icon('refresh')));
   root.append(tabs,aPane,sPane);

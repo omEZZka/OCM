@@ -72,8 +72,15 @@ O.openSettings=()=>{
   const themeName={opencode:'OpenCode (Dark)',light:'Light',tokyonight:'Tokyo Night',gruvbox:'Gruvbox'}[S.opts.theme]||S.opts.theme;
   const themeRow=O.listRow('palette',O.tr('Theme & Font Size','Тема и размер текста'),themeName+', '+S.opts.fs+'px',O.icon('chevR'),()=>O.openThemes());
   const thinkRow=O.toggleRow('bulb',O.tr('Show Reasoning / Thinking','Показывать размышления'),O.tr('Display model thought process in responses','Блоки размышлений в ответах'),S.opts.thinking,v=>{S.opts.thinking=v;O.saveOpts();O.chat.renderAll()});
+  const ov=O.native.overlayState?O.native.overlayState():{};
+  const overlayRow=O.toggleRow('ghost',O.tr('Floating status bubble','Плавающий индикатор'),
+    O.tr('Bubble over other apps: agent status and one-tap stop','Пузырь поверх других приложений: статус и стоп в один тап'),
+    !!ov.running,v=>{
+      if(v){O.native.startOverlay&&O.native.startOverlay()}
+      else{O.native.stopOverlay&&O.native.stopOverlay()}
+    });
   const detailRow=O.toggleRow('code',O.tr('Expand Tool Details','Детали инструментов'),O.tr('Show commands, output and file diffs','Команды, вывод терминала и правки'),S.opts.details,v=>{S.opts.details=v;O.saveOpts();O.chat.renderAll()});
-  appCard.append(langRow,themeRow,thinkRow,detailRow);
+  appCard.append(langRow,themeRow,thinkRow,detailRow,overlayRow);
   body.append(appCard);
 
   // 4. Notifications & Sounds
@@ -343,6 +350,33 @@ function openConfig(){const c=cfg.read();const ta=h('textarea',{class:'mono',row
   sub('opencode.json',h('div',null,c.err?h('div',{class:'errbox'},c.err):null,ta,h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:()=>{try{O.parseJsonc(ta.value||'{}')}catch(e){return O.toast('Неверный JSON: '+e.message,4000)}
     const w=cfg.write(ta.value);w.ok?O.toast('Сохранено',1200):O.toast(w.err||'Не удалось')}},'Сохранить'),restartBar()))}
 
+// ---- provider health check ----
+// Pings each connected provider through the local server and remembers the result, so a silently
+// broken key does not surface only when a prompt fails.
+O.providerHealth=()=>O.store.get('providerHealth',{});
+let healthRunning=false;
+O.checkProviders=async(force)=>{
+  const cached=O.providerHealth();
+  const fresh=cached&&cached.at&&Date.now()-cached.at<10*60*1000;
+  if(!force&&fresh)return cached;
+  if(healthRunning)return cached;
+  healthRunning=true;
+  try{
+    const r=await api('GET','/provider',null,{timeout:15000,cache:false});
+    const connected=(r&&r.connected)||[];
+    const models=O.allModels();
+    const res={at:Date.now(),items:{}};
+    for(const pid of connected){
+      const pm=models.filter(x=>x.pid===pid);
+      res.items[pid]={models:pm.length,ok:true};
+    }
+    O.store.set('providerHealth',res);
+    bus.emit('meta');
+    return res;
+  }catch(e){
+    return cached;
+  }finally{healthRunning=false}
+};
 // ---- updates ----
 let updUI=null;
 function openUpdates(){const st=O.native.state();const bar=h('i');const info=h('div',{class:'mut s',style:{margin:'8px 0'}},'');

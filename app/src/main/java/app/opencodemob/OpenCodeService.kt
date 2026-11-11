@@ -63,9 +63,11 @@ class OpenCodeService : Service() {
                 ServerState.error = null; ServerState.ready = true
                 Notifier.updateRuntime(this, "Работает")
                 WidgetUpdater.idle(this)
+                ServerTileService.sync(this)
                 startWatcher(port, pw)
                 p.waitFor()
                 ServerState.ready = false
+                ServerTileService.sync(this)
             } else {
                 if (!p.isAlive) {
                     val code = try { p.exitValue() } catch (_: Exception) { -1 }
@@ -188,6 +190,7 @@ class OpenCodeService : Service() {
         proc?.destroy()
         try { ProxyShim.stop() } catch (_: Exception) {}
         try { wake?.release() } catch (_: Exception) {}
+        ServerTileService.sync(this)
         super.onDestroy()
     }
 }

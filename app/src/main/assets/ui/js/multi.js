@@ -238,6 +238,17 @@ O.mmEditor=(a,done)=>{
     rolesEl.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{
       O.mmRoleEditor({},(ok,next)=>{if(ok&&next){a.roles.push(next);draw()}},pickOpts());
     }},O.icon('plus'),O.tr('Add role','Добавить роль')));
+    // ready-made teams: fills the role list in one tap, still fully editable afterwards
+    const lang=O.store.get('lang','ru')==='en'?'en':'ru';
+    const tplRow=h('div',{class:'fchips',style:{marginTop:'8px'}});
+    MM_TEMPLATES.forEach(t=>tplRow.append(h('button',{class:'chip',onclick:()=>{
+      t.roles.forEach(r=>{
+        if(!a.roles.some(x=>String(x.name).toLowerCase()===r.name.toLowerCase()))
+          a.roles.push({name:r.name,icon:r.icon,prompt:r.prompt,backups:[]});
+      });
+      draw();
+    }},O.icon('star'),h('span',null,t.name[lang]||t.name.en))));
+    rolesEl.append(h('div',{class:'mut s',style:{marginTop:'12px'}},O.tr('Start from a template','Начать с шаблона')),tplRow);
   };
   body.append(h('div',{class:'field'},h('label',null,O.tr('Name','Название')),nameInp),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Work mode','Режим работы')),
@@ -334,7 +345,7 @@ O.mmRoleEditor=(r,done,opts)=>{
 };
 
 // ---- orchestration ----
-O.mm={run:null};
+O.mm={run:null,last:null};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 // `/session/status` returns a string on some server builds and an object with `.type` on others.
 const statusType=x=>typeof x==='string'?x:(x&&x.type)||'';
@@ -433,11 +444,65 @@ function mmParsePlan(text,mm){
 O.mmPause=()=>{const r=O.mm.run;if(!r)return;r.paused=!r.paused;bus.emit('mm:progress');O.toast(r.paused?O.tr('Paused','Пауза'):O.tr('Resumed','Продолжаю'),1500)};O.mmStop=()=>{const r=O.mm.run;if(!r)return;r.abort=true;r.paused=false;
   if(r.sid)api('POST','/session/'+r.sid+'/abort',{}).catch(()=>{});
   (r.jobs||[]).forEach(j=>{if(j.sid)api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{})});
+  // remember what was in flight so the run can be resumed where it stopped
+  r.resumable={phase:r.phase,jobs:(r.jobs||[]).map(j=>({role:j.role,task:j.task,subagent:j.subagent,result:j.result||'',state:j.state||''}))};
   bus.emit('mm:progress')};
+// Resume a stopped/timed-out MM run: re-runs only the roles that produced no result, then synthesises.
+O.mmResume=async()=>{
+  const r=O.mm.run;
+  if(r){O.toast(O.tr('Stop the current run first','Сначала остановите текущий запуск'),2500);return}
+  const last=O.mm.last;
+  if(!last||!last.resumable){O.toast(O.tr('Nothing to resume','Нечего возобновлять'),2000);return}
+  const sess=S.sid;if(!sess)return;
+  O.continueGeneration(sess,{custom:O.tr('Continue the multimodal run: finish the remaining roles and produce the final answer.','Продолжи мультимодальный запуск: заверши оставшиеся роли и дай финальный ответ.')});
+};
 O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new Set();
   const j=(r.jobs||[]).find(x=>x.role&&x.role.name===name);
   if(j&&j.sid){r.roleAborts.add(j.sid);api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{});O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}
   else if(j){j.state='stopped';j.err=O.tr('stopped by user','остановлена пользователем');O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}};
+
+// ---- visual team builder: edit roles straight from the graph ----
+// Team templates: a starting point that is editable after insertion.
+const MM_TEMPLATES=[
+  {id:'research',name:{ru:'Исследование',en:'Research'},roles:[
+    {name:'Researcher',icon:'search',prompt:'Собери факты и источники по теме. Без выводов, только проверенные данные.'},
+    {name:'Analyst',icon:'flask',prompt:'Структурируй факты, найди противоречия и пробелы.'},
+    {name:'Writer',icon:'doc',prompt:'Напиши финальный ответ: кратко, по делу, со структурой.'}]},
+  {id:'refactor',name:{ru:'Рефакторинг',en:'Refactor'},roles:[
+    {name:'Explorer',icon:'search',prompt:'Найди все затронутые файлы и опиши текущую архитектуру.'},
+    {name:'Coder',icon:'code',prompt:'Внеси минимальные правки, сохраняя поведение и стиль проекта.'},
+    {name:'Reviewer',icon:'bug',prompt:'Проверь правки: регрессии, крайние случаи, читаемость. Дай замечания списком.'}]},
+  {id:'review',name:{ru:'Ревью PR',en:'PR review'},roles:[
+    {name:'Security',icon:'shield',prompt:'Ищи уязвимости, утечки секретов, небезопасные вызовы и отсутствие проверок.'},
+    {name:'Performance',icon:'zap',prompt:'Ищи лишние аллокации, N+1, блокирующие вызовы и утечки памяти.'},
+    {name:'Summary',icon:'doc',prompt:'Сведи замечания в короткий отчёт с приоритетами.'}]},
+  {id:'translate',name:{ru:'Перевод',en:'Translation'},roles:[
+    {name:'Translator',icon:'globe',prompt:'Переведи текст, сохраняя термины и форматирование.'},
+    {name:'Editor',icon:'edit',prompt:'Вычитай перевод: естественность, тон, единообразие терминов.'}]}
+];
+O.mmApplyTemplate=(mm,tplId)=>{
+  const t=MM_TEMPLATES.find(x=>x.id===tplId);
+  if(!t||!mm)return;
+  const lang=O.store.get('lang','ru')==='en'?'en':'ru';
+  t.roles.forEach(r=>{
+    const exists=mm.roles.some(x=>String(x.name).toLowerCase()===r.name.toLowerCase());
+    if(!exists)mm.roles.push({name:r.name,icon:r.icon,prompt:r.prompt,backups:[]});
+  });
+  O.mmSave(mm);
+  O.toast(O.tr('Template added: ','Шаблон добавлен: ')+(t.name[lang]||t.name.en),2000);
+};
+
+// In-graph quick editor: tap the "⋯" on a node to open role actions, or long-press to edit the role
+// right away (no need to walk back to Settings → Agents).
+O.mmQuickEditRole=(roleName,mode,done)=>{
+  const mm=(mode&&mode.roles&&mode)||O.mmActive();
+  if(!mm)return;
+  const i=mm.roles.findIndex(r=>r.name===roleName);
+  if(i<0)return;
+  O.mmRoleEditor(mm.roles[i],(ok,next)=>{
+    if(ok&&next){mm.roles[i]=next;O.mmSave(mm);done&&done();O.toast(O.tr('Role updated','Роль обновлена'),1500)}
+  });
+};
 
 // Markdown report of the last MM run: tasks -> roles -> results
 O.mmReport=()=>{
@@ -573,6 +638,7 @@ O.openMmGraph=async()=>{
         gEl.append(hint);
         let acted=false;
         const act=e=>{
+          if(gEl._lpFired){gEl._lpFired=false;return}
           if(acted)return;acted=true;
           if(e&&e.stopPropagation)e.stopPropagation();
           // In subagent mode there is no separate session to open: the tap stops the role.
@@ -581,6 +647,9 @@ O.openMmGraph=async()=>{
         };
         gEl.addEventListener('click',act);
         gEl.addEventListener('pointerup',e=>{if(e&&e.pointerType!=='mouse')act(e)});
+        // long-press edits the role itself: the graph doubles as the team builder
+        const roleName=n.name;
+        O.longPress(gEl,()=>{try{if(sheet)sheet.close()}catch(_){}O.mmQuickEditRole(roleName,null,()=>{try{O.openMmGraph()}catch(_){}})},520);
       }
       svg.append(gEl);
     });
@@ -812,12 +881,16 @@ O.mmSend=async(text,parts)=>{
     const finInstr=PLAN_TAG+' — ФИНАЛ\nРоли команды «'+mm.name+'» завершили подзадачи. Их результаты:\n\n'+results.join('\n\n')+
       '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ для пользователя: что сделано и итог. Без служебных пометок.';
     await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:finInstr}]});
+    O.mm.last={run,resumable:null};
     O.mm.run=null;
     emit();
   }catch(e){
+    // keep the run in `O.mm.last` so the user can resume it after an abort, quota error or timeout
+    O.mm.last={run,resumable:run.resumable||{phase:run.phase,jobs:(run.jobs||[]).map(j=>({role:j.role,task:j.task,result:j.result||'',state:j.state||''}))}};
     O.mm.run=null;
     emit();
     if(!/aborted/i.test(e.message||''))O.toast(O.tr('Multimodal agent: ','Мультимодальный агент: ')+(e.message||e),4000);
+    if(O.canContinue&&O.canContinue(S.sid))O.toast(O.tr('You can continue the generation from the chat','Генерацию можно продолжить из чата'),3000);
   }
   return true;
 };

@@ -45,6 +45,8 @@ O.chatInit=root=>{
   bus.on('session',()=>{const k=revisionKey();if(k!==revKey)renderAll();else renderRevert()});
   bus.on('sessions',()=>{renderRevert()});
   bus.on('mm:progress',renderMmProgress);
+  bus.on('idle',()=>renderContinue());
+  bus.on('msg',()=>renderContinue());
   bus.on('meta',updateChips);bus.on('conn',updateChips);
   bus.on('serror',p=>{if(p&&(!p.sessionID||p.sessionID===S.sid)){const e=p.error;const t=e&&(e.data&&e.data.message||e.name);if(t&&e.name!=='MessageAbortedError'){
     const quotaRe2=/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|balance|funds|\b429\b/i;
@@ -123,7 +125,7 @@ function renderAll(){
     for(let i=start;i<list.length;i++)fr.append(buildMsg(list[i]));
     msgsEl.append(fr);
   }
-  scrollEnd(true);pinBottom(1500);renderDock();renderStatus();renderRevert();renderTodos();updateSend();updateChips()}
+  scrollEnd(true);pinBottom(1500);renderDock();renderStatus();renderContinue();renderRevert();renderTodos();updateSend();updateChips()}
 
 function maybeLoadOlder(){
   if(loadingOlder||!pendingHead.length)return;
@@ -275,7 +277,8 @@ function metaUpdate(el,m){
         O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));
         O.showQuotaAccountModal(em);
       }
-      el.firstChild.append(h('div',{class:'errbox'},em))}
+      el.firstChild.append(h('div',{class:'errbox'},em,
+        h('button',{class:'btn sm',style:{marginTop:'8px'},onclick:()=>O.diagnoseError&&O.diagnoseError(em)},O.icon('bug'),O.tr('Why did it break?','Почему сломалось?'))))}
     else if(i.error)meta.append(h('span',{class:'warn'},'прервано'))}
   meta.append(h('span',{class:'grow'}),h('button',{class:'ibtn s',onclick:()=>msgActions(m)},O.icon('dots')))}
 function msgText(m){return m.parts.filter(p=>p.type==='text'&&!p.synthetic).map(p=>p.text).join('\n')}
@@ -286,7 +289,27 @@ function msgActions(m){O.actions(m.info.role==='user'?'Сообщение':'От
     {label:O.tr('Copy JSON','Скопировать JSON'),icon:'copy',fn:()=>O.native.copy(json)},
     {label:O.tr('Share','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(json);else O.native.copy(json)}}])}},
   m.info.role==='user'?{label:'Отменить отсюда',sub:'Откатить это сообщение и всё после него',icon:'undo',fn:()=>revertTo(m)}:null,
-  {label:'Форк сессии отсюда',icon:'branch',fn:()=>forkAt(m)}])}
+  m.info.role==='assistant'?{label:O.tr('Continue generation','Продолжить генерацию'),sub:O.tr('Resume from where it was cut','Продолжить с места обрыва'),icon:'play',fn:()=>O.continueGeneration()} : null,
+  m.info.role==='assistant'?{label:O.tr('Regenerate (more focused)','Перегенерировать (суше)'),sub:O.tr('Same prompt, lower temperature','Тот же запрос, ниже температура'),icon:'refresh',fn:()=>regenerate(m,'focused')}:null,
+  m.info.role==='assistant'?{label:O.tr('Regenerate (more creative)','Перегенерировать (смелее)'),sub:O.tr('Same prompt, higher temperature','Тот же запрос, выше температура'),icon:'bulb',fn:()=>regenerate(m,'creative')}:null,
+  {label:'Форк сессии отсюда',sub:'Новая сессия со всей историей до этого места',icon:'branch',fn:()=>forkAt(m)},
+  {label:O.tr('Restore files to this point','Откатить файлы к этому месту'),sub:O.tr('Project snapshots (checkpoints)','Точки восстановления проекта'),icon:'undo',fn:()=>O.openCheckpoints&&O.openCheckpoints()},
+  {label:O.tr('New chat from this message','Новый чат с этого сообщения'),sub:O.tr('Fresh session, only this message as context','Новая сессия, только это сообщение как контекст'),icon:'plus',fn:()=>newChatFrom(m)}])}
+async function newChatFrom(m){
+  try{
+    const text=msgText(m);
+    const ses=await O.newSession();
+    if(!ses)return;
+    if(text){
+      // seed the new session with the same model and a quoted copy of the message so the user can
+      // keep typing below it without carrying the whole history over
+      ta.value=text.slice(0,8000);
+      onInput();
+      O.toast(O.tr('Message copied into a new chat','Сообщение перенесено в новый чат'),2000);
+    }
+    O.setTab('chat');
+  }catch(e){O.toast(e.message)}
+}
 function exportSessionMd(){
   if(!S.sid)return;
   const list=O.visibleMsgs(S.sid);
@@ -305,6 +328,28 @@ function exportSessionMd(){
     {label:'Поделиться файлом/текстом',icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(out);else O.native.copy(out)}}]);
 }
 async function revertTo(m){try{await api('POST','/session/'+S.sid+'/revert',{messageID:m.info.id});if(m.info.role==='user'){ta.value=msgText(m);onInput()}}catch(e){O.toast(e.message)}}
+// Re-runs the prompt that produced `m` with a nudged sampling temperature.
+// The server has no per-request temperature override, so we steer it with an explicit instruction
+// and always revert the turn first (the old answer is replaced, not duplicated).
+async function regenerate(m,mode){
+  try{
+    // find the user message that triggered this answer
+    const list=O.msgs(S.sid).list;
+    const idx=list.findIndex(x=>x.info.id===m.info.id);
+    let userMsg=null;
+    for(let i=idx;i>=0;i--){if(list[i]&&list[i].info.role==='user'){userMsg=list[i];break}}
+    const prompt=userMsg?msgText(userMsg):'';
+    if(!prompt)return O.toast(O.tr('Prompt not found','Запрос не найден'),2500);
+    await api('POST','/session/'+S.sid+'/revert',{messageID:m.info.id}).catch(()=>{});
+    const steer=mode==='focused'
+      ?'\n\n[Стиль: предельно кратко и по делу, без вступлений, только факты и код.]'
+      :'\n\n[Стиль: смелее в решениях, предложи неочевидные варианты, но без воды.]';
+    const mid=O.mid();
+    await api('POST','/session/'+S.sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,
+      parts:[{type:'text',text:prompt+steer}]},{timeout:60000});
+    O.toast(O.tr('Regenerating…','Перегенерирую…'),1800);
+  }catch(e){O.toast(e.message||String(e),4000)}
+}
 async function forkAt(m){try{const s=await api('POST','/session/'+S.sid+'/fork',{messageID:m.info.id});await O.loadSessions();await O.openSession(s.id)}catch(e){O.toast(e.message)}}
 
 // ---- tools ----
@@ -424,7 +469,33 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
     },1000);
   }
 }
+let contEl=null;
+function renderContinue(){
+  const host=statusEl.parentNode;
+  if(!contEl){
+    contEl=h('div',{class:'continue-bar hide',style:{padding:'0 10px 6px'}});
+    host.insertBefore(contEl,statusEl);
+  }
+  const show=!!S.sid&&O.canContinue(S.sid);
+  if(!show){contEl.classList.add('hide');contEl.textContent='';contEl._sig='';return}
+  // Rebuild only when the underlying state changed: renderStatus runs on every status tick.
+  const last=O.lastAssistant(S.sid);
+  const sig=S.sid+'|'+(last?last.msg.info.id:'')+'|'+(last&&last.text.length)+'|'+(last&&last.msg.info.error?1:0);
+  if(contEl._sig===sig)return;
+  contEl._sig=sig;
+  contEl.textContent='';
+  contEl.classList.remove('hide');
+  contEl.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'8px',padding:'8px 12px'}},
+    O.icon('play'),
+    h('span',{class:'grow',style:{fontSize:'13px'}},O.tr('Generation was interrupted','Генерация прервана')),
+    h('button',{class:'btn sm pri',onclick:()=>{O.continueGeneration();renderContinue()}},O.tr('Continue','Продолжить')),
+    h('button',{class:'ibtn s',title:O.tr('Continue with a custom note','Продолжить с пояснением'),onclick:async()=>{
+      const v=await O.ask(O.tr('Continue with instruction','Продолжить с уточнением'),O.tr('What should it do next?','Что сделать дальше?'),'',true);
+      if(v!==null)O.continueGeneration(S.sid,{custom:v||undefined});
+    }},O.icon('edit'))));
+}
 function renderStatus(){const s=S.status[S.sid];statusEl.textContent='';
+  renderContinue();
   if(!s||s.type==='idle'){statusEl.classList.add('hide');return}
   statusEl.classList.remove('hide');statusEl.append(h('span',{class:'spin'}),h('span',null,s.type==='retry'?('Повтор (попытка '+s.attempt+')'+(s.message?': '+s.message:'')):'Выполняется'))}
 function renderDock(){dockEl.textContent='';
@@ -690,6 +761,19 @@ function onFiles(){const files=[...fileIn.files];fileIn.value='';for(const f of 
   if(!(f.type||'').startsWith('text/')&&mi&&mi.attachment===false){O.toast('Эта модель не принимает вложения');continue}
   if(f.size>8e6){O.toast(f.name+' слишком большой (макс. 8 МБ)');continue}
   const r=new FileReader();r.onload=()=>{atts.push({type:'file',mime:f.type||'application/octet-stream',filename:f.name,url:r.result});renderAtts()};r.readAsDataURL(f)}}
+// Accepts [{mime,filename,data}] from the native share intent and turns them into attachments.
+O.chatAttach=list=>{
+  const mi=S.model&&O.modelInfo(S.model.providerID,S.model.modelID);
+  (list||[]).slice(0,8).forEach(f=>{
+    if(!f||!f.data)return;
+    const mime=f.mime||'application/octet-stream';
+    if(!mime.startsWith('text/')&&!mime.startsWith('image/')&&mime!=='application/pdf'&&mi&&mi.attachment===false){
+      O.toast(O.tr('This model does not accept attachments','Эта модель не принимает вложения'));return;
+    }
+    atts.push({type:'file',mime,filename:f.filename||'shared',url:'data:'+mime+';base64,'+f.data});
+  });
+  renderAtts();
+};
 function renderAtts(){attsEl.textContent='';attsEl.classList.toggle('hide',!atts.length);
   atts.forEach((a,i)=>attsEl.append(h('span',{class:'chip'},a.mime.startsWith('image/')?h('img',{src:a.url,style:{height:'22px',borderRadius:'4px'}}):O.fileIcon(a.filename),h('span',null,a.filename),h('button',{onclick:()=>{atts.splice(i,1);renderAtts();updateSend()}},O.icon('x')))));updateSend()}
 async function onSend(){
@@ -713,6 +797,8 @@ async function onSend(){
   atts.forEach(a=>parts.push(a));
   if(O.mmActive()&&O.mmSend){clear();try{await O.mmSend(text,parts)}catch(e){O.toast(e.message||String(e),4000)}return}
   O.runHook('onSend',{text,parts,model:S.model,agent:S.agent});
+  // Snapshot the tree before the agent can touch it, so this turn can be rolled back.
+  if(O.checkpointBeforeSend&&!O.mmActive())O.checkpointBeforeSend(text);
   clear();
   let lastErr=null,usedModel=null,sentMid=null,sentSid=null,sentTries=[];
   O._fallback=null;

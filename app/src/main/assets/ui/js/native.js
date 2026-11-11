@@ -5,15 +5,50 @@ O.on=(n,f)=>{(L[n]=L[n]||[]).push(f);return()=>O.off(n,f)};
 O.off=(n,f)=>{const a=L[n];if(!a)return;const i=a.indexOf(f);if(i>=0)a.splice(i,1)};
 window.OCEvent=(n,d)=>{if(n==='http'){finishHttp(d);return}(L[n]||[]).forEach(f=>{try{f(d)}catch(e){console.error(n,e)}})};
 O.dir='';
-// api(method, path, body, {dir:false|string, timeout, raw})
-O.api=(method,path,body,opt)=>new Promise((res,rej)=>{opt=opt||{};
-  const id='r'+(++seq)+'_'+Date.now().toString(36);let p=path;
-  if(opt.dir!==false){const d=typeof opt.dir==='string'?opt.dir:O.dir;if(d)p+=(p.includes('?')?'&':'?')+'directory='+encodeURIComponent(d)}
-  // the watchdog is cleared as soon as the response lands; otherwise every request kept a live
-  // timer for its full timeout, which accumulates over a long session
-  const timer=setTimeout(()=>{if(pend.has(id)){pend.delete(id);rej(Object.assign(new Error('timeout'),{net:true}))}},opt.timeout||60000);
-  pend.set(id,{res,rej,raw:opt.raw,timer});
-  try{OC.http(id,method,p,body==null?'':JSON.stringify(body))}catch(e){clearTimeout(timer);pend.delete(id);rej(e);return}});
+// ---- read-only request cache (opt-in) ----
+// Read-only endpoints get polled from several places at once (status bar, file tree, diffs).
+// Callers that genuinely tolerate a short delay can pass {cache:true}: identical GETs in flight are
+// coalesced and a 1s memo absorbs bursts, which keeps the proot-side server from doing duplicate work.
+const getCache=new Map();      // key -> {t, data}
+const getInflight=new Map();   // key -> Promise
+function cachedGet(method,path,body,opt){
+  if(method!=='GET'||!opt.cache)return null;
+  const ttl=opt.ttl||1000;
+  const hit=getCache.get(path);
+  if(hit&&Date.now()-hit.t<ttl)return Promise.resolve(hit.data);
+  const inflight=getInflight.get(path);
+  if(inflight)return inflight;
+  const pr=rawApi(method,path,body,opt).then(data=>{
+    getCache.set(path,{t:Date.now(),data});
+    if(getCache.size>200){const now=Date.now();for(const [k,v] of getCache)if(now-v.t>30000)getCache.delete(k)}
+    return data;
+  }).finally(()=>getInflight.delete(path));
+  getInflight.set(path,pr);
+  return pr;
+}
+// Any mutation invalidates matching reads so a refresh after an edit is never stale.
+O.invalidateCache=prefix=>{
+  if(!prefix){getCache.clear();return}
+  for(const k of getCache.keys())if(k.startsWith(prefix))getCache.delete(k);
+};
+// api(method, path, body, {dir, timeout, raw, cache, ttl})
+O.api=(method,path,body,opt)=>{
+  opt=opt||{};
+  if(method!=='GET')O.invalidateCache('/file');
+  const c=cachedGet(method,path,body,opt);
+  return c||rawApi(method,path,body,opt);
+};
+function rawApi(method,path,body,opt){opt=opt||{};
+  return new Promise((res,rej)=>{
+    const id='r'+(++seq)+'_'+Date.now().toString(36);let p=path;
+    if(opt.dir!==false){const d=typeof opt.dir==='string'?opt.dir:O.dir;if(d)p+=(p.includes('?')?'&':'?')+'directory='+encodeURIComponent(d)}
+    // the watchdog is cleared as soon as the response lands; otherwise every request kept a live
+    // timer for its full timeout, which accumulates over a long session
+    const timer=setTimeout(()=>{if(pend.has(id)){pend.delete(id);rej(Object.assign(new Error('timeout'),{net:true}))}},opt.timeout||60000);
+    pend.set(id,{res,rej,raw:opt.raw,timer});
+    try{OC.http(id,method,p,body==null?'':JSON.stringify(body))}catch(e){clearTimeout(timer);pend.delete(id);rej(e)}
+  });
+}
 async function finishHttp(d){const p=pend.get(d.id);if(!p)return;pend.delete(d.id);clearTimeout(p.timer);
   if(d.err){p.rej(Object.assign(new Error(d.err),{status:0,net:true}));return}
   let text=d.body||'';
@@ -37,6 +72,12 @@ O.native={
   autoBackupConfigure:(enabled,hours,password)=>{try{return j(OC.autoBackupConfigure(enabled,hours,password))||{ok:false}}catch(_){return{ok:false}}},
   autoBackupNow:password=>{try{return j(OC.autoBackupNow(password||''))||{ok:false}}catch(_){return{ok:false}}},
   gitRun:(dir,args)=>{try{return j(OC.gitRun(dir,args))||{ok:false}}catch(_){return{ok:false}}},
+  checkpointCreate:(dir,label)=>{try{return j(OC.checkpointCreate(dir,label||''))||{ok:false}}catch(_){return{ok:false}}},
+  checkpointList:()=>{try{return j(OC.checkpointList())||{ok:false,items:[]}}catch(_){return{ok:false,items:[]}}},
+  checkpointRestore:(dir,sha)=>{try{return j(OC.checkpointRestore(dir,sha))||{ok:false}}catch(_){return{ok:false}}},
+  startOverlay:()=>{try{OC.startOverlay()}catch(_){}},
+  stopOverlay:()=>{try{OC.stopOverlay()}catch(_){}},
+  overlayState:()=>{try{return j(OC.overlayState())||{}}catch(_){return{}}},
   state:()=>j(OC.state())||{}
 };
 O.openUrl=u=>{if(/^https?:\/\//i.test(u)&&!/appassets\.androidplatform\.net/i.test(u))OC.openLink(u)};

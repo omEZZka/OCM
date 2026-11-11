@@ -388,6 +388,16 @@ O.on('widget_action', d => {
       return;
     }
     if (d.action === 'status') { O.setTab('chat'); return; }
+    if (d.action === 'abort_all') {
+      (async()=>{
+        const ids=Object.keys(S.status).filter(k=>S.status[k]&&S.status[k].type!=='idle');
+        if(S.sid&&(!S.status[S.sid]||S.status[S.sid].type==='idle'))ids.push(S.sid);
+        for(const id of [...new Set(ids)]){try{await O.api('POST','/session/'+id+'/abort',{})}catch(_){}}
+        if(O.mm.run)O.mmStop();
+        O.toast(O.tr('Stopped','Остановлено'),1500);
+      })();
+      return;
+    }
     O.dispatchAction(d.action, d.target, d);
   }
 });

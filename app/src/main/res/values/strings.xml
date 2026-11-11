@@ -6,4 +6,12 @@
     <string name="widget_status_desc">Монитор состояния локального сервера OpenCode</string>
     <string name="widget_prompt_name">OpenCode: Быстрый запрос</string>
     <string name="widget_prompt_desc">Минималистичная строка ввода запроса к ИИ</string>
+    <string name="tile_server_label">OpenCode</string>
+    <string name="tile_server_running">Сервер работает</string>
+    <string name="tile_server_stopped">Сервер остановлен</string>
+    <string name="tile_server_error">Ошибка запуска</string>
+    <string name="overlay_running">Плавающий индикатор</string>
+    <string name="overlay_idle">OpenCode</string>
+    <string name="overlay_working">Работает</string>
+    <string name="overlay_stopping">Останавливаю…</string>
 </resources>
