@@ -19,7 +19,7 @@ import java.net.URL
  *  2. the opencode core - newest stable v1.* release, swapped inside the rootfs without reinstalling the APK
  */
 object Updater {
-    data class AppUpdate(val name: String, val code: Int, val url: String)
+    data class AppUpdate(val name: String, val code: Int, val url: String, val size: Long = 0L, val digest: String = "")
 
     private fun open(url: String): HttpURLConnection {
         val c = URL(url).openConnection() as HttpURLConnection
@@ -39,7 +39,10 @@ object Updater {
         for (i in 0 until assets.length()) {
             val a = assets.getJSONObject(i)
             val m = re.matchEntire(a.getString("name")) ?: continue
-            return AppUpdate(m.groupValues[1], m.groupValues[2].toInt(), a.getString("browser_download_url"))
+            return AppUpdate(
+                m.groupValues[1], m.groupValues[2].toInt(), a.getString("browser_download_url"),
+                a.optLong("size", 0L), a.optString("digest", "")
+            )
         }
         return null
     }
@@ -76,9 +79,65 @@ object Updater {
         }
     }
 
+    /**
+     * Downloads the APK with resume and verifies it against the size/digest published by the release.
+     * Mobile networks routinely drop the connection mid-file; without this check Android reported
+     * "package is corrupt" and, worse, an incomplete APK could install a broken runtime.
+     */
     fun downloadApp(c: Context, u: AppUpdate, progress: (Int) -> Unit): File {
         val f = File(File(c.cacheDir, "updates").apply { mkdirs() }, "update.apk")
-        fetchTo(u.url, f, progress)
+        var attempt = 0
+        while (true) {
+            attempt++
+            val have = if (f.exists()) f.length() else 0L
+            if (u.size > 0 && have == u.size) break
+            if (u.size > 0 && have > u.size) { f.delete(); continue }
+            try {
+                val con = open(u.url)
+                if (have > 0) con.setRequestProperty("Range", "bytes=$have-")
+                val code = con.responseCode
+                if (code == 206 || (code == 200 && have == 0L)) {
+                    val total = if (u.size > 0) u.size else con.contentLengthLong + (if (code == 206) have else 0L)
+                    con.inputStream.use { inp ->
+                        java.io.FileOutputStream(f, have > 0).use { out ->
+                            val buf = ByteArray(1 shl 16)
+                            var done = have
+                            while (true) {
+                                val n = inp.read(buf)
+                                if (n <= 0) break
+                                out.write(buf, 0, n); done += n
+                                if (total > 0) progress(((done * 100 / total).toInt()).coerceIn(0, 100))
+                            }
+                        }
+                    }
+                } else {
+                    // the server does not support ranges (or refused the offset): restart cleanly
+                    f.delete()
+                }
+            } catch (_: Exception) {}
+            if (f.exists() && u.size > 0 && f.length() == u.size) break
+            if (attempt >= 8) break
+            try { Thread.sleep(1200) } catch (_: InterruptedException) {}
+        }
+        val got = if (f.exists()) f.length() else 0L
+        if (u.size > 0 && got != u.size) {
+            f.delete()
+            throw IllegalStateException("APK скачался не полностью ($got из ${u.size} байт). Повторите обновление по Wi-Fi.")
+        }
+        if (u.digest.startsWith("sha256:", ignoreCase = true)) {
+            val want = u.digest.substringAfter(':').lowercase()
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            f.inputStream().use { inp ->
+                val buf = ByteArray(1 shl 16)
+                while (true) { val n = inp.read(buf); if (n <= 0) break; md.update(buf, 0, n) }
+            }
+            val gotHash = md.digest().joinToString("") { "%02x".format(it) }
+            if (!gotHash.equals(want, ignoreCase = true)) {
+                f.delete()
+                throw IllegalStateException("APK скачался с ошибкой (не совпала контрольная сумма). Повторите обновление.")
+            }
+        }
+        progress(100)
         return f
     }
 

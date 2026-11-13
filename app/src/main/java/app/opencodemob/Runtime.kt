@@ -118,8 +118,39 @@ object Runtime {
         override fun read(b: ByteArray, o: Int, l: Int): Int = super.read(b, o, l).also { if (it > 0) n += it }
     }
 
+    /** SHA-256 of the bundled archive, used to prove the asset survived packaging intact. */
+    private fun assetSha(c: Context): String =
+        try { c.assets.open("rootfs.sha256").bufferedReader().use { it.readText().trim().lowercase() } } catch (_: Exception) { "" }
+
+    private fun sha256(f: File): String = try {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        f.inputStream().use { inp ->
+            val buf = ByteArray(1 shl 16)
+            while (true) { val n = inp.read(buf); if (n <= 0) break; md.update(buf, 0, n) }
+        }
+        md.digest().joinToString("") { "%02x".format(it) }
+    } catch (_: Exception) { "" }
+
     fun install(c: Context, progress: (Int) -> Unit) {
         val id = assetId(c)
+        // Verify the archive before touching the old environment. A truncated APK download (very
+        // common on flaky mobile networks) used to surface as "Compressed data is corrupt" in the
+        // middle of a big file like libnode.so — after gigabytes of extraction had already run.
+        val want = assetSha(c)
+        if (want.isNotEmpty()) {
+            var got = ""
+            try {
+                val cache = File(c.cacheDir, "rootfs.verify.tar.xz").apply { parentFile?.mkdirs() }
+                c.assets.open("rootfs.tar.xz").use { inp -> cache.outputStream().use { out -> inp.copyTo(out, 1 shl 16) } }
+                got = sha256(cache)
+                cache.delete()
+            } catch (e: Exception) {
+                throw IOException(friendly(e, "Не удалось проверить окружение"))
+            }
+            if (got.isNotEmpty() && !got.equals(want, ignoreCase = true)) {
+                throw IOException("Файл окружения повреждён при установке (ожидался ${want.take(12)}…, получен ${got.take(12)}…). Переустановите APK из официального релиза: сборка скачалась не полностью.")
+            }
+        }
         val tmp = File(c.filesDir, "rootfs.new")
         cleanupBroken(c)
         rmrf(tmp); tmp.mkdirs()

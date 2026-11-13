@@ -109,5 +109,8 @@ docker run --platform linux/arm64 --name ocroot --dns 1.1.1.1 --dns 8.8.8.8 -v "
 docker export ocroot | xz -T0 -6 > "$ASSETS/rootfs.tar.xz"
 docker rm -f ocroot >/dev/null
 sha256sum "$ASSETS/rootfs.tar.xz" | cut -d' ' -f1 > "$ASSETS/rootfs.id"
+# Same hash also shipped as a plain marker so the app can verify the packaged archive before
+# extracting it (a partially downloaded APK otherwise fails deep inside the extraction).
+sha256sum "$ASSETS/rootfs.tar.xz" | cut -d' ' -f1 > "$ASSETS/rootfs.sha256"
 echo "opencode_core=$TAG" > "$ROOT/runtime-info.txt"
 ls -lh "$ASSETS/rootfs.tar.xz" "$LIBS"
