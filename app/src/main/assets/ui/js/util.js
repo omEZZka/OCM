@@ -74,14 +74,14 @@ const stack=[];O.sheets=stack;
 // every one of them opened another copy of the same menu. Two guards:
 //   1) a short global lock, so a burst of taps in the same frame opens one sheet;
 //   2) an id+title key, so an identical sheet already on screen is not stacked again.
-let sheetLockUntil=0;
 O.sheet=(title,body,opts)=>{opts=opts||{};
   const now=Date.now();
   const key=String(title||'')+'#'+((opts&&opts.drawer)?'d':'s');
-  if(now<sheetLockUntil)return {close(){},root:{isConnected:false},box:null,body:null,blocked:true};
+  // Only de-duplicate the *same* sheet opened twice by a burst of queued taps (e.g. user taps the
+  // model chip while a long answer re-renders, and three click events fire at once). Any other
+  // sheet must still open immediately — a global time lock silently swallowed legitimate menus.
   const top=stack[stack.length-1];
   if(top&&top._key===key&&now-top._openedAt<700)return top;
-  sheetLockUntil=now+280;
   const api={};api._key=key;api._openedAt=now;
   let closed=false;
   api.close=()=>{if(closed)return;closed=true;api.root.classList.remove('on');

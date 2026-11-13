@@ -38,6 +38,7 @@ let inst=null;
 function install(){const bar=h('i'),msg=h('p',{class:'mut'},'Распаковываем Linux-окружение. Это происходит один раз.'),err=h('p',{class:'err'});
   inst={bar,msg,err};screen(logo(),msg,h('div',{class:'bar',style:{width:'100%'}},bar),err);OC.install()}
 O.on('install',d=>{if(!inst||!el)return;
+  if(d&&d.done){try{const st=O.native.state();if(st.assetStamp)O.store.set('runtime.stamp',st.assetStamp)}catch(_){}}
   if(d.error){inst.msg.textContent='Установка не удалась';inst.err.textContent=d.error;
     if(!el.querySelector('.retry'))el.firstChild.append(h('button',{class:'btn retry',onclick:install},O.icon('refresh'),'Повторить'));
     if(!el.querySelector('.reset'))el.firstChild.append(h('button',{class:'btn reset',style:{marginTop:'8px'},onclick:()=>OC.resetInstall()},O.icon('trash'),'Сбросить и установить заново'))}
@@ -62,6 +63,14 @@ function start(){
 }
 function next(){const st=O.native.state(),p=st.perms||{};
   if(!O.store.get('permsSeen')&&!(p.notifications&&p.files&&p.battery&&p.install))return perms();
+  // A bundled runtime that differs from the installed one (new offset, new core) must be re-extracted:
+  // otherwise the app keeps launching an old rootfs against a new server contract and "cannot connect".
+  let stale=false;
+  try{
+    const idx=O.store.get('runtime.stamp','');
+    stale=!!st.assetStamp&&idx&&idx!==st.assetStamp;
+  }catch(_){}
+  if(stale){O.store.remove('runtime.stamp');return install()}
   if(!st.installed)return install();start()}
 O.on('signin',d=>{if(!el)return;d.ok?next():login(d.error||'Не удалось войти')});
 O.on('perms',()=>{if(permsRender)permsRender()});

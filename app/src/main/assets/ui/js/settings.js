@@ -428,10 +428,71 @@ function openPerms(){const box=h('div',null,...O.permRows());const s=sub('Раз
 O.on('perms',()=>{if(permUI)permUI()});
 
 // ---- compatibility / about ----
-function openCompat(){const fl=O.native.state().flags||{};
+O.openCompat=function(){const fl=O.native.state().flags||{};
   sub('Совместимость и логи',h('div',null,O.toggleRow('shield','Безопасный режим (без seccomp)','Медленнее, но помогает, если сервер не запускается на некоторых телефонах',fl.noseccomp,v=>OC.setFlag('noseccomp',v)),
     h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{OC.restartServer();O.toast('Перезапуск сервера...')}},O.icon('refresh'),'Перезапустить сервер'),
-    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{const t=OC.readLog();sub('Лог сервера',h('pre',{class:'term-pre',style:{maxHeight:'none'}},t||'(пусто)'))}},O.icon('terminal'),'Смотреть лог сервера')))}
+    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{const t=OC.readLog();sub('Лог сервера',h('pre',{class:'term-pre',style:{maxHeight:'none'}},t||'(пусто)'))}},O.icon('terminal'),'Смотреть лог сервера'),
+    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>O.runDiagnostics()},O.icon('shield'),O.tr('Connection diagnostics','Диагностика подключения'))))}
+// ---- connection diagnostics ----
+// Distinguishes "the local server is not running" from "the network blocks the model provider":
+// those two fail with almost identical symptoms in the chat, so the check reports each layer.
+O.runDiagnostics=async()=>{
+  const body=h('div',null,h('div',{class:'mut',style:{padding:'16px'}},O.tr('Running checks…','Проверяю…')));
+  const s=O.sheet(O.tr('Connection diagnostics','Диагностика подключения'),body,{full:true});
+  const rows=[];
+  const add=(ok,title,detail)=>rows.push({ok,title,detail});
+
+  const d=O.native.diagnose?O.native.diagnose():{};
+  add(!!d.installed, O.tr('Runtime installed','Окружение установлено'), d.installed?'rootfs OK':O.tr('rootfs is missing — reinstall the runtime','rootfs отсутствует — переустановите окружение'));
+  add(!!d.ready, O.tr('Local server','Локальный сервер'),
+    d.ready?('127.0.0.1:'+d.port):(O.tr('not running','не запущен')+(d.error?(' — '+String(d.error).split('\n')[0]):'')));
+  add(!!d.tcp, O.tr('Loopback TCP','TCP на петлевой интерфейс'), d.tcp?O.tr('port is open','порт открыт'):O.tr('cannot connect to the port — server crashed or port blocked','порт недоступен — сервер упал или порт занят'));
+  add(d.healthCode===200, O.tr('HTTP health','HTTP-проверка'),
+    d.healthCode>0?('HTTP '+d.healthCode+' '+(d.healthBody||'').slice(0,80)):O.tr('no response from /global/health','нет ответа от /global/health'));
+  add(!!d.webReady, O.tr('WebView bridge','Мост WebView'), d.webReady?O.tr('events are delivered','события доставляются'):O.tr('WebView is not attached','WebView не подключён'));
+
+  // provider reachability: the part a blocked network breaks first
+  let up=false;
+  try{await O.api('GET','/config/providers',null,{timeout:8000,cache:false});up=true}catch(e){}
+  add(up, O.tr('API through the bridge','API через мост'), up?O.tr('the UI can reach the local server','UI достаёт до локального сервера'):O.tr('requests fail — see the log below','запросы падают — смотрите лог ниже'));
+
+  let provOk=false,provErr='';
+  try{
+    const r=await O.api('GET','/provider',null,{timeout:12000,cache:false});
+    provOk=!!(r&&r.all&&r.all.length);
+    if(!provOk)provErr=O.tr('provider list is empty','список провайдеров пуст');
+  }catch(e){provErr=e.message||String(e)}
+  add(provOk, O.tr('Providers loaded','Провайдеры загружены'), provOk?O.tr('model catalogue is available','каталог моделей доступен'):provErr);
+
+  body.textContent='';
+  const card=h('div',{class:'settings-card'});
+  rows.forEach(r=>{
+    card.append(h('div',{class:'settings-row'},
+      h('div',{class:'settings-row-icon',style:{background:(r.ok?'rgba(34,197,94,0.15)':'rgba(239,68,68,0.15)'),color:r.ok?'#22c55e':'#ef4444'}},O.icon(r.ok?'check':'x')),
+      h('div',{class:'settings-row-text'},h('b',null,r.title),h('span',null,r.detail||''))));
+  });
+  body.append(card);
+
+  // plain-language verdict
+  const verdict = !d.ready
+    ? O.tr('The local server did not start. Open the log below; if it mentions seccomp or an illegal instruction, enable "Safe mode" in Compatibility.','Локальный сервер не запустился. Откройте лог ниже; если там seccomp или illegal instruction — включите «Безопасный режим» в разделе «Совместимость».')
+    : (!provOk
+      ? O.tr('The server runs, but the provider catalogue is empty. This is usually the network: a VPN, DNS or a regional block on the provider API. Try another network or a proxy in the provider settings.','Сервер работает, но каталог провайдеров пуст. Обычно это сеть: VPN, DNS или блокировка API провайдера в регионе. Попробуйте другую сеть или прокси в настройках провайдера.')
+      : O.tr('All layers look healthy. If chat still fails, the error comes from the model provider itself — check the key, the quota and the provider status.','Все слои в порядке. Если чат всё равно не отвечает, ошибка приходит от самого провайдера — проверьте ключ, квоту и статус сервиса.'));
+  body.append(h('div',{class:'note',style:{margin:'10px 2px'}},verdict));
+
+  body.append(h('button',{class:'btn wide',onclick:()=>{
+    const dump='diagnostics '+new Date().toISOString()+'\n'+JSON.stringify(d,null,2);
+    O.actions(O.tr('Share report','Поделиться отчётом'),[
+      {label:O.tr('Copy','Скопировать'),icon:'copy',fn:()=>O.native.copy(dump)},
+      {label:O.tr('Share','Поделиться'),icon:'share',fn:()=>O.native.share(dump)}]);
+  }},O.icon('copy'),O.tr('Copy report','Скопировать отчёт')));
+  body.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{s.close();OC.restartServer()}},O.icon('refresh'),O.tr('Restart server','Перезапустить сервер')));
+  const tail=(d.logTail||'').trim();
+  body.append(h('div',{class:'grp',style:{marginTop:'14px'}},O.tr('Server log (tail)','Лог сервера (хвост)')));
+  body.append(h('pre',{class:'term-pre',style:{maxHeight:'260px'}},tail||O.tr('(empty)','(пусто)')));
+};
+
 function openAbout(){const st=O.native.state();
   sub('О приложении',h('div',null,h('div',{class:'center',style:{minHeight:0,padding:'16px 0'}},O.logo(40),h('b',{style:{fontSize:'20px'}},'OpenCode'),h('div',{class:'mut'},'Версия '+st.version),h('div',{class:'mut s'},'Ядро '+(st.core||'неизвестно')+' (1.x)')),
     h('div',{class:'note'},'OpenCode Mobile упаковывает CLI OpenCode 1.x (лицензия MIT) в Android-приложение. Оно создано не командой OpenCode и никак с ней не связано.'),

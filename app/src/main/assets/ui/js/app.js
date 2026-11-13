@@ -85,6 +85,7 @@ function build(){
   ['open','session','sessions','msg','vcs','dir','meta','diff','status','idle'].forEach(e=>bus.on(e,O.debounce(updateTop,120)));
   bus.on('mm',O.debounce(updateTop,60));
   bus.on('conn',updateBanner);
+  bus.on('status',O.debounce(updateBanner,400));
   bus.on('statuspanel',refreshStatus);
   layout();
   updateTop();
@@ -210,9 +211,20 @@ function updateTopMm(){
 
 function updateBanner(){
   if(!built)return;
-  const t=S.offline?(O.tr('Offline — showing cached chats','Офлайн — показаны кэшированные чаты')):(!S.up?(O.tr('Connecting to local runtime...','Подключение к локальному серверу...')):'');
+  const err=(O.native.state&&O.native.state().serverError)||'';
+  let t='';
+  if(err)t=O.tr('Local server failed: ','Локальный сервер не запустился: ')+String(err).split('\n')[0];
+  else if(S.offline)t=O.tr('Offline — showing cached chats','Офлайн — показаны кэшированные чаты');
+  else if(!S.up)t=O.tr('Connecting to local runtime...','Подключение к локальному серверу...');
   T.banner.textContent=t;
   T.banner.classList.toggle('hide',!t);
+  // a failed server must offer the one action that fixes it, right where the error is shown
+  const old=T.banner.querySelector('button');
+  if(old)old.remove();
+  if(err){
+    T.banner.append(h('button',{class:'btn sm',style:{marginLeft:'8px'},onclick:()=>{O.runDiagnostics?O.runDiagnostics():O.openCompat&&O.openCompat()}},O.tr('Diagnose','Диагностика')),
+      h('button',{class:'btn sm',style:{marginLeft:'6px'},onclick:()=>{try{OC.restartServer()}catch(_){}}},O.tr('Restart','Перезапуск')));
+  }
 }
 
 async function refreshStatus(){

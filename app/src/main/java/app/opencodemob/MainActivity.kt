@@ -358,6 +358,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        webReady = false
         ui.removeCallbacksAndMessages(null)
         try { stt?.stop() } catch (_: Exception) {}
         try { tts?.shutdown() } catch (_: Exception) {}
@@ -370,39 +371,16 @@ class MainActivity : ComponentActivity() {
         if (u.scheme in listOf("http", "https", "tg")) try { startActivity(Intent(Intent.ACTION_VIEW, u)) } catch (_: Exception) {}
     }
 
-    // Streaming deltas arrive dozens of times per second. Injecting one evaluateJavascript call per
-    // delta floods the UI thread queue (taps are processed only after the queue drains → "freezes"),
-    // so consecutive events of the same kind are coalesced into a single JS batch per frame.
-    private val pendingJs = StringBuilder()
-    private var flushScheduled = false
-    private val flushRunnable = Runnable {
-        flushScheduled = false
-        val batch = pendingJs.toString()
-        pendingJs.setLength(0)
-        if (batch.isEmpty() || !webReady) return@Runnable
-        try {
-            web.evaluateJavascript("(function(){var b=$batch;for(var i=0;i<b.length;i++){var e=b[i];window.OCEvent&&window.OCEvent(e[0],e[1]);}})()", null)
-        } catch (_: Exception) {}
-    }
-
+    // Every bridge event goes through here. SSE deltas are coalesced by the UI-side render
+    // throttling (see render.js), not by reordering the event queue: batching here broke the strict
+    // order between "http" replies and "sse" data, which left promise callbacks unresolved and made
+    // the app look disconnected from the local server.
     fun emit(name: String, data: JSONObject) {
         runOnUiThread {
-            // Control events (http replies, lifecycle) must not wait behind a streaming batch:
-            // promise callbacks in the UI would otherwise time out under heavy output.
-            val urgent = name != "sse"
-            val item = "[" + JSONObject.quote(name) + "," + data + "]"
-            if (urgent && webReady) {
-                try { web.evaluateJavascript("window.OCEvent&&window.OCEvent(" + JSONObject.quote(name) + "," + data + ")", null) } catch (_: Exception) {}
-                return@runOnUiThread
-            }
-            // Never let an unread batch grow without bound while the WebView is paused.
-            if (pendingJs.length > 400_000) pendingJs.setLength(0)
-            if (pendingJs.isNotEmpty()) pendingJs.append(',')
-            pendingJs.append(item)
-            if (!flushScheduled) {
-                flushScheduled = true
-                ui.postDelayed(flushRunnable, 16)
-            }
+            if (!webReady) return@runOnUiThread
+            try {
+                web.evaluateJavascript("window.OCEvent&&window.OCEvent(" + JSONObject.quote(name) + "," + data + ")", null)
+            } catch (_: Exception) {}
         }
     }
 
@@ -1008,8 +986,10 @@ class MainActivity : ComponentActivity() {
             if (Prefs.get(this@MainActivity, "guest") == "1") put("pw", Prefs.get(this@MainActivity, "guestpw"))
             put("googleConfigured", BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotEmpty())
             put("installed", Runtime.isInstalled(this@MainActivity))
+            put("assetStamp", try { assets.open("rootfs.id").bufferedReader().use { it.readText().trim() } } catch (_: Exception) { "" })
             put("core", Updater.installedCore(this@MainActivity))
             put("perms", perms()); put("flags", flags()); put("ready", ServerState.ready)
+            put("port", ServerState.port); put("serverError", ServerState.error ?: "")
             put("overlay", try { Settings.canDrawOverlays(this@MainActivity) } catch (_: Exception) { false })
         }.toString()
 
@@ -1339,6 +1319,47 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
 
         @JavascriptInterface fun readLog(): String = try { File(filesDir, "server.log").readText().takeLast(60_000) } catch (_: Exception) { "" }
+
+        /** End-to-end self check of the local pipeline: UI → Kotlin → 127.0.0.1 → server. */
+        @JavascriptInterface fun diagnose(): String = try {
+            val o = JSONObject()
+            o.put("ready", ServerState.ready)
+            o.put("port", ServerState.port)
+            o.put("pwLen", ServerState.password.length)
+            o.put("error", ServerState.error ?: "")
+            o.put("installed", Runtime.isInstalled(this@MainActivity))
+            o.put("uidLen", Prefs.get(this@MainActivity, "uid").length)
+            o.put("webReady", webReady)
+            // 1) can we open a TCP connection to the loopback port?
+            var tcp = false
+            try {
+                java.net.Socket().use { s ->
+                    s.connect(java.net.InetSocketAddress("127.0.0.1", ServerState.port), 1500)
+                    tcp = true
+                }
+            } catch (_: Exception) {}
+            o.put("tcp", tcp)
+            // 2) does the server answer /global/health with the stored password?
+            var code = -1; var body = ""
+            if (tcp) try {
+                val con = java.net.URL("http://127.0.0.1:${ServerState.port}/global/health").openConnection() as java.net.HttpURLConnection
+                con.connectTimeout = 2500; con.readTimeout = 3000
+                con.setRequestProperty("Authorization", Runtime.basic(ServerState.password))
+                code = con.responseCode
+                body = try { con.inputStream.bufferedReader().use { it.readText() }.take(300) } catch (_: Exception) { "" }
+                con.disconnect()
+            } catch (e: Exception) { o.put("healthErr", e.message ?: "") }
+            o.put("healthCode", code)
+            o.put("healthBody", body)
+            // 3) proxy shim (used for third-party OpenAI-compatible providers)
+            o.put("shimPort", ProxyShim.currentPort(this@MainActivity))
+            o.put("shimRunning", ProxyShim.isRunning())
+            // 4) tail of the server log, the single most useful thing when startup fails
+            o.put("logTail", try { File(filesDir, "server.log").readLines().takeLast(25).joinToString("\n") } catch (_: Exception) { "" })
+            o.toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "failed").toString()
+        }
 
         @JavascriptInterface fun pickFile(kind: String, dir: String) {
             runOnUiThread { pendingKind = kind; pendingDir = dir; picker.launch(arrayOf("*/*")) }

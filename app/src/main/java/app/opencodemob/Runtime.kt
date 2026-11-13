@@ -215,9 +215,18 @@ object Runtime {
 
     /** Random port chosen once per install and kept, so the WebView origin (localStorage, IndexedDB) stays stable. */
     fun stablePort(c: Context): Int {
+        // A port that was free once can end up inside Android's ephemeral range and be grabbed by
+        // another app, which shows up as "cannot connect to the local server". Prefer the saved
+        // port, but verify it is actually bindable now and otherwise pick a fresh one.
         val saved = Prefs.get(c, "port").toIntOrNull()
-        if (saved != null) {
-            try { ServerSocket(saved, 0, java.net.InetAddress.getByName("127.0.0.1")).close(); return saved } catch (_: Exception) {}
+        if (saved != null && saved in 20000..60999) {
+            try {
+                ServerSocket().use { ss ->
+                    ss.reuseAddress = true
+                    ss.bind(java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), saved))
+                }
+                return saved
+            } catch (_: Exception) {}
         }
         val p = ServerSocket(0, 0, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
         Prefs.put(c, "port", p.toString())

@@ -87,6 +87,7 @@ O.native={
   ttsStop:()=>{try{OC.ttsStop()}catch(_){}},
   ttsConfigure:(voice,rate,pitch)=>{try{OC.ttsConfigure(voice||'',rate||1,pitch||1)}catch(_){}},
   ttsVoices:()=>{try{return j(OC.ttsVoices())||[]}catch(_){return[]}},
+  diagnose:()=>{try{return j(OC.diagnose())||{}}catch(e){return{error:String(e)}}},
   state:()=>j(OC.state())||{}
 };
 O.openUrl=u=>{if(/^https?:\/\//i.test(u)&&!/appassets\.androidplatform\.net/i.test(u))OC.openLink(u)};
