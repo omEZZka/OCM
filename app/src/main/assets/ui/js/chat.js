@@ -27,7 +27,13 @@ O.chatInit=root=>{
   agentChip=h('button',{class:'hud-pill agent-pill',onclick:()=>O.openAgents()},h('span',null,'Build'),O.icon('chevD'));
   if(agentChip._mmWatch===undefined){agentChip._mmWatch=1;bus.on('mm',updateChips)}
   modelChip=h('button',{class:'hud-pill model-pill',onclick:()=>O.openModels()},h('span',null,O.tr('Select model','Выбрать модель')),O.icon('chevD'));
-  const micBtn=h('button',{class:'hud-icon-btn mic-btn',onclick:onMic},O.icon('mic'));
+  const micBtn=h('button',{class:'hud-icon-btn mic-btn',onclick:()=>{
+    // while a call is running the same button ends it; otherwise it starts a call
+    if(O.callActive&&O.callActive())O.endCall();
+    else if(O.startCall)O.startCall();
+    else onMic();
+  }},O.icon('mic'));
+  O.longPress(micBtn,()=>{if(onMic)onMic();},500);
   sendBtn=h('button',{id:'send',onclick:onSend},O.icon('send'));
   const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentChip,modelChip);
   const cbarRight=h('div',{class:'cbar-right'},micBtn,sendBtn);
@@ -36,8 +42,14 @@ O.chatInit=root=>{
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,jumpEl);
   root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,mmFloatBtn,comp);
   bus.on('open',()=>{renderAll()});
-  bus.on('msg',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd();O.runHook('onReceive',{message:m,sessionID:sid})});
-  bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);if(was)scrollEnd()});
+  let msgRaf=0;
+  bus.on('msg',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);
+    if(was&&!msgRaf)msgRaf=requestAnimationFrame(()=>{msgRaf=0;scrollEnd()});
+    O.runHook('onReceive',{message:m,sessionID:sid})});
+  // delta events can arrive many times per frame; batch the scroll into one rAF
+  let partRaf=0;
+  bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);
+    if(was&&!partRaf)partRaf=requestAnimationFrame(()=>{partRaf=0;scrollEnd()})});
   bus.on('msg-removed',(sid,id)=>{const e=msgEls.get(id);if(e){e.remove();msgEls.delete(id)}});
   bus.on('part-removed',(sid,m,pid)=>{dropTimer(pid);const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
   bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend()}if(O.mm.run)renderMmProgress()});
@@ -45,7 +57,13 @@ O.chatInit=root=>{
   bus.on('session',()=>{const k=revisionKey();if(k!==revKey)renderAll();else renderRevert()});
   bus.on('sessions',()=>{renderRevert()});
   bus.on('mm:progress',renderMmProgress);
-  bus.on('idle',()=>renderContinue());
+  bus.on('idle',()=>{renderContinue();flushPartTimers();
+    // final exact pass: streaming used throttled renders, the settled message must be exact
+    for(const m of (S.sid?O.msgs(S.sid).list:[])){
+      const el=msgEls.get(m.info.id);if(!el)continue;
+      for(const p of m.parts){const pe=partEls.get(p.id);if(pe&&(p.type==='text'||p.type==='reasoning')){pe._t=null;fillPart(pe,p,m,false)}}
+    }
+  });
   bus.on('msg',()=>renderContinue());
   bus.on('meta',updateChips);bus.on('conn',updateChips);
   bus.on('serror',p=>{if(p&&(!p.sessionID||p.sessionID===S.sid)){const e=p.error;const t=e&&(e.data&&e.data.message||e.name);if(t&&e.name!=='MessageAbortedError'){
@@ -146,6 +164,9 @@ function showEmpty(){
   if(chatRoot)chatRoot.classList.add('is-empty');
   const wm=h('div',{class:'watermark-box'},O.wordmark('100%','auto'));
   msgsEl.append(h('div',{class:'empty'},wm))}
+function flushPartTimers(){
+  for(const el of partEls.values()){if(el._tt){clearTimeout(el._tt);el._tt=null;if(el._p)fillTool(el,el._p)}}
+}
 function ensureMsg(m){
   const rv=revisionKey();if(rv&&m.info.id>=rv)return;
   let el=msgEls.get(m.info.id);
@@ -178,7 +199,12 @@ function fillPart(el,p,m,fresh){
     if(!el._d){el._d=h('details',null,h('summary',null,'Размышления'),h('div',{class:'p-text'}));el.append(el._d)}
     const b=el._d.lastChild;if(fresh)renderR(el,b);else sched(p.id,()=>renderR(el,b));break}
   case'tool':{const st=p.state||{};if(st.status==='running'&&p.tool==='bash'&&!el._auto){el._auto=1;open.add(p.id)}else if(st.status!=='running'&&el._auto===1){el._auto=2;open.delete(p.id)}
-    if(fresh)fillTool(el,p);else sched(p.id,()=>fillTool(el,el._p));break}
+    // output streams too: throttle it so a chatty bash command cannot monopolise the main thread
+    const running=st.status==='running'||st.status==='pending';
+    if(fresh)fillTool(el,p);
+    else if(running){if(!el._tt)el._tt=setTimeout(()=>{el._tt=null;fillTool(el,el._p);if(stick)scrollEnd()},140)}
+    else fillTool(el,p);
+    break}
   case'file':el.className='part fchips';el.textContent='';
     if((p.mime||'').startsWith('image/')&&p.url)el.append(h('img',{class:'thumb',src:p.url}));
     else el.append(h('span',{class:'chip'},O.fileIcon(p.filename||'file'),h('span',null,p.filename||'file')));break;
@@ -230,7 +256,9 @@ function render(el){
   let cleanText=p.text||'';
   // Strip trailing "+N -M" line from text so it is not duplicated above the badge!
   cleanText=cleanText.replace(/(?:\r?\n)+\s*[+]\d+\s+[-]\d+\s*$/g,'');
-  O.mdInto(el,cleanText);
+  // Streaming parts render on a short cadence; the completed message is rendered once, exactly.
+  const done=!!(p.time&&p.time.end);
+  O.mdInto(el,cleanText,{final:done});
   if(O.initCustomWidgets)O.initCustomWidgets(el);
 }
 function renderR(el,b){const p=el._p;const t=p.text||p.reasoning||p.thinking||'';if(b._t===t)return;b._t=t;O.mdInto(b,t);
@@ -624,7 +652,25 @@ const quotaHint=()=>S.account&&S.account.email
   ?'Квота этой модели исчерпана. Перезапустите сервер (Настройки → Совместимость), выберите другую модель или подключите свой ключ: Настройки → Модели → Подключить провайдера'
   :'Квота исчерпана. Войдите в аккаунт opencode (Google/GitHub): Настройки → Аккаунт opencode — или подключите свой ключ: Настройки → Модели → Подключить провайдера';
 function onMic(){
-  const lang=O.store.get('lang','ru')==='en'?'en':'ru';
+  const co=O.store.get('call.opts',{});
+  const lang=co.lang||(O.store.get('lang','ru')==='en'?'en-US':'ru-RU');
+  // One-shot dictation through the same continuous recogniser, so the chosen engine is honoured.
+  if(O.native.sttAvailable&&O.native.sttAvailable()){
+    let got=false;
+    const off1=O.on('stt',d=>{
+      if(d.t==='final'&&d.text&&!got){
+        got=true;cleanup();
+        ta.value=(ta.value?ta.value+' ':'')+d.text;onInput();ta.focus();
+        try{O.native.sttStop()}catch(_){}
+      }else if(d.t==='error'){cleanup();O.toast(O.tr('Voice input error','Ошибка голосового ввода'),2000)}
+      else if(d.t==='ready'&&!got)O.toast(O.tr('Listening...','Слушаю...'),1500);
+    });
+    const cleanup=()=>{try{off1&&off1()}catch(_){};try{O.native.sttStop()}catch(_){}};
+    O.native.sttStart(co.sttMode||'system',lang);
+    // safety: never leave the microphone on for a stray dictation
+    setTimeout(()=>{if(!got)cleanup()},30000);
+    return;
+  }
   if(window.OC&&window.OC.startVoiceInput){
     window.OC.startVoiceInput(lang);
     return;
@@ -853,5 +899,20 @@ async function onSend(){
     ta.value=text;onInput();
   }}
 function clear(){clearTimeout(draftTimer);if(S.sid)O.clearDraft(S.sid);draftSid=S.sid;ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
-O.chat={renderAll,sess,focus:()=>ta&&ta.focus()};
+// Programmatic send used by call mode and widgets: the text goes through the same pipeline as a
+// tapped message (tools, fallback chain, checkpoint), so a spoken phrase behaves exactly like typing.
+O.chatSendText=text=>{
+  const t=String(text||'').trim();
+  if(!t)return false;
+  ta.value=t;autosize();updateSend();
+  try{onSend()}catch(e){return false}
+  return true;
+};
+// Shows the agent answer as if it were being typed (purely visual; the real text is already there).
+O.chatTypeText=text=>{
+  const el=ta;if(!el)return;
+  el.placeholder=String(text||'').slice(0,120);
+  setTimeout(()=>{if(el.placeholder.startsWith(String(text||'').slice(0,10)))el.placeholder=O.tr('Chat with OpenCode...','Чат с OpenCode...')},4000);
+};
+O.chat={renderAll,sess,focus:()=>ta&&ta.focus(),sendText:O.chatSendText,typeText:O.chatTypeText};
 })();

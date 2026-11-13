@@ -81,7 +81,31 @@ O.enhance=el=>{
     }
   });
 };
-O.mdInto=(el,t)=>{el.innerHTML=O.md(t);O.enhance(el)};
+// Rendering markdown on every streamed delta is what made the UI freeze: `marked` + DOMPurify +
+// highlight.js reparse the whole answer dozens of times per second while the user is tapping. Cap
+// the work with a per-element throttle, and while streaming only re-render if the text actually
+// grew by a meaningful amount. The final state is always rendered exactly, once streaming stops.
+O.mdInto=(el,t,opts)=>{
+  const o=opts||{};
+  el._md=el._md||{txt:'',at:0,timer:null};
+  const st=el._md;
+  const apply=()=>{
+    st.timer=null;
+    st.at=Date.now();
+    try{el.innerHTML=O.md(st.txt);O.enhance(el)}catch(e){}
+  };
+  st.txt=t;
+  if(o.final){
+    if(st.timer){clearTimeout(st.timer);st.timer=null}
+    apply();
+    return;
+  }
+  const now=Date.now();
+  const gap=now-st.at;
+  if(gap>=90){apply();return}
+  if(st.timer)return; // a render is already scheduled; it will pick up st.txt
+  st.timer=setTimeout(apply,90-gap);
+};
 
 // ---- diff ----
 O.diffOps=(a,b)=>{const A=a.split('\n'),B=b.split('\n');let s=0;while(s<A.length&&s<B.length&&A[s]===B[s])s++;

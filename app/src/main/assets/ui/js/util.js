@@ -69,8 +69,20 @@ let tt;O.toast=(m,ms)=>{let e=O.$('#toast');if(!e){e=h('div',{id:'toast'});docum
 
 // sheets
 const stack=[];O.sheets=stack;
+// Opening a sheet used to be possible many times from one tap: while the WebView main thread is
+// busy with a streaming markdown re-render, queued pointer events all fire at once afterwards and
+// every one of them opened another copy of the same menu. Two guards:
+//   1) a short global lock, so a burst of taps in the same frame opens one sheet;
+//   2) an id+title key, so an identical sheet already on screen is not stacked again.
+let sheetLockUntil=0;
 O.sheet=(title,body,opts)=>{opts=opts||{};
-  const api={};
+  const now=Date.now();
+  const key=String(title||'')+'#'+((opts&&opts.drawer)?'d':'s');
+  if(now<sheetLockUntil)return {close(){},root:{isConnected:false},box:null,body:null,blocked:true};
+  const top=stack[stack.length-1];
+  if(top&&top._key===key&&now-top._openedAt<700)return top;
+  sheetLockUntil=now+280;
+  const api={};api._key=key;api._openedAt=now;
   let closed=false;
   api.close=()=>{if(closed)return;closed=true;api.root.classList.remove('on');
     setTimeout(()=>{if(api.root.isConnected)api.root.remove()},260);

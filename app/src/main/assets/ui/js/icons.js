@@ -45,6 +45,8 @@ image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5
 at:'<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 006 0v-1a10 10 0 10-3.9 7.9"/>',
 excl:'<circle cx="12" cy="12" r="10"/><path d="M12 7v6M12 16.5h.01"/>',
 pause:'<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+wave:'<path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 11v2"/>',
+
 dot:'<circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>',
 zap:'<path d="M13 2L3 14h7v8l11-13h-8l1-7z"/>',
 bug:'<path d="M8 6a4 4 0 018 0M6 12H3M21 12h-3M6 16H3M21 16h-3M6 8h12a0 0 0 010 0v6a6 6 0 01-12 0z"/><path d="M9 3l1.5 3M15 3l-1.5 3"/>',

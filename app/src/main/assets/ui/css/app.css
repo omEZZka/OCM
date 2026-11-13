@@ -2672,3 +2672,24 @@ a:hover {
 .mm-graph-node.queued .mm-graph-box{stroke:var(--mut);stroke-dasharray:4 3;fill:rgba(142,142,147,0.06)}
 .mm-graph-node.queued .mm-graph-state{fill:var(--mut)}
 .mm-graph-legend .lg.queued{background:var(--mut);opacity:.6}
+
+/* ---- call mode ---- */
+.call-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6vh 18px 18px;
+}
+.call-orb {
+  width: 108px;
+  height: 108px;
+  border-radius: 50%;
+  border: 3px solid var(--acc);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.03);
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.call-orb .ic svg { width: 40px; height: 40px; }
+.call-body { min-height: 100%; }

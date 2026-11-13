@@ -79,6 +79,14 @@ O.native={
   stopOverlay:()=>{try{OC.stopOverlay()}catch(_){}},
   overlayState:()=>{try{return j(OC.overlayState())||{}}catch(_){return{}}},
   setOverlayState:o=>{try{if(OC.setOverlayState)OC.setOverlayState(JSON.stringify(o||{}))}catch(_){}},
+  sttStart:(mode,lang)=>{try{OC.sttStart(mode||'system',lang||'ru-RU')}catch(_){}},
+  sttStop:()=>{try{OC.sttStop()}catch(_){}},
+  sttAvailable:()=>{try{return !!OC.sttAvailable()}catch(_){return false}},
+  ttsInit:(voice,rate,pitch)=>{try{OC.ttsInit(voice||'',rate||1,pitch||1)}catch(_){}},
+  ttsSpeak:t=>{try{OC.ttsSpeak(t||'')}catch(_){}},
+  ttsStop:()=>{try{OC.ttsStop()}catch(_){}},
+  ttsConfigure:(voice,rate,pitch)=>{try{OC.ttsConfigure(voice||'',rate||1,pitch||1)}catch(_){}},
+  ttsVoices:()=>{try{return j(OC.ttsVoices())||[]}catch(_){return[]}},
   state:()=>j(OC.state())||{}
 };
 O.openUrl=u=>{if(/^https?:\/\//i.test(u)&&!/appassets\.androidplatform\.net/i.test(u))OC.openLink(u)};

@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.PendingIntent
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.widget.Toast
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -65,6 +66,8 @@ class MainActivity : ComponentActivity() {
     private var pendingDir = ""
     private var fileCb: ValueCallback<Array<Uri>>? = null
     private var lastReady = false
+    private var stt: SpeechInput? = null
+    private var tts: Speaker? = null
     private var lastErr: String? = null
 
     private val loader by lazy {
@@ -80,6 +83,7 @@ class MainActivity : ComponentActivity() {
 
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { onPicked(it) }
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { emit("perms", JSONObject()) }
+    private val micPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { emit("perms", JSONObject()) }
     // overlay bubble showing the live agent state over other apps (see OverlayService)
     private val overlayPerm = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         // Settings returns RESULT_CANCELED even after the user grants the permission,
@@ -355,6 +359,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
+        try { stt?.stop() } catch (_: Exception) {}
+        try { tts?.shutdown() } catch (_: Exception) {}
         Net.sseStop()
         web.destroy()
         super.onDestroy()
@@ -364,9 +370,43 @@ class MainActivity : ComponentActivity() {
         if (u.scheme in listOf("http", "https", "tg")) try { startActivity(Intent(Intent.ACTION_VIEW, u)) } catch (_: Exception) {}
     }
 
-    fun emit(name: String, data: JSONObject) {
-        runOnUiThread { web.evaluateJavascript("window.OCEvent&&OCEvent(${JSONObject.quote(name)},$data)", null) }
+    // Streaming deltas arrive dozens of times per second. Injecting one evaluateJavascript call per
+    // delta floods the UI thread queue (taps are processed only after the queue drains → "freezes"),
+    // so consecutive events of the same kind are coalesced into a single JS batch per frame.
+    private val pendingJs = StringBuilder()
+    private var flushScheduled = false
+    private val flushRunnable = Runnable {
+        flushScheduled = false
+        val batch = pendingJs.toString()
+        pendingJs.setLength(0)
+        if (batch.isEmpty() || !webReady) return@Runnable
+        try {
+            web.evaluateJavascript("(function(){var b=$batch;for(var i=0;i<b.length;i++){var e=b[i];window.OCEvent&&window.OCEvent(e[0],e[1]);}})()", null)
+        } catch (_: Exception) {}
     }
+
+    fun emit(name: String, data: JSONObject) {
+        runOnUiThread {
+            // Control events (http replies, lifecycle) must not wait behind a streaming batch:
+            // promise callbacks in the UI would otherwise time out under heavy output.
+            val urgent = name != "sse"
+            val item = "[" + JSONObject.quote(name) + "," + data + "]"
+            if (urgent && webReady) {
+                try { web.evaluateJavascript("window.OCEvent&&window.OCEvent(" + JSONObject.quote(name) + "," + data + ")", null) } catch (_: Exception) {}
+                return@runOnUiThread
+            }
+            // Never let an unread batch grow without bound while the WebView is paused.
+            if (pendingJs.length > 400_000) pendingJs.setLength(0)
+            if (pendingJs.isNotEmpty()) pendingJs.append(',')
+            pendingJs.append(item)
+            if (!flushScheduled) {
+                flushScheduled = true
+                ui.postDelayed(flushRunnable, 16)
+            }
+        }
+    }
+
+    @Volatile private var webReady = true
 
     /** Tells the UI when the server comes up or goes down. */
     private fun watch() {
@@ -595,6 +635,7 @@ class MainActivity : ComponentActivity() {
         put("files", Environment.isExternalStorageManager())
         put("install", packageManager.canRequestPackageInstalls())
         put("battery", (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName))
+        put("mic", checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
     }
 
     private fun flags() = JSONObject().apply {
@@ -1171,6 +1212,7 @@ class MainActivity : ComponentActivity() {
                     "files" -> startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, pkg))
                     "install" -> startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, pkg))
                     "battery" -> startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, pkg))
+                    "mic" -> if (Build.VERSION.SDK_INT >= 23) micPerm.launch(Manifest.permission.RECORD_AUDIO)
                     "overlay" -> if (Settings.canDrawOverlays(this@MainActivity)) this@MainActivity.startOverlay()
                     else overlayPerm.launch(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg))
                 }
@@ -1216,6 +1258,35 @@ class MainActivity : ComponentActivity() {
                 } catch (_: Exception) {}
             }
         }
+
+        // --- continuous speech input (call mode) ---
+        @JavascriptInterface fun sttStart(mode: String, lang: String) {
+            runOnUiThread {
+                if (stt == null) stt = SpeechInput(this@MainActivity) { n, d -> emit(n, d) }
+                if (stt?.isAvailable() != true) {
+                    emit("stt", JSONObject().put("t", "error").put("error", "no_recognizer"))
+                    return@runOnUiThread
+                }
+                stt?.start(mode, lang)
+            }
+        }
+
+        @JavascriptInterface fun sttStop() { runOnUiThread { stt?.stop() } }
+
+        @JavascriptInterface fun sttAvailable(): Boolean = try { SpeechRecognizer.isRecognitionAvailable(this@MainActivity) } catch (_: Exception) { false }
+
+        // --- speech output ---
+        @JavascriptInterface fun ttsInit(voice: String, rate: Float, pitch: Float) {
+            runOnUiThread {
+                if (tts == null) tts = Speaker(this@MainActivity) { n, d -> emit(n, d) }
+                tts?.init(voice, rate, pitch)
+            }
+        }
+
+        @JavascriptInterface fun ttsSpeak(text: String) { runOnUiThread { tts?.speak(text) } }
+        @JavascriptInterface fun ttsStop() { runOnUiThread { tts?.stop() } }
+        @JavascriptInterface fun ttsConfigure(voice: String, rate: Float, pitch: Float) { runOnUiThread { tts?.configure(voice, rate, pitch) } }
+        @JavascriptInterface fun ttsVoices(): String = try { tts?.voices() ?: "[]" } catch (_: Exception) { "[]" }
 
         @JavascriptInterface fun startVoiceInput(lang: String) {
             runOnUiThread {

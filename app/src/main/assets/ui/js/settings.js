@@ -112,6 +112,14 @@ O.openSettings=()=>{
   });
   body.append(sndCard);
 
+  // 4b. Voice call
+  body.append(h('div',{class:'settings-section-title'},O.tr('Voice & Calls','Голос и звонки')));
+  body.append(h('div',{class:'settings-card'},
+    O.listRow('mic',O.tr('Call with the agent','Звонок с агентом'),O.tr('Speak naturally; files and tools run silently in the background','Говорите голосом; файлы и инструменты выполняются молча'),
+      O.icon(O.callActive&&O.callActive()?'wave':'chevR'),()=>{s.close();setTimeout(()=>{O.startCall&&O.startCall()},200)}),
+    O.listRow('sliders',O.tr('Recognition engine & voice','Движок распознавания и голос'),O.tr('System / on-device / cloud, language, speech rate','Системный / на устройстве / облако, язык, скорость речи'),
+      O.icon('chevR'),()=>{s.close();setTimeout(()=>{O.openCallSettings&&O.openCallSettings()},200)})));
+
   // 5. Agents, MCP & Plugins
   body.append(h('div',{class:'settings-section-title'},O.tr('Agents, MCP & Rules','Агенты, MCP и правила')));
   const agentCard=h('div',{class:'settings-card'});
@@ -413,7 +421,7 @@ O.on('update',d=>{if(!updUI)return;
   else{updUI.draw(d);updUI.info.textContent=(d.app||d.core)?'Доступны обновления':'Всё актуально'}});
 
 // ---- permissions ----
-const PERMS=[['notifications','bell','Уведомления','Звуки и оповещения о завершении задач'],['files','folder','Доступ ко всем файлам','Работа с /storage/emulated/0 и Download'],['battery','bat','Работа в фоне','Игнорирование оптимизации батареи, чтобы сервер не отключался'],['install','down','Установка обновлений','Разрешить OTA-обновлениям устанавливать новый APK']];
+const PERMS=[['notifications','bell','Уведомления','Звуки и оповещения о завершении задач'],['files','folder','Доступ ко всем файлам','Работа с /storage/emulated/0 и Download'],['battery','bat','Работа в фоне','Игнорирование оптимизации батареи, чтобы сервер не отключался'],['install','down','Установка обновлений','Разрешить OTA-обновлениям устанавливать новый APK'],['mic','mic','Микрофон','Голосовой ввод и звонки с агентом']];
 let permUI=null;
 O.permRows=()=>{const p=O.native.state().perms||{};return PERMS.map(([k,i,t,d])=>h('div',{class:'li'},O.icon(i),h('div',{class:'t'},h('b',null,t),h('span',null,d)),p[k]?h('span',{class:'ok s'},'Дано'):h('button',{class:'btn sm',onclick:()=>OC.grant(k)},'Разрешить')))};
 function openPerms(){const box=h('div',null,...O.permRows());const s=sub('Разрешения',box,{onClose:()=>{permUI=null}});permUI=()=>{box.textContent='';box.append(...O.permRows())}}
