@@ -2765,3 +2765,17 @@ a:hover {
 .model-check-box.on { background: var(--acc); border-color: var(--acc); }
 .model-check-box .ic svg { width: 14px; height: 14px; stroke-width: 3; }
 .model-row.picked { background: rgba(250,178,131,0.07); }
+
+/* boot progress: four dots that fill as the server comes up */
+.boot-steps { display: flex; gap: 6px; justify-content: center; margin-top: 8px; }
+.boot-steps i { width: 26px; height: 4px; border-radius: 2px; background: var(--bg3); transition: background 200ms ease; }
+.boot-steps i.on { background: var(--acc); }
+
+/* toast levels */
+#toast.toast-hint { background: rgba(24,24,27,0.92); color: var(--fg); }
+#toast.toast-error { background: rgba(127,29,29,0.96); color: #fee2e2; }
+
+/* status line: phase + elapsed */
+.status-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--mut); }
+.status-line .status-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.status-line .status-time { font-variant-numeric: tabular-nums; opacity: 0.75; }

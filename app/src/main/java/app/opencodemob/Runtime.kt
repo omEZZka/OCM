@@ -36,6 +36,8 @@ object ServerState {
     @Volatile var password = ""
     @Volatile var ready = false
     @Volatile var error: String? = null
+    /** Coarse startup stage: idle | installing | proxy | starting | waiting | ready | down. */
+    @Volatile var phase: String = "idle"
 }
 
 object Runtime {

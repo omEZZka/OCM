@@ -64,7 +64,7 @@ O.native={
   readText:p=>j(OC.readText(p))||{ok:false},
   writeText:(p,t)=>j(OC.writeText(p,t))||{ok:false},
   cfgRead:()=>OC.cfgRead(),cfgWrite:t=>j(OC.cfgWrite(t))||{ok:false},
-  copy:t=>{try{OC.copy(t);O.toast('Скопировано',1200)}catch{}},share:t=>OC.share(t),open:u=>OC.openLink(u),
+  copy:t=>{try{OC.copy(t);O.toastQuiet('Скопировано')}catch{}},share:t=>OC.share(t),open:u=>OC.openLink(u),
   openApp:t=>(window.OC&&OC.openApp?OC.openApp(t):false),
   preparePreview:p=>(window.OC&&OC.preparePreview?OC.preparePreview(p):''),
   notify:(kind,title,text)=>{try{if(window.OC&&OC.notify)OC.notify(kind,title,text)}catch(_){}},

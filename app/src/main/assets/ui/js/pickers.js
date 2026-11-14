@@ -21,7 +21,35 @@ O.isPinned=id=>O.pinnedSessions().includes(id);
 O.togglePin=id=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i>=0)l.splice(i,1);else l.push(id);O.store.set('pinned',l);bus.emit('sessions');};
 O.openSessions=()=>{
   const list=h('div'),tagBar=h('div',{style:{display:'flex',gap:'6px',overflowX:'auto',marginBottom:'8px'}});
-  const q=search(O.tr('Search sessions...','Поиск по сессиям...'),()=>draw());
+  const q=search(O.tr('Search sessions and messages...','Поиск по сессиям и сообщениям...'),()=>draw());
+  // message hits are async (IndexedDB), so they land in a separate block under the session list
+  const hits=h('div',{class:'msg-hits hide'});
+  let hitTimer=null;
+  const runHitSearch=()=>{
+    clearTimeout(hitTimer);
+    const needle=(q.value||'').trim();
+    if(needle.length<2){hits.classList.add('hide');hits.textContent='';return}
+    hitTimer=setTimeout(async()=>{
+      const res=await O.searchMessages(needle);
+      if((q.value||'').trim()!==needle)return;
+      hits.textContent='';
+      if(!res.length){hits.classList.add('hide');return}
+      hits.classList.remove('hide');
+      hits.append(h('div',{class:'grp'},O.tr('In messages','В сообщениях')+' ('+res.length+')'));
+      const card=h('div',{class:'group-card'});
+      res.slice(0,40).forEach(r=>{
+        const ses=S.sessions.find(x=>x.id===r.sid);
+        card.append(h('button',{class:'settings-row',onclick:()=>{s.close();O.openSession(r.sid).then(()=>{
+          setTimeout(()=>{const el=[...document.querySelectorAll('#msgs .msg')].find(e=>e.dataset.id===r.mid);if(el)el.scrollIntoView({block:'center'})},400);
+        })}},
+          h('div',{class:'settings-row-icon'},O.icon(r.role==='user'?'user':'bot')),
+          h('div',{class:'settings-row-text'},
+            h('b',null,ses?O.sessionTitle(ses):r.sid.slice(0,8)),
+            h('span',{style:{whiteSpace:'normal'}},'…'+r.text.replace(/\s+/g,' ').slice(0,140)+'…'))));
+      });
+      hits.append(card);
+    },260);
+  };
   let activeTag=O.sessionTagFilter();
   const navItem=(ic,label,fn)=>h('button',{class:'drawer-nav-item',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
   const nav=h('div',{style:{marginBottom:'12px',borderBottom:'1px solid var(--line)',paddingBottom:'8px'}},
@@ -34,7 +62,7 @@ O.openSessions=()=>{
     navItem('refresh',O.tr('Restart server','Перезапуск сервера'),()=>restartApp()));
   const newBtn=h('button',{class:'btn pri wide',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));
   const offs=[];
-  const s=O.sheet(O.tr('Navigation & Sessions','Навигация и сессии'),h('div',null,nav,newBtn,h('div',{style:{height:'12px'}}),q,tagBar,list),{drawer:true,
+  const s=O.sheet(O.tr('Navigation & Sessions','Навигация и сессии'),h('div',null,nav,newBtn,h('div',{style:{height:'12px'}}),q,tagBar,list,hits),{drawer:true,
     onClose:()=>{offs.splice(0).forEach(f=>{try{f()}catch(_){}})}});
   function drawTags(){
     tagBar.textContent='';
@@ -64,7 +92,7 @@ O.openSessions=()=>{
     if(diff<31)return O.tr('This month','В этом месяце');
     return d.toLocaleDateString(undefined,{year:'numeric',month:'long'});
   };
-  function draw(){list.textContent='';drawTags();const f=q.value.toLowerCase();
+  function draw(){list.textContent='';drawTags();runHitSearch();const f=q.value.toLowerCase();
     const items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f)&&(!activeTag||O.sessionTag(x.id)===activeTag));
     items.sort((a,b)=>{const pa=O.isPinned(a.id)?0:1,pb=O.isPinned(b.id)?0:1;if(pa!==pb)return pa-pb;return (b.time&&b.time.updated||0)-(a.time&&a.time.updated||0)});
     if(!items.length)list.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('No sessions yet','Сессий пока нет')));
@@ -117,6 +145,9 @@ function sessActions(x){O.actions(O.sessionTitle(x),[
     opts.push({label:O.tr('Set custom tag...','Задать свой тег...'),icon:'edit',fn:async()=>{const v=await O.ask(O.tr('Folder / tag','Папка / тег'),O.tr('For example: Work','Например: Работа'),cur);if(v!=null)O.setSessionTag(x.id,v)}});
     if(cur)opts.push({label:O.tr('Remove tag','Убрать тег'),icon:'x',fn:()=>O.setSessionTag(x.id,'')});
     O.actions(O.tr('Folder / tag','Папка / тег'),opts);
+  }},
+  {label:O.tr('Project folder','Папка проекта'),sub:O.sessionDir(x.id).replace(/^\/root/, '~'),icon:'folder',fn:()=>{
+    O.browseDir(O.sessionDir(x.id),dir=>{O.setSessionDir(x.id,dir);O.toast(O.tr('Folder: ','Папка: ')+dir,1800)});
   }},
   {label:O.tr('Rename','Переименовать'),icon:'edit',fn:async()=>{const v=await O.ask(O.tr('Rename session','Переименование сессии'),null,O.sessionTitle(x));if(!v)return;if(x.local){x.title=v;O.saveLocalSession(x);bus.emit('sessions');return}try{await api('PATCH','/session/'+x.id,{title:v})}catch(e){O.toast(e.message)}}},
   {label:O.tr('Export session (JSON)','Экспорт сессии (JSON)'),icon:'down',fn:()=>{
@@ -347,7 +378,6 @@ O.openModels=()=>{
         if(selecting){enterSelect(x);return}
         O.setModel(x.pid,x.mid);
         s.close();
-        O.toast(O.tr('Selected: ','Выбрана: ')+(x.name||x.mid),1500);
       }},
         box,
         h('div',{class:'model-row-left'},

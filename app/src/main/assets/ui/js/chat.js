@@ -3,6 +3,7 @@ const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
 let atts=[],mentions=[],stick=true,revKey='',trail=[];
+let histIdx=-1;
 let pendingHead=[],loadingOlder=false;
 const RENDER_TAIL=28, RENDER_CHUNK=24;
 O.rel=p=>{p=String(p||'');return S.dir&&p.startsWith(S.dir+'/')?p.slice(S.dir.length+1):p};
@@ -29,7 +30,23 @@ O.chatInit=root=>{
   mmFloatBtn=h('button',{id:'mm-float-btn',class:'hide',title:O.tr('Multimodal agent','Мультимодальный агент')});
   popEl=h('div',{id:'pop',class:'hide'});attsEl=h('div',{class:'atts hide'});
   nokeyEl=h('div',{class:'nokey hide'},h('span',{class:'grow'},O.tr('No models connected.','Модели не подключены.')),h('button',{class:'btn sm',onclick:()=>O.openConnect()},O.icon('key'),O.tr('Connect','Подключить')));
-  ta=h('textarea',{rows:1,placeholder:O.tr('Chat with OpenCode...','Чат с OpenCode...'),oninput:onInput,onclick:onInput,onkeyup:e=>{if(e.key.length>1)onInput()}});
+  ta=h('textarea',{rows:1,placeholder:O.tr('Chat with OpenCode...','Чат с OpenCode...'),oninput:onInput,onclick:onInput,
+    // Arrow-up on an empty composer walks the prompt history, like a shell.
+    onkeydown:e=>{
+      if(e.key!=='ArrowUp')return;
+      const empty=!ta.value.trim();
+      const atStart=ta.selectionStart===0||empty;
+      if(!atStart)return;
+      const hist=O.promptHistory?O.promptHistory():[];
+      if(!hist.length)return;
+      e.preventDefault();
+      histIdx=Math.min(hist.length-1,histIdx+1);
+      ta.value=hist[histIdx]||'';
+      onInput();
+      ta.setSelectionRange(ta.value.length,ta.value.length);
+    },
+    onkeyup:e=>{if(e.key.length>1)onInput()}});
+  ta.addEventListener('keydown',e=>{if(e.key!=='ArrowDown')return;if(!ta.value.trim()){e.preventDefault();histIdx=Math.max(-1,histIdx-1);ta.value=histIdx<0?'':(O.promptHistory()[histIdx]||'');onInput()}});
   fileIn=h('input',{type:'file',multiple:true,class:'hide',accept:'image/*,application/pdf,text/*',onchange:onFiles});
   const plusBtn=h('button',{class:'attach-btn',onclick:()=>fileIn.click()},O.icon('plus'));
   agentChip=h('button',{class:'hud-pill agent-pill',onclick:()=>O.openAgents()},h('span',null,'Build'),O.icon('chevD'));
@@ -212,7 +229,30 @@ function syncParts(el,m){
     const want=prev?prev.nextSibling:body.firstChild;
     if(pe.parentNode!==body||want!==pe)body.insertBefore(pe,want);
     fillPart(pe,p,m,fresh);prev=pe}
-  for(const c of [...body.children]){if(!keep.has(c.dataset.pid)){partEls.delete(c.dataset.pid);c.remove()}}}
+  for(const c of [...body.children]){if(!keep.has(c.dataset.pid)){partEls.delete(c.dataset.pid);c.remove()}}
+  collapseErrors(body)}
+// Consecutive failed tool calls are noise; show them as one row with the count.
+function collapseErrors(body){
+  const olds=body.querySelectorAll('.tool-errors');
+  olds.forEach(e=>e.remove());
+  let run=[];
+  const flush=()=>{
+    if(run.length<3){run=[];return}
+    const first=run[0];
+    const row=h('button',{class:'part tool error tool-errors',onclick:()=>{
+      const s2=O.sheet(O.tr('Failed tool calls','Неудачные вызовы'),h('div',null,run.map(p=>h('div',{style:{marginBottom:'10px'}},
+        h('b',null,p.tool||''),h('pre',{class:'term-pre',style:{maxHeight:'180px'}},(p.state&&p.state.output)||(p.state&&p.state.error)||'')))),{full:true});
+    }},O.icon('alert'),h('span',{class:'t'},run.length+' '+O.tr('failed calls','неудачных вызовов')),h('span',{class:'sub grow'},(first._p&&first._p.tool)||''));
+    first.parentNode.insertBefore(row,first);
+    run.forEach(el=>{el.style.display='none'});
+    run=[];
+  };
+  for(const c of [...body.children]){
+    const failed=c.classList&&c.classList.contains('tool')&&c.classList.contains('error');
+    if(failed)run.push(c);else flush();
+  }
+  flush();
+}
 function fillPart(el,p,m,fresh){
   el._p=p;
   switch(p.type){
@@ -222,7 +262,14 @@ function fillPart(el,p,m,fresh){
   case'reasoning':{el.className='part think';
     if(!el._d){el._d=h('details',null,h('summary',null,'Размышления'),h('div',{class:'p-text'}));el.append(el._d)}
     const b=el._d.lastChild;if(fresh)renderR(el,b);else sched(p.id,()=>renderR(el,b));break}
-  case'tool':{const st=p.state||{};if(st.status==='running'&&p.tool==='bash'&&!el._auto){el._auto=1;open.add(p.id)}else if(st.status!=='running'&&el._auto===1){el._auto=2;open.delete(p.id)}
+  case'tool':{const st=p.state||{};if(st.status==='running'&&p.tool==='bash'&&!el._auto){el._auto=1;open.add(p.id)}
+    else if(st.status!=='running'&&el._auto===1){el._auto=2;open.delete(p.id)}
+    // A finished tool collapses itself: long chats used to stay full of expanded command output.
+    // Errors and diffs stay open because they are what the user actually wants to read.
+    else if((st.status==='completed')&&el._auto!==3){
+      el._auto=3;
+      if(open.has(p.id)&&!getMsgDiff(m).found)open.delete(p.id);
+    }
     // output streams too: throttle it so a chatty bash command cannot monopolise the main thread
     const running=st.status==='running'||st.status==='pending';
     if(fresh)fillTool(el,p);
@@ -319,7 +366,24 @@ function metaUpdate(el,m){
       const badge=h('div',{
         class:'msg-diff-line',
         title:O.tr('View code changes in project','Посмотреть изменения кода в проекте'),
-        onclick:()=>O.setTab('changes')
+        onclick:()=>{
+          // show only the files touched by this message, with their diffs
+          const files=[];
+          for(const p of m.parts){
+            if(p.type==='patch'&&Array.isArray(p.files))p.files.forEach(f=>files.push(f));
+            if(p.type==='tool'&&p.metadata&&p.metadata.diff)files.push({file:(p.state&&p.state.input&&(p.state.input.filePath||p.state.input.path))||'',diff:p.metadata.diff});
+          }
+          if(!files.length){O.setTab('changes');return}
+          const body=h('div');
+          const s2=O.sheet(O.tr('Changes in this message','Изменения в этом сообщении'),body,{full:true});
+          files.forEach(f=>{
+            const path=f.file||f.path||f.filename||'';
+            body.append(h('div',{class:'grp'},O.basename(path)||path));
+            if(f.diff||f.patch)body.append(O.unifiedEl(f.diff||f.patch));
+            else if(typeof f.before==='string'||typeof f.after==='string')body.append(O.diffEl(O.diffOps(f.before||'',f.after||''),3));
+            else body.append(h('div',{class:'mut s',style:{padding:'6px 2px'}},'+'+(f.additions||0)+' / -'+(f.deletions||0)));
+          });
+        }
       },
       h('span',{class:'diff-stat-val add'},'+'+diffStat.added),
       h('span',{style:{color:'#52525b'}},' '),
@@ -350,6 +414,7 @@ function msgActions(m){O.actions(m.info.role==='user'?'Сообщение':'От
     {label:O.tr('Share','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(json);else O.native.copy(json)}}])}},
   m.info.role==='user'?{label:'Отменить отсюда',sub:'Откатить это сообщение и всё после него',icon:'undo',fn:()=>revertTo(m)}:null,
   m.info.role==='assistant'?{label:O.tr('Continue generation','Продолжить генерацию'),sub:O.tr('Resume from where it was cut','Продолжить с места обрыва'),icon:'play',fn:()=>O.continueGeneration()} : null,
+  m.info.role==='assistant'?{label:O.tr('Edit prompt and retry','Изменить запрос и повторить'),sub:O.tr('Fixes a wrong instruction instead of regenerating blind','Правит неверную инструкцию вместо слепой перегенерации'),icon:'edit',fn:()=>editAndRetry(m)}:null,
   m.info.role==='assistant'?{label:O.tr('Regenerate (more focused)','Перегенерировать (суше)'),sub:O.tr('Same prompt, lower temperature','Тот же запрос, ниже температура'),icon:'refresh',fn:()=>regenerate(m,'focused')}:null,
   m.info.role==='assistant'?{label:O.tr('Regenerate (more creative)','Перегенерировать (смелее)'),sub:O.tr('Same prompt, higher temperature','Тот же запрос, выше температура'),icon:'bulb',fn:()=>regenerate(m,'creative')}:null,
   {label:'Форк сессии отсюда',sub:'Новая сессия со всей историей до этого места',icon:'branch',fn:()=>forkAt(m)},
@@ -410,6 +475,20 @@ async function regenerate(m,mode){
     O.toast(O.tr('Regenerating…','Перегенерирую…'),1800);
   }catch(e){O.toast(e.message||String(e),4000)}
 }
+// Opens the original user prompt for editing, reverts the turn, and sends the corrected version.
+async function editAndRetry(m){
+  const list=O.msgs(S.sid).list;
+  const idx=list.findIndex(x=>x.info.id===m.info.id);
+  let userMsg=null;
+  for(let i=idx;i>=0;i--){if(list[i]&&list[i].info.role==='user'){userMsg=list[i];break}}
+  const orig=userMsg?msgText(userMsg):'';
+  if(!orig)return O.toast(O.tr('Prompt not found','Запрос не найден'),2500);
+  const edited=await O.ask(O.tr('Edit prompt','Изменить запрос'),O.tr('Correct the instruction and send it again','Исправьте инструкцию и отправьте снова'),orig,true);
+  if(edited==null||!edited.trim())return;
+  try{await api('POST','/session/'+S.sid+'/revert',{messageID:userMsg.info.id})}catch(_){}
+  setTimeout(()=>{if(O.chat&&O.chat.sendText)O.chat.sendText(edited.trim())},250);
+}
+
 async function forkAt(m){try{const s=await api('POST','/session/'+S.sid+'/fork',{messageID:m.info.id});await O.loadSessions();await O.openSession(s.id)}catch(e){O.toast(e.message)}}
 
 // ---- tools ----
@@ -554,10 +633,52 @@ function renderContinue(){
       if(v!==null)O.continueGeneration(S.sid,{custom:v||undefined});
     }},O.icon('edit'))));
 }
-function renderStatus(){const s=S.status[S.sid];statusEl.textContent='';
+// One status line that answers "what is happening right now": phase, current tool and elapsed time.
+let statusT=null,statusPhase='';
+function statusPhrase(){
+  const sid=S.sid;
+  const msgs=O.msgs(sid).list;
+  // last unfinished tool call wins: it is the most specific description of the current step
+  for(let i=msgs.length-1;i>=0&&i>msgs.length-12;i--){
+    const m=msgs[i];
+    for(let j=(m.parts||[]).length-1;j>=0;j--){
+      const p=m.parts[j];
+      if(p.type!=='tool'||!p.state||p.state.status!=='running')continue;
+      const inp=p.state.input||{};
+      const detail=p.tool==='bash'?String(inp.command||'').split('\n')[0]:String(inp.filePath||inp.path||inp.query||'');
+      return{tool:p.tool||'',detail:detail.slice(0,60)};
+    }
+  }
+  return null;
+}
+function renderStatus(){
+  const s=S.status[S.sid];
   renderContinue();
-  if(!s||s.type==='idle'){statusEl.classList.add('hide');return}
-  statusEl.classList.remove('hide');statusEl.append(h('span',{class:'spin'}),h('span',null,s.type==='retry'?('Повтор (попытка '+s.attempt+')'+(s.message?': '+s.message:'')):'Выполняется'))}
+  statusEl.textContent='';
+  if(!s||s.type==='idle'){statusEl.classList.add('hide');clearInterval(statusT);statusT=null;S._statusSince=0;return}
+  statusEl.classList.remove('hide');
+  const ph=statusPhrase();
+  const started=(s.type==='retry'&&s.time&&s.time.start)||S._statusSince||(S._statusSince=Date.now());
+  if(s.type!=='retry'&&!S._statusSince)S._statusSince=Date.now();
+  const label=s.type==='retry'
+    ?O.tr('Retry #','Повтор №')+(s.attempt||1)+(s.message?': '+String(s.message).slice(0,60):'')
+    :(ph?(ph.tool+(ph.detail?': '+ph.detail:'')):O.tr('Thinking','Думает'));
+  const timeEl=h('span',{class:'status-time'},'0s');
+  statusEl.append(h('span',{class:'spin'}),h('span',{class:'status-label'},label),timeEl);
+  clearInterval(statusT);
+  statusT=setInterval(()=>{
+    if(!statusEl.isConnected||!statusEl.classList.contains('hide')){
+      if(!statusEl.isConnected){clearInterval(statusT);statusT=null;return}
+    }
+    const el=statusEl.querySelector('.status-time');
+    if(!el){clearInterval(statusT);statusT=null;return}
+    el.textContent=Math.floor((Date.now()-S._statusSince)/1000)+'s';
+    // the tool can change while we tick; refresh the label without rebuilding the row
+    const ph2=statusPhrase();
+    const lab=statusEl.querySelector('.status-label');
+    if(lab&&ph2)lab.textContent=ph2.tool+(ph2.detail?': '+ph2.detail:'');
+  },1000);
+}
 function renderDock(){dockEl.textContent='';
   const curPerms=S.perms.filter(p=>p.sessionID===S.sid);
   const curQuestions=S.questions.filter(q=>q.sessionID===S.sid);
@@ -859,6 +980,7 @@ async function onSend(){
   mentions.filter(m=>text.includes(m.tok)).forEach(m=>{const p=JSON.parse(JSON.stringify(m.part));if(p.source&&p.source.text){p.source.text.start=text.indexOf(m.tok);p.source.text.end=p.source.text.start+m.tok.length}parts.push(p)});
   atts.forEach(a=>parts.push(a));
   if(O.mmActive()&&O.mmSend){clear();try{await O.mmSend(text,parts)}catch(e){O.toast(e.message||String(e),4000)}return}
+  if(O.pushPromptHistory)O.pushPromptHistory(text);
   O.runHook('onSend',{text,parts,model:S.model,agent:S.agent});
   // Snapshot the tree before the agent can touch it, so this turn can be rolled back.
   if(O.checkpointBeforeSend&&!O.mmActive())O.checkpointBeforeSend(text);
@@ -867,6 +989,8 @@ async function onSend(){
   O._fallback=null;
   try{
     const sid=await sess();
+    // a chat can live in its own folder; the request must use that directory, not the global one
+    if(O.sessionDir&&O.dir!==O.sessionDir(sid)){try{O.dir=O.sessionDir(sid)}catch(_){}}
     O.maybeAutoTitle(sid,text);
     const chain=[S.model].filter(Boolean).concat(O.fallbackChain());
     const quotaRe=/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|\b429\b/i;
@@ -907,7 +1031,7 @@ async function onSend(){
     }
     ta.value=text;onInput();
   }}
-function clear(){clearTimeout(draftTimer);if(S.sid)O.clearDraft(S.sid);draftSid=S.sid;ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
+function clear(){histIdx=-1;clearTimeout(draftTimer);if(S.sid)O.clearDraft(S.sid);draftSid=S.sid;ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
 // Programmatic send used by call mode and widgets: the text goes through the same pipeline as a
 // tapped message (tools, fallback chain, checkpoint), so a spoken phrase behaves exactly like typing.
 O.chatSendText=text=>{

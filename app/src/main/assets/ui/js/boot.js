@@ -43,10 +43,22 @@ O.on('install',d=>{if(!inst||!el)return;
     if(!el.querySelector('.retry'))el.firstChild.append(h('button',{class:'btn retry',onclick:install},O.icon('refresh'),'Повторить'));
     if(!el.querySelector('.reset'))el.firstChild.append(h('button',{class:'btn reset',style:{marginTop:'8px'},onclick:()=>OC.resetInstall()},O.icon('trash'),'Сбросить и установить заново'))}
   else if(d.done){inst=null;start()}else inst.bar.style.width=d.pct+'%'});
+const PHASES={proxy:['Готовим прокси','Preparing proxy'],starting:['Запускаем ядро OpenCode','Starting the OpenCode core'],waiting:['Ждём ответа сервера','Waiting for the server'],ready:['Готово','Ready'],down:['Сервер остановлен','Server stopped'],idle:['Запуск OpenCode','Starting OpenCode']};
+function paintPhase(ph){
+  const p=el&&el.querySelector('.boot-phase');if(!p)return;
+  const t=PHASES[ph]||PHASES.idle;
+  p.textContent=O.tr(t[1],t[0]);
+  const steps=['proxy','starting','waiting','ready'];
+  const i=steps.indexOf(ph);
+  const bar=el&&el.querySelector('.boot-steps');
+  if(bar)bar.querySelectorAll('i').forEach((d,k)=>d.classList.toggle('on',k<=i));
+}
 function start(){
-  const msg=h('p',{class:'mut'},'Запуск OpenCode'),err=h('p',{class:'err'}),extra=h('div');
+  const msg=h('p',{class:'mut boot-phase'},O.tr('Starting OpenCode','Запуск OpenCode')),err=h('p',{class:'err'}),extra=h('div');
   const spin=h('span',{class:'spin'});
-  screen(logo(),h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},spin,msg),err,extra);
+  const steps=h('div',{class:'boot-steps'},['i','i','i','i'].map(()=>h('i')));
+  screen(logo(),h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},spin,msg),steps,err,extra);
+  paintPhase('proxy');
   OC.start();clearTimeout(waitT);
   waitT=setTimeout(()=>{
     if(el&&!entered){
@@ -74,6 +86,7 @@ function next(){const st=O.native.state(),p=st.perms||{};
   if(!st.installed)return install();start()}
 O.on('signin',d=>{if(!el)return;d.ok?next():login(d.error||'Не удалось войти')});
 O.on('perms',()=>{if(permsRender)permsRender()});
+O.on('phase',d=>{if(el&&d&&d.phase)paintPhase(d.phase)});
 O.on('boot',d=>{
   if(!el)return;
   const e=el.querySelector('.err');

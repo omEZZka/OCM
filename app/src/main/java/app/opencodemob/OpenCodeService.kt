@@ -50,23 +50,28 @@ class OpenCodeService : Service() {
             // two failed starts in a row -> retry without the seccomp fast path (slower, but works on odd kernels)
             val noSeccomp = Prefs.flag(this, "noseccomp", false) || attempt >= 2
             ServerState.ready = false
+            ServerState.phase = "proxy"
             try { ProxyShim.start(this, uid) } catch (_: Exception) {}
+            ServerState.phase = "starting"
             val p = try { Runtime.startServer(this, uid, port, pw, noSeccomp) } catch (e: Exception) {
                 ServerState.error = e.message ?: e.toString(); break
             }
             proc = p
             val log = File(filesDir, "server.log")
             thread(isDaemon = true) { try { p.inputStream.copyTo(FileOutputStream(log, false)) } catch (_: Exception) {} }
+            ServerState.phase = "waiting"
             val ok = Runtime.waitReady(p, port, pw, 35_000)
             if (ok) {
                 ServerState.port = port; ServerState.password = pw
                 ServerState.error = null; ServerState.ready = true
+                ServerState.phase = "ready"
                 Notifier.updateRuntime(this, "Работает")
                 WidgetUpdater.idle(this)
                 ServerTileService.sync(this)
                 startWatcher(port, pw)
                 p.waitFor()
                 ServerState.ready = false
+                ServerState.phase = "down"
                 ServerTileService.sync(this)
             } else {
                 if (!p.isAlive) {

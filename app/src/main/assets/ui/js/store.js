@@ -82,7 +82,45 @@ O.child=sid=>S.childSessions&&S.childSessions[sid];
 // Per-session debounce: a single shared timer used to swallow the writes of every other
 // session that changed within the same 2s window, so switching session quickly lost data.
 const saveTimers=new Map();
-const writeMsgs=sid=>{const l=O.msgs(sid).list.slice(-250).map(m=>({info:m.info,parts:m.parts}));O.kv.set('msgs:'+sid,l)};
+// ---- paged message cache ----
+// Writing only the last 250 messages silently threw away everything older, so an offline reader
+// could never scroll back past a few screens. The hot window stays in one key; older messages are
+// evicted into archive pages of 300. Both are merged back when a session is opened.
+const HOT=250, ARCH=300;
+const pageKey=(sid,page)=>'msgs:'+sid+':p'+page;
+const writeMsgs=sid=>{
+  const list=O.msgs(sid).list;
+  const hot=list.slice(-HOT).map(m=>({info:m.info,parts:m.parts}));
+  O.kv.set('msgs:'+sid,hot);
+  // archive everything that just fell out of the hot window, one page per 300 messages
+  const older=list.slice(0,Math.max(0,list.length-HOT));
+  if(older.length<=ARCH)return;
+  const page=Math.floor((older.length-1)/ARCH);
+  const slice=older.slice(page*ARCH,(page+1)*ARCH).map(m=>({info:m.info,parts:m.parts}));
+  O.kv.set(pageKey(sid,page),slice);
+  O.kv.set('msgs:'+sid+':pages',page+1);
+};
+// Loads hot window plus every archive page, oldest first, and prunes duplicates.
+O.loadCachedMsgs=async sid=>{
+  const s=O.msgs(sid);
+  if(s.list.length)return s.list;
+  const pages=(await O.kv.get('msgs:'+sid+':pages'))||0;
+  const all=[];
+  for(let p=0;p<pages;p++){const pg=await O.kv.get(pageKey(sid,p));if(Array.isArray(pg))all.push(...pg)}
+  const hot=await O.kv.get('msgs:'+sid);
+  if(Array.isArray(hot))all.push(...hot);
+  const seen=new Set();
+  all.forEach(m=>{if(!m||!m.info||!m.info.id||seen.has(m.info.id))return;seen.add(m.info.id);s.list.push(m);s.idx.set(m.info.id,m)});
+  s.list.sort(cmp);
+  return s.list;
+};
+// Removes every cached page of a session (delete / profile switch).
+O.dropCachedMsgs=async sid=>{
+  const pages=(await O.kv.get('msgs:'+sid+':pages'))||0;
+  await O.kv.del('msgs:'+sid);
+  for(let p=0;p<pages;p++)await O.kv.del(pageKey(sid,p));
+  await O.kv.del('msgs:'+sid+':pages');
+};
 const saveMsgs=sid=>{
   if(!sid)return;
   const prev=saveTimers.get(sid);if(prev)clearTimeout(prev);
@@ -167,7 +205,12 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
   case'session.deleted':{
     const did=p.info&&p.info.id;
     S.sessions=S.sessions.filter(x=>x.id!==did);
-    if(did){O.dropMsgs(did);try{O.kv.del('msgs:'+did)}catch(_){};if(S.childSessions)delete S.childSessions[did]}
+    if(did){
+      O.dropMsgs(did);
+      try{O.dropCachedMsgs(did)}catch(_){}
+      try{O.clearDraft(did)}catch(_){}
+      if(S.childSessions)delete S.childSessions[did];
+    }
     bus.emit('sessions');if(did===S.sid){S.sid=null;O.stopLiveSync();bus.emit('open',null)}break}
   case'session.status':{
     const st=normStatus(p.status);
@@ -406,6 +449,89 @@ O.rotateProviderKey=async(pid,quiet)=>{
   return ok;
 };
 
+// ---- per-session project directory ----
+// Each chat can live in its own folder instead of everything sharing the global S.dir.
+// Falls back to the current directory so old sessions keep working.
+O.sessionDir=sid=>{
+  if(!sid)return S.dir;
+  const m=O.store.get('sessionDirs',{});
+  return m[sid]||S.dir;
+};
+O.setSessionDir=async(sid,dir)=>{
+  const m=O.store.get('sessionDirs',{});
+  if(dir&&dir!==S.dir)m[sid]=dir;else delete m[sid];
+  O.store.set('sessionDirs',m);
+  if(sid===S.sid)await O.setDir(dir||S.dir);
+  bus.emit('sessions');
+};
+
+// ---- search across message contents ----
+// The drawer only matched session titles; the most common question is "where did I discuss X".
+O.searchMessages=async q=>{
+  const needle=String(q||'').trim().toLowerCase();
+  if(needle.length<2)return [];
+  const out=[];
+  const check=(sid,list)=>{
+    for(const m of list||[]){
+      for(const p of m.parts||[]){
+        if(p.type!=='text'&&p.type!=='reasoning')continue;
+        const t=String(p.text||p.reasoning||'');
+        if(!t||!t.toLowerCase().includes(needle))continue;
+        const i=t.toLowerCase().indexOf(needle);
+        out.push({sid,mid:m.info&&m.info.id,role:(m.info&&m.info.role)||'',text:t.slice(Math.max(0,i-60),i+140)});
+        break;
+      }
+      if(out.length>120)return;
+    }
+  };
+  // in-memory sessions first (fast, no I/O)
+  for(const [sid,st] of M)check(sid,st.list);
+  // then the cached pages of sessions that were never opened in this run
+  const cached=[];
+  for(const s of (S.sessions||[]).slice(0,80)){if(!M.has(s.id))cached.push(s.id)}
+  for(const sid of cached){
+    if(out.length>120)break;
+    try{
+      const pages=(await O.kv.get('msgs:'+sid+':pages'))||0;
+      const all=[];
+      for(let p=0;p<pages;p++){const pg=await O.kv.get(pageKey(sid,p));if(Array.isArray(pg))all.push(...pg)}
+      const hot=await O.kv.get('msgs:'+sid);
+      if(Array.isArray(hot))all.push(...hot);
+      check(sid,all);
+    }catch(_){}
+  }
+  return out.slice(0,120);
+};
+
+// ---- prompt history (arrow-up in the composer) ----
+O.promptHistory=()=>O.store.get('promptHistory',[]);
+O.pushPromptHistory=text=>{
+  const t=String(text||'').trim();
+  if(!t)return;
+  const l=O.promptHistory().filter(x=>x!==t);
+  l.unshift(t);
+  O.store.set('promptHistory',l.slice(0,60));
+};
+
+// ---- error journal: the last N failures with a classification ----
+O.errorLog=()=>O.store.get('errorLog',[]);
+O.logError=(kind,message,extra)=>{
+  try{
+    const l=O.errorLog();
+    l.unshift({at:Date.now(),kind:String(kind||'error'),msg:String(message||'').slice(0,500),extra:extra?String(extra).slice(0,300):''});
+    O.store.set('errorLog',l.slice(0,50));
+  }catch(_){}
+};
+O.classifyError=msg=>{
+  const t=String(msg||'');
+  if(/quota|usage.?limit|rate.?limit|insufficient|credit|429/i.test(t))return 'quota';
+  if(/401|unauthorized|invalid.?api.?key|authentication/i.test(t))return 'auth';
+  if(/model.*not.*found|no such model|404/i.test(t))return 'model';
+  if(/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network|dns/i.test(t))return 'network';
+  if(/context.*(length|window)|too many tokens/i.test(t))return 'context';
+  return 'unknown';
+};
+
 // ---- model folders: user-defined groups of models that can be pinned as one block ----
 // A folder is {id,name,order,keys:[...],color} and is only a view over `pid/mid` keys, so a folder
 // survives provider renames and model churn.
@@ -600,8 +726,7 @@ O.openSession=async(sid,fresh)=>{
   trimStore();
   if(!sid){bus.emit('open',null);return}
   if(String(sid).startsWith('local_')){
-    const s=O.msgs(sid);
-    if(!s.list.length){const c=await O.kv.get('msgs:'+sid);if(c)c.forEach(m=>{s.list.push(m);s.idx.set(m.info.id,m)})}
+    await O.loadCachedMsgs(sid);
     O.pickDefaults();bus.emit('meta');bus.emit('open',sid);return;
   }
   const ok=m=>m&&O.modelInfo(m.providerID,m.modelID);
@@ -621,7 +746,7 @@ O.openSession=async(sid,fresh)=>{
   }
   bus.emit('meta');
   const s=O.msgs(sid);
-  if(!s.list.length){const c=await O.kv.get('msgs:'+sid);if(c)c.forEach(m=>{s.list.push(m);s.idx.set(m.info.id,m)})}
+  await O.loadCachedMsgs(sid);
   bus.emit('open',sid);
   if(fresh)return;
   const prevCount=s.list.length,prevLast=s.list.length?s.list[s.list.length-1].info.id:'';

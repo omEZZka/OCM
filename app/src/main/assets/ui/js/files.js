@@ -124,7 +124,7 @@ O.openFile=async n=>{const rel=typeof n==='string'?n:n.path,abs=typeof n==='stri
     }
     actions.append(h('button',{class:'ibtn',onclick:()=>O.addMention(abs,false)||s.close()},O.icon('at')),h('button',{class:'ibtn',onclick:()=>O.native.copy(text)},O.icon('copy')),
       h('button',{class:'ibtn',onclick:()=>{editing=!editing;paint()}},O.icon(editing?'check':'edit')));
-    if(editing){const ta=h('textarea',{class:'editor',spellcheck:'false'});ta.value=text;body.append(ta,h('div',{class:'cmdline'},h('button',{class:'btn grow',onclick:()=>{editing=false;paint()}},'Отмена'),h('button',{class:'btn pri grow',onclick:()=>{const r=O.native.writeText(abs,ta.value);if(r.ok){text=ta.value;editing=false;O.toast('Сохранено',1200);paint();O.refreshFiles(false)}else O.toast(r.err||'Не удалось сохранить')}},'Сохранить')))}
+    if(editing){const ta=h('textarea',{class:'editor',spellcheck:'false'});ta.value=text;body.append(ta,h('div',{class:'cmdline'},h('button',{class:'btn grow',onclick:()=>{editing=false;paint()}},'Отмена'),h('button',{class:'btn pri grow',onclick:()=>{const r=O.native.writeText(abs,ta.value);if(r.ok){text=ta.value;editing=false;O.toastQuiet('Сохранено');paint();O.refreshFiles(false)}else O.toast(r.err||'Не удалось сохранить')}},'Сохранить')))}
     else body.append(O.codeView(text,abs))};
   try{const r=await api('GET','/file/content?path='+encodeURIComponent(rel));
     if(r.type==='text'||typeof r.content==='string'&&r.encoding!=='base64')text=r.content;else if(r.encoding==='base64'&&(r.mimeType||'').startsWith('image/'))img='data:'+r.mimeType+';base64,'+r.content}
@@ -290,7 +290,7 @@ function gitPanel(){
     h('div',{class:'grp',style:{marginTop:0}},'Git'),
     h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}},
       h('button',{class:'btn sm',onclick:()=>run('status --short',true)},O.icon('refresh'),'Статус'),
-      h('button',{class:'btn sm',onclick:()=>run('add -A',false).then(()=>O.toast('Проиндексировано',1200))},O.icon('plus'),'Add all'),
+      h('button',{class:'btn sm',onclick:()=>run('add -A',false).then(()=>O.toastQuiet('Проиндексировано'))},O.icon('plus'),'Add all'),
       h('button',{class:'btn sm',onclick:()=>run('pull --ff-only',true)},O.icon('down'),'Pull'),
       h('button',{class:'btn sm',onclick:()=>run('push',true)},O.icon('up'),'Push'),
       h('button',{class:'btn sm',onclick:()=>run('log --oneline -10',true)},O.icon('list'),'Log')),
@@ -298,7 +298,7 @@ function gitPanel(){
       h('button',{class:'btn pri',onclick:async()=>{
         const m=msgInp.value.trim();if(!m)return O.toast('Введите сообщение',2000);
         const r=await run('commit -m '+JSON.stringify(m),true);
-        if(r.ok){O.toast('Коммит создан',1500);msgInp.value='';O.refreshChanges(true)}
+        if(r.ok){O.toastQuiet('Коммит создан');msgInp.value='';O.refreshChanges(true)}
       }},'Commit')),
     out);
   return box;

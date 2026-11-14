@@ -65,7 +65,25 @@ O.stripJsonc=t=>{let o='',i=0,s=false;while(i<t.length){const c=t[i],n=t[i+1];
 O.parseJsonc=t=>JSON.parse(O.stripJsonc(t));
 
 // toast
-let tt;O.toast=(m,ms)=>{let e=O.$('#toast');if(!e){e=h('div',{id:'toast'});document.body.append(e)}e.textContent=m;e.style.display='block';clearTimeout(tt);tt=setTimeout(()=>e.style.display='none',ms||2600)};
+// Three levels so routine confirmations stop shouting. `quiet` never shows anything, `hint` shows a
+// short inline note, `error` stays long enough to read. The old default was "2.6s modal-ish toast
+// for everything", which made the app feel noisy.
+let tt;
+O.toast=(m,ms,level)=>{
+  const text=String(m==null?'':m);
+  if(!text)return;
+  const lvl=level||(/ошибк|error|fail|не удал|недоступ|отказ/i.test(text)?'error':'hint');
+  if(lvl==='quiet')return;
+  let e=O.$('#toast');
+  if(!e){e=h('div',{id:'toast'});document.body.append(e)}
+  e.textContent=text;
+  e.className='toast-'+(lvl==='error'?'error':'hint');
+  e.style.display='block';
+  clearTimeout(tt);
+  tt=setTimeout(()=>e.style.display='none',ms||(lvl==='error'?4200:1500));
+};
+// Explicit silent variant for actions the user can see happening anyway.
+O.toastQuiet=m=>O.toast(m,900,'quiet');
 
 // sheets
 const stack=[];O.sheets=stack;

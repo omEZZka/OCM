@@ -320,7 +320,7 @@ function openAgents(){
     r.items.filter(x=>!x.dir).forEach(x=>list.append(O.listRow('doc',x.name,'',h('button',{class:'ibtn s',onclick:async e=>{e.stopPropagation();if(await O.confirm('Удалить '+x.name+'?','','Удалить',true)){O.native.fs('delete',CFG+'/'+d+'/'+x.name);draw();O.loadMeta()}}},O.icon('trash')),()=>editFile(CFG+'/'+d+'/'+x.name,x.name))))}})};
   draw();watchPicked(s,()=>draw())}
 function editFile(path,title){const r=O.native.readText(path);const ta=h('textarea',{class:'mono',rows:18});ta.value=r.ok?r.text:'';
-  const s=O.sheet(title,h('div',null,ta,h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:()=>{const w=O.native.fs('mkdir',O.dirname(path));const x=O.native.writeText(path,ta.value);if(x.ok){O.toast('Сохранено',1200);s.close();O.loadMeta()}else O.toast(x.err||'Не удалось')}},'Сохранить')),{full:true})}
+  const s=O.sheet(title,h('div',null,ta,h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:()=>{const w=O.native.fs('mkdir',O.dirname(path));const x=O.native.writeText(path,ta.value);if(x.ok){O.toastQuiet('Сохранено');s.close();O.loadMeta()}else O.toast(x.err||'Не удалось')}},'Сохранить')),{full:true})}
 
 // ---- MCP ----
 O.openMcp=async()=>{const body=h('div');const s=sub('Серверы MCP',body,{actions:h('div',{style:{display:'flex',gap:'4px'}},h('button',{class:'ibtn',onclick:()=>draw()},O.icon('refresh')),h('button',{class:'ibtn',onclick:()=>edit(null)},O.icon('plus')))});
@@ -373,7 +373,7 @@ O.openPlugins=()=>{const body=h('div');const s=sub('Плагины',body);
 // ---- raw config ----
 function openConfig(){const c=cfg.read();const ta=h('textarea',{class:'mono',rows:20,spellcheck:'false'});ta.value=c.raw||'{\n}\n';
   sub('opencode.json',h('div',null,c.err?h('div',{class:'errbox'},c.err):null,ta,h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:()=>{try{O.parseJsonc(ta.value||'{}')}catch(e){return O.toast('Неверный JSON: '+e.message,4000)}
-    const w=cfg.write(ta.value);w.ok?O.toast('Сохранено',1200):O.toast(w.err||'Не удалось')}},'Сохранить'),restartBar()))}
+    const w=cfg.write(ta.value);w.ok?O.toastQuiet('Сохранено'):O.toast(w.err||'Не удалось')}},'Сохранить'),restartBar()))}
 
 // ---- provider health check ----
 // Pings each connected provider through the local server and remembers the result, so a silently

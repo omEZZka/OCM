@@ -66,6 +66,7 @@ class MainActivity : ComponentActivity() {
     private var pendingDir = ""
     private var fileCb: ValueCallback<Array<Uri>>? = null
     private var lastReady = false
+    private var lastPhase = ""
     private var stt: SpeechInput? = null
     private var tts: Speaker? = null
     private var lastErr: String? = null
@@ -396,6 +397,8 @@ class MainActivity : ComponentActivity() {
         }
         val e = ServerState.error
         if (!r && e != null && e != lastErr) { lastErr = e; emit("boot", JSONObject().put("error", e)) }
+        val ph = ServerState.phase
+        if (ph != lastPhase) { lastPhase = ph; emit("phase", JSONObject().put("phase", ph)) }
         if (e == null) lastErr = null
         ui.postDelayed({ watch() }, 1000)
     }
@@ -990,6 +993,7 @@ class MainActivity : ComponentActivity() {
             put("core", Updater.installedCore(this@MainActivity))
             put("perms", perms()); put("flags", flags()); put("ready", ServerState.ready)
             put("port", ServerState.port); put("serverError", ServerState.error ?: "")
+            put("phase", ServerState.phase)
             put("overlay", try { Settings.canDrawOverlays(this@MainActivity) } catch (_: Exception) { false })
         }.toString()
 
