@@ -804,6 +804,8 @@ O.setDir=async(dir)=>{
   for(const k of [...M.keys()])O.dropMsgs(k);
   bus.emit('dir');
   await Promise.all([O.loadMeta(),O.loadSessions()]);
+  // Fresh project: build the map once so the agent never starts by walking the tree.
+  try{if(O.writeProjectMap)setTimeout(()=>{try{O.writeProjectMap(dir,true)}catch(_){}},1500)}catch(_){}
   const last=O.store.get('sid.'+dir);const pick=S.sessions.find(x=>x.id===last)||S.sessions[0];
   await O.openSession(pick?pick.id:null);bus.emit('files')};
 O.sessionTitle=s=>s?(s.title&&!/^(New session|Child session|Новая сессия) - /.test(s.title)?s.title:'Новая сессия'):'OpenCode';

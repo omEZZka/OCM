@@ -823,6 +823,21 @@ At the very end of EVERY response, you MUST output a separate line with line add
 // almost never changes — remember what was written per path and skip identical writes (6 files x
 // every message was pure blocking I/O on the WebView thread).
 let readmeWrote={};
+// Teaches the agent that a generated map exists, so it opens one file instead of walking the tree.
+// Written once per project; kept short so it does not inflate every request.
+O.ensureMapHint = root=>{
+  try{
+    const path=(root||S.dir)+'/AGENTS.md';
+    const cur=O.native.readText(path);
+    const text=(cur&&cur.ok&&cur.text)||'';
+    if(text.includes('PROJECT_MAP.md'))return;
+    const hint='\n\n## Project map\n\n`PROJECT_MAP.md` in the project root lists every folder with its file count and file names. '+
+      'Read it before exploring the tree instead of running repeated `ls`/`glob` calls. It is regenerated automatically after file changes.\n';
+    O.native.fs('mkdir',O.dirname(path));
+    O.native.writeText(path,(text?text.replace(/\s+$/,'')+'\n':'')+hint);
+  }catch(_){}
+};
+
 O.updateReadmeForModel = (modelID) => {
   try {
     const curMid = modelID || (S.model ? S.model.modelID : null);

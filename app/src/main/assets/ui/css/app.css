@@ -2783,3 +2783,11 @@ a:hover {
 /* settings tabs */
 .settings-tabs { position: sticky; top: -6px; z-index: 4; background: #141417; }
 .settings-tabs button { flex: 1; }
+
+/* project tree view */
+.tree-view { display: flex; flex-direction: column; gap: 8px; }
+.tree-dir { display: flex; align-items: center; gap: 8px; padding: 7px 8px; font-size: 13px; }
+.tree-dir .ic svg { width: 15px; height: 15px; }
+.tree-file { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12.5px;
+  background: none; border: none; color: var(--fg); text-align: left; width: 100%; }
+.tree-file:active { background: rgba(255,255,255,0.05); }
