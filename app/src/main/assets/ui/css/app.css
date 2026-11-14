@@ -2779,3 +2779,7 @@ a:hover {
 .status-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--mut); }
 .status-line .status-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .status-line .status-time { font-variant-numeric: tabular-nums; opacity: 0.75; }
+
+/* settings tabs */
+.settings-tabs { position: sticky; top: -6px; z-index: 4; background: #141417; }
+.settings-tabs button { flex: 1; }

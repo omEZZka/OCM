@@ -22,11 +22,21 @@ const watchPicked=(sheet,fn)=>pickWatchers.push({sheet,fn});
 // ---- main ----
 O.openSettings=()=>{
   const st=O.native.state(),fl=st.flags||{};
-  const body=h('div');
+  // Three tabs instead of one 40-item wall: what the user changes often, agent internals, and system.
+  const tabs=h('div',{class:'seg settings-tabs',style:{margin:'0 0 12px'}});
+  const panes={main:h('div'),agent:h('div'),system:h('div')};
+  const body=h('div',null,tabs,panes.main,panes.agent,panes.system);
   const s=O.sheet(O.tr('Settings','Настройки'),body,{hud:true});
+  const show=pane=>{
+    ['main','agent','system'].forEach(k=>{panes[k].classList.toggle('hide',k!==pane)});
+    tabs.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.pane===pane));
+  };
+  [['main',O.tr('Main','Основное')],['agent',O.tr('Agent','Агент')],['system',O.tr('System','Система')]]
+    .forEach(([k,label])=>tabs.append(h('button',{'data-pane':k,onclick:()=>show(k)},label)));
+  show('main');
   
   // 1. Profile & Account
-  body.append(h('div',{class:'settings-section-title'},O.tr('Profile & Account','Профиль и аккаунт')));
+  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Profile & Account','Профиль и аккаунт')));
   const profCard=h('div',{class:'settings-card'});
   const profRow=h('div',{class:'settings-row'},
     h('div',{class:'settings-row-icon purple'},O.icon('user')),
@@ -43,10 +53,10 @@ O.openSettings=()=>{
     sp.textContent=S.account&&S.account.email?(O.tr('Logged in: ','Вход выполнен: ')+S.account.email):(S.account&&S.account.checked?O.tr('Not logged in (shared quota)','Не выполнен — квота общая'):'проверяем...')};
   accSub();O.checkAccount().then(accSub);
   profCard.append(profRow,accRow);
-  body.append(profCard);
+  panes.main.append(profCard);
 
   // 2. Models & Providers
-  body.append(h('div',{class:'settings-section-title'},O.tr('Models & Providers','Модели и провайдеры')));
+  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Models & Providers','Модели и провайдеры')));
   const modelsCard=h('div',{class:'settings-card'});
   modelsCard.append(
     O.listRow('cpu',O.tr('Active Model','Текущая модель'),S.model?S.model.providerID+'/'+S.model.modelID:O.tr('Not selected','Не выбрана'),O.icon('chevR'),()=>O.openModels()),
@@ -56,10 +66,10 @@ O.openSettings=()=>{
     O.listRow('bot',O.tr('Multimodality','Мультимодальность'),O.tr('Team agents: lead model + role models','Командные агенты: главная модель + модели ролей'),O.icon('chevR'),()=>O.openMultimodal()),
     O.listRow('cloud',O.tr('Remote Builds','Удалённая сборка'),O.tr('GitHub, GitLab, Bitbucket, CircleCI, Azure, Codemagic, Bitrise, GCB','Удалённая сборка APK по токену'),O.icon('chevR'),()=>O.openRemoteBuilds())
   );
-  body.append(modelsCard);
+  panes.main.append(modelsCard);
 
   // 3. Appearance & Interface
-  body.append(h('div',{class:'settings-section-title'},O.tr('Appearance & Interface','Оформление и интерфейс')));
+  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Appearance & Interface','Оформление и интерфейс')));
   const appCard=h('div',{class:'settings-card'});
   const curLang=O.store.get('lang','ru');
   const langRow=O.listRow('globe',O.tr('Language / Язык','Язык / Language'),curLang==='en'?'English':'Русский',O.icon('chevR'),()=>{
@@ -98,10 +108,10 @@ O.openSettings=()=>{
     });
   const detailRow=O.toggleRow('code',O.tr('Expand Tool Details','Детали инструментов'),O.tr('Show commands, output and file diffs','Команды, вывод терминала и правки'),S.opts.details,v=>{S.opts.details=v;O.saveOpts();O.chat.renderAll()});
   appCard.append(langRow,themeRow,thinkRow,detailRow,overlayRow,overlayLegend,onlyBusyRow);
-  body.append(appCard);
+  panes.main.append(appCard);
 
   // 4. Notifications & Sounds
-  body.append(h('div',{class:'settings-section-title'},O.tr('Notifications & Sounds','Звуки и уведомления')));
+  panes.system.append(h('div',{class:'settings-section-title'},O.tr('Notifications & Sounds','Звуки и уведомления')));
   const sndCard=h('div',{class:'settings-card'});
   [['snd_done',O.tr('Task Completed','Задача завершена'),O.tr('Sound when agent finishes task','Агент закончил работу'),'done'],
    ['snd_action',O.tr('Action Required','Требуется действие'),O.tr('Sound on questions and permissions','Ожидается разрешение или вопрос'),'action'],
@@ -110,18 +120,18 @@ O.openSettings=()=>{
       h('div',{class:'grow'},O.toggleRow('bell',t,d,fl[k]!==false,v=>OC.setFlag(k,v))),
       h('button',{class:'ibtn',style:{marginRight:'12px'},onclick:()=>OC.testSound(kind)},O.icon('play'))));
   });
-  body.append(sndCard);
+  panes.system.append(sndCard);
 
   // 4b. Voice call
-  body.append(h('div',{class:'settings-section-title'},O.tr('Voice & Calls','Голос и звонки')));
-  body.append(h('div',{class:'settings-card'},
+  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Voice & Calls','Голос и звонки')));
+  panes.main.append(h('div',{class:'settings-card'},
     O.listRow('mic',O.tr('Voice input & calls','Голосовой ввод и звонки'),O.tr('Dictation or a live call — choose on the microphone button','Диктовка или живой звонок — выбор на кнопке микрофона'),
       O.icon(O.callActive&&O.callActive()?'wave':'chevR'),()=>{s.close();setTimeout(()=>{O.onMicChoice&&O.onMicChoice()},200)}),
     O.listRow('sliders',O.tr('Recognition engine & voice','Движок распознавания и голос'),O.tr('System / on-device / cloud, language, speech rate','Системный / на устройстве / облако, язык, скорость речи'),
       O.icon('chevR'),()=>{s.close();setTimeout(()=>{O.openCallSettings&&O.openCallSettings()},200)})));
 
   // 5. Agents, MCP & Plugins
-  body.append(h('div',{class:'settings-section-title'},O.tr('Agents, MCP & Rules','Агенты, MCP и правила')));
+  panes.agent.append(h('div',{class:'settings-section-title'},O.tr('Agents, MCP & Rules','Агенты, MCP и правила')));
   const agentCard=h('div',{class:'settings-card'});
   agentCard.append(
     O.listRow('doc',O.tr('Agents & Rules','Агенты и правила'),O.tr('Upload or edit AGENTS.md, agents & commands','Загрузите AGENTS.md, агентов и команды'),O.icon('chevR'),()=>openAgents()),
@@ -129,20 +139,20 @@ O.openSettings=()=>{
     O.listRow('plug',O.tr('Plugins','Плагины'),O.tr('npm packages and local scripts','npm-пакеты и локальные файлы'),O.icon('chevR'),()=>O.openPlugins()),
     O.listRow('code',O.tr('Configuration File','Файл конфигурации'),'opencode.json',O.icon('chevR'),()=>openConfig())
   );
-  body.append(agentCard);
+  panes.agent.append(agentCard);
 
   // 6. Jailbreaks & Custom Plugins
-  body.append(h('div',{class:'settings-section-title'},O.tr('Jailbreaks & Plugins','Джейлбрейки и плагины')));
+  panes.agent.append(h('div',{class:'settings-section-title'},O.tr('Jailbreaks & Plugins','Джейлбрейки и плагины')));
   const jbCard=h('div',{class:'settings-card'});
   jbCard.append(
     O.listRow('shield',O.tr('Custom Jailbreaks','Пользовательские джейлбрейки'),O.tr('Presets for Zen models, upload & toggle','Пресеты для моделей Zen, загрузка и отключение'),O.icon('chevR'),()=>openJailbreaks()),
     O.listRow('plug',O.tr('Custom Plugins','Пользовательские плагины'),O.tr('Marketplace, upload custom plugins','Каталог и загрузка пользовательских плагинов'),O.icon('chevR'),()=>openCustomPlugins()),
     O.toggleRow('zap','OpenCode Warp (обход лимитов)','https://github.com/warpdotdev/opencode-warp — тестовая функция, по умолчанию выключена',O.store.get('warp_enabled',false),v=>{O.store.set('warp_enabled',v);O.toast(v?'Warp включён (тестовый режим)':'Warp выключен',1500)})
   );
-  body.append(jbCard);
+  panes.agent.append(jbCard);
 
   // 7. Application & System
-  body.append(h('div',{class:'settings-section-title'},O.tr('System & Application','Система и приложение')));
+  panes.system.append(h('div',{class:'settings-section-title'},O.tr('System & Application','Система и приложение')));
   const sysCard=h('div',{class:'settings-card'});
   sysCard.append(
     O.listRow('shield',O.tr('Encrypted backup','Шифрованный бэкап'),O.tr('Profile, config and sessions to /sdcard/Download','Профиль, конфиг и сессии в /sdcard/Download'),O.icon('chevR'),()=>openBackup()),
@@ -153,7 +163,7 @@ O.openSettings=()=>{
     O.listRow('info',O.tr('About OpenCode Mobile','О приложении'),'',O.icon('chevR'),()=>openAbout()),
     O.listRow('tg',O.tr('Community & Telegram','Сообщество Telegram'),'t.me/OpenCodeMob',O.icon('chevR'),()=>O.openUrl('https://t.me/OpenCodeMob'))
   );
-  body.append(sysCard);
+  panes.system.append(sysCard);
 };
 
 // ---- fallback model chain ----
@@ -432,7 +442,36 @@ O.openCompat=function(){const fl=O.native.state().flags||{};
   sub('Совместимость и логи',h('div',null,O.toggleRow('shield','Безопасный режим (без seccomp)','Медленнее, но помогает, если сервер не запускается на некоторых телефонах',fl.noseccomp,v=>OC.setFlag('noseccomp',v)),
     h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{OC.restartServer();O.toast('Перезапуск сервера...')}},O.icon('refresh'),'Перезапустить сервер'),
     h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{const t=OC.readLog();sub('Лог сервера',h('pre',{class:'term-pre',style:{maxHeight:'none'}},t||'(пусто)'))}},O.icon('terminal'),'Смотреть лог сервера'),
-    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>O.runDiagnostics()},O.icon('shield'),O.tr('Connection diagnostics','Диагностика подключения'))))}
+    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>O.runDiagnostics()},O.icon('shield'),O.tr('Connection diagnostics','Диагностика подключения')),
+    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>O.openErrorJournal()},O.icon('bug'),O.tr('Error journal','Журнал ошибок'))))}
+
+// ---- error journal: the last 50 failures, classified ----
+O.openErrorJournal=()=>{
+  const log=O.errorLog?O.errorLog():[];
+  const body=h('div');
+  O.sheet(O.tr('Error journal','Журнал ошибок'),body,{full:true});
+  if(!log.length){body.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('No errors recorded','Ошибок не зафиксировано')));return}
+  const labels={quota:O.tr('Quota','Квота'),auth:O.tr('Authorization','Авторизация'),model:O.tr('Model','Модель'),network:O.tr('Network','Сеть'),context:O.tr('Context','Контекст'),unknown:O.tr('Other','Прочее')};
+  body.append(h('div',{class:'note'},O.tr('Newest first. Only failures that reached the chat are stored, locally.','Сначала новые. Хранятся только ошибки, дошедшие до чата, локально.')));
+  const card=h('div',{class:'settings-card'});
+  log.slice(0,50).forEach(e=>{
+    card.append(h('div',{class:'settings-row',style:{alignItems:'flex-start'}},
+      h('div',{class:'settings-row-icon err'},O.icon('bug')),
+      h('div',{class:'settings-row-text',style:{flex:1}},
+        h('b',null,(labels[e.kind]||e.kind)+' · '+new Date(e.at).toLocaleTimeString()),
+        h('span',{style:{whiteSpace:'normal'}},e.msg.slice(0,220)))));
+  });
+  body.append(card);
+  body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{
+    const dump=JSON.stringify(log,null,2);
+    O.actions(O.tr('Share journal','Поделиться журналом'),[
+      {label:O.tr('Copy','Скопировать'),icon:'copy',fn:()=>O.native.copy(dump)},
+      {label:O.tr('Share','Поделиться'),icon:'share',fn:()=>O.native.share(dump)}]);
+  }},O.icon('copy'),O.tr('Copy journal','Скопировать журнал')));
+  body.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:async()=>{
+    if(await O.confirm(O.tr('Clear journal?','Очистить журнал?'),'','',true)){O.store.set('errorLog',[]);body.textContent=''}
+  }},O.icon('trash'),O.tr('Clear','Очистить')));
+};
 // ---- connection diagnostics ----
 // Distinguishes "the local server is not running" from "the network blocks the model provider":
 // those two fail with almost identical symptoms in the chat, so the check reports each layer.

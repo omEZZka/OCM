@@ -401,8 +401,20 @@ function metaUpdate(el,m){
         O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));
         O.showQuotaAccountModal(em);
       }
+      // Classified error: the message says what to do, not just what failed.
+      const kind=O.classifyError?O.classifyError(em):'unknown';
+      const fix={
+        quota:{label:O.tr('Switch model or key','Сменить модель или ключ'),fn:()=>O.openModels()},
+        auth:{label:O.tr('Fix API key','Исправить API-ключ'),fn:()=>O.openConnect()},
+        model:{label:O.tr('Choose another model','Выбрать другую модель'),fn:()=>O.openModels()},
+        network:{label:O.tr('Check connection','Проверить подключение'),fn:()=>O.runDiagnostics&&O.runDiagnostics()},
+        context:{label:O.tr('Compact the session','Сжать сессию'),fn:()=>doCompact()},
+      }[kind];
+      if(O.logError)O.logError(kind,em);
       el.firstChild.append(h('div',{class:'errbox'},em,
-        h('button',{class:'btn sm',style:{marginTop:'8px'},onclick:()=>O.diagnoseError&&O.diagnoseError(em)},O.icon('bug'),O.tr('Why did it break?','Почему сломалось?'))))}
+        h('div',{style:{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}},
+          fix?h('button',{class:'btn sm pri',onclick:fix.fn},O.icon('zap'),fix.label):null,
+          h('button',{class:'btn sm',onclick:()=>O.diagnoseError&&O.diagnoseError(em)},O.icon('bug'),O.tr('Why did it break?','Почему сломалось?'))))) }
     else if(i.error)meta.append(h('span',{class:'warn'},'прервано'))}
   meta.append(h('span',{class:'grow'}),h('button',{class:'ibtn s',onclick:()=>msgActions(m)},O.icon('dots')))}
 function msgText(m){return m.parts.filter(p=>p.type==='text'&&!p.synthetic).map(p=>p.text).join('\n')}

@@ -1328,6 +1328,12 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface fun readLog(): String = try { File(filesDir, "server.log").readText().takeLast(60_000) } catch (_: Exception) { "" }
 
         /** End-to-end self check of the local pipeline: UI → Kotlin → 127.0.0.1 → server. */
+        // --- encrypted storage for API key rings ---
+        @JavascriptInterface fun securePut(key: String, value: String): Boolean = SecureStore.put(this@MainActivity, key, value)
+        @JavascriptInterface fun secureGet(key: String): String = SecureStore.get(this@MainActivity, key)
+        @JavascriptInterface fun secureRemove(key: String): Boolean = SecureStore.remove(this@MainActivity, key)
+        @JavascriptInterface fun secureImportLegacy(json: String): Boolean = SecureStore.importLegacy(this@MainActivity, json)
+
         @JavascriptInterface fun diagnose(): String = try {
             val o = JSONObject()
             o.put("ready", ServerState.ready)

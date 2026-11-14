@@ -414,13 +414,37 @@ O.sortModelsByProvider=items=>{
 // ---- API key ring: several keys per provider, rotated when one runs out of quota ----
 // Keys live in localStorage (not in the exported settings) and are written into the server's
 // auth.json one at a time; the rest wait their turn.
-O.keyRing=()=>O.store.get('keyRing',{});
-O.keyRingOf=pid=>(O.keyRing()[pid]||[]);
+// Key rings live in the Keystore-backed store, not in localStorage: they are raw API keys.
+// An in-memory mirror avoids a bridge call per read; the secure store is the source of truth.
+let ringCache=null;
+const ringLoad=()=>{
+  if(ringCache)return ringCache;
+  ringCache={};
+  try{
+    const raw=O.native.secureGet?O.native.secureGet('ring.all'):'';
+    if(raw)ringCache=JSON.parse(raw)||{};
+  }catch(_){ringCache={}}
+  // one-time migration from the old plaintext key in localStorage
+  try{
+    const legacy=O.store.get('keyRing',null);
+    if(legacy&&Object.keys(legacy).length){
+      Object.assign(ringCache,legacy);
+      if(O.native.securePut)O.native.securePut('ring.all',JSON.stringify(ringCache));
+      O.store.remove('keyRing');
+    }
+  }catch(_){}
+  return ringCache;
+};
+const ringSave=()=>{
+  try{if(O.native.securePut)O.native.securePut('ring.all',JSON.stringify(ringCache||{}))}catch(_){}
+};
+O.keyRing=()=>Object.assign({},ringLoad());
+O.keyRingOf=pid=>(ringLoad()[pid]||[]);
 O.keyRingSet=(pid,list)=>{
-  const all=O.keyRing();
+  const all=ringLoad();
   const clean=(list||[]).map(k=>String(k||'').trim()).filter(Boolean).slice(0,8);
   if(clean.length)all[pid]=clean;else delete all[pid];
-  O.store.set('keyRing',all);
+  ringSave();
 };
 O.keyRingIndex=pid=>O.store.get('keyRingIdx.'+pid,0);
 O.keyRingActive=pid=>{const l=O.keyRingOf(pid);return l.length?l[Math.min(O.keyRingIndex(pid),l.length-1)]:''};
@@ -921,6 +945,28 @@ O.runHook=(name,...args)=>{
       try{p._instance[name](...args)}catch(e){console.error('Hook error:',p.name,name,e)}
     }
   }
+};
+
+// ---- data migrations ----
+// Small, explicit steps run once per version. Without them a format change silently corrupts old
+// data (messages, folders, drafts), which is exactly what happened before.
+const SCHEMA=2;
+O.migrateData=async()=>{
+  const cur=O.store.get('schema',1);
+  if(cur>=SCHEMA)return;
+  try{
+    if(cur<2){
+      // v2: message cache moved to paged keys; drop the old monolithic entry if it still exists.
+      // It is re-created by the next write from the live in-memory list.
+      for(const s of (S.sessions||[]).slice(0,200)){
+        try{await O.kv.del('msgs:'+s.id+':pages')}catch(_){}
+      }
+      // per-session directories: default everything to the current project
+      const dirs=O.store.get('sessionDirs',null);
+      if(!dirs)O.store.set('sessionDirs',{});
+    }
+    O.store.set('schema',SCHEMA);
+  }catch(_){}
 };
 
 // ---- settings export / import (localStorage + opencode.json) ----

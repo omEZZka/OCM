@@ -244,6 +244,7 @@ O.enter=async opt=>{
   OC.sseStart();
   if(O.checkAccount)O.checkAccount();
   await O.setDir(O.store.get('dir','/root'));
+  if(O.migrateData)try{await O.migrateData()}catch(_){}
   updateBanner();
   updateTop();
   refreshStatus();

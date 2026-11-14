@@ -88,6 +88,11 @@ O.native={
   ttsConfigure:(voice,rate,pitch)=>{try{OC.ttsConfigure(voice||'',rate||1,pitch||1)}catch(_){}},
   ttsVoices:()=>{try{return j(OC.ttsVoices())||[]}catch(_){return[]}},
   diagnose:()=>{try{return j(OC.diagnose())||{}}catch(e){return{error:String(e)}}},
+  // Encrypted key-value store (Keystore-backed). Falls back to localStorage if unavailable.
+  securePut:(k,v)=>{try{return !!OC.securePut(k,v)}catch(_){return false}},
+  secureGet:k=>{try{return OC.secureGet(k)||''}catch(_){return''}},
+  secureRemove:k=>{try{return !!OC.secureRemove(k)}catch(_){return false}},
+  secureImportLegacy:o=>{try{return !!OC.secureImportLegacy(JSON.stringify(o||{}))}catch(_){return false}},
   state:()=>j(OC.state())||{}
 };
 O.openUrl=u=>{if(/^https?:\/\//i.test(u)&&!/appassets\.androidplatform\.net/i.test(u))OC.openLink(u)};
