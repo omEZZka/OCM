@@ -541,6 +541,40 @@ O.setModel=(pid,mid)=>{
   bus.emit('meta');
 };
 O.setAgent=n=>{S.agent=n;O.pickDefaults();bus.emit('meta')};
+// ---- reasoning effort ----
+// Ordering is fixed from weakest to strongest so every surface (model list, chat chip) shows the
+// same ladder. Model-specific variants are merged in when the provider exposes them.
+const EFFORT_ORDER=['minimal','low','medium','high','max','xhigh','default'];
+O.effortLevels=()=>{
+  const m=S.model&&O.modelInfo(S.model.providerID,S.model.modelID);
+  const vars=m&&m.variants?Object.keys(m.variants):[];
+  const base=['low','medium','high'];
+  const all=[...new Set(base.concat(vars))];
+  return all.sort((a,b)=>{
+    const ia=EFFORT_ORDER.indexOf(String(a).toLowerCase()),ib=EFFORT_ORDER.indexOf(String(b).toLowerCase());
+    return (ia<0?99:ia)-(ib<0?99:ib);
+  });
+};
+O.effortLabel=v=>({minimal:O.tr('Minimal','Минимальный'),low:O.tr('Low','Низкий'),medium:O.tr('Medium','Средний'),high:O.tr('High','Высокий'),max:O.tr('Max','Максимальный'),xhigh:O.tr('Extra high','Очень высокий'),default:O.tr('Default','По умолчанию')}[v]||v);
+O.currentEffort=()=>S.variant||'';
+O.setEffort=v=>{
+  O.setVariant(v||null);
+  O.store.set('effort',v||'');
+  bus.emit('meta');
+};
+// Shared picker used by the model list and by the chat's model chip.
+O.openEffortPicker=()=>{
+  const levels=O.effortLevels();
+  const cur=O.currentEffort();
+  const items=levels.map(v=>({
+    label:O.effortLabel(v),
+    sub:v===cur?O.tr('current','выбрано'):'',
+    icon:v===cur?'check':'dot',
+    fn:()=>{O.setEffort(v);O.toast(O.tr('Reasoning: ','Рассуждение: ')+O.effortLabel(v),1500)}
+  }));
+  items.push({label:O.tr('Default','По умолчанию'),sub:cur?'':O.tr('current','выбрано'),icon:cur?'dots':'check',fn:()=>{O.setEffort('');O.toast(O.tr('Reasoning: default','Рассуждение: по умолчанию'),1500)}});
+  O.actions(O.tr('Reasoning effort','Уровень рассуждения'),items);
+};
 O.setVariant=v=>{
   S.variant=v;
   if(S.model)O.store.set('variant.'+S.model.providerID+'/'+S.model.modelID,v);

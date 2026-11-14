@@ -143,7 +143,7 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
             // Technical vocabulary must survive: no censoring of "bad" words in file names/commands.
             putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, mode == "offline")
-            if (biasing.isNotEmpty()) putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(biasing))
+            if (biasing.isNotEmpty()) putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(biasing.toList()))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 // Voice-recognition capture path: AEC + NS, which keeps our own speech out of the input.
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION)

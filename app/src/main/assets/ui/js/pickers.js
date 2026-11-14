@@ -170,20 +170,50 @@ O.openModels=()=>{
     v=>{onlyFree=v;O.store.set('onlyFreeModels',v);draw()}
   );
 
-  let curEffort=O.store.get('effort','Default');
-  const effortTxt=h('span',null,curEffort+' ›');
+  // Reasoning effort lives at the top of the picker: one tap opens the full ladder, weakest → strongest.
+  const effortNow=()=>O.currentEffort?O.currentEffort():'';
+  const effortTxt=h('span',null,effortNow()?O.effortLabel(effortNow()):O.tr('Default','По умолчанию'));
   const effortCard=h('button',{class:'detached-card',onclick:()=>{
-    const levels=['Default','Low','Medium','High'];
-    const idx=(levels.indexOf(curEffort)+1)%levels.length;
-    curEffort=levels[idx];
-    O.store.set('effort',curEffort);
-    effortTxt.textContent=curEffort+' ›';
-    O.toast(O.tr('Reasoning effort: ','Усилие рассуждений: ')+curEffort,1500);
+    O.openEffortPicker();
+    setTimeout(()=>{effortTxt.textContent=effortNow()?O.effortLabel(effortNow()):O.tr('Default','По умолчанию');draw()},250);
   }},
     h('div',{class:'detached-card-left'},
-      h('span',null,O.tr('Effort','Усилие')),
-      h('span',{class:'recommended-badge'},O.tr('Recommended','Рекомендуется'))),
+      O.icon('bulb'),
+      h('span',{style:{marginLeft:'6px'}},O.tr('Reasoning effort','Уровень рассуждения'))),
     h('div',{class:'detached-card-right'},effortTxt));
+
+  // ---- selection mode: long-press a model to enter it ----
+  const sel=new Set();
+  const selectBar=h('div',{class:'model-select-bar hide'});
+  const enterSelect=(x)=>{
+    const key=x.pid+'/'+x.mid;
+    if(sel.has(key))sel.delete(key);else sel.add(key);
+    if(!sel.size){selectBar.classList.add('hide');draw();return}
+    renderSelectBar();
+    draw();
+  };
+  const exitSelect=()=>{sel.clear();selectBar.classList.add('hide');draw()};
+  const renderSelectBar=()=>{
+    selectBar.textContent='';
+    selectBar.classList.remove('hide');
+    const n=sel.size;
+    selectBar.append(
+      h('button',{class:'ibtn s',onclick:exitSelect},O.icon('x')),
+      h('b',{class:'grow',style:{fontSize:'13px'}},n+' '+O.tr('selected','выбрано')),
+      h('button',{class:'chip',onclick:()=>{sel.forEach(k=>{if(!O.isModelPinned(k))O.toggleModelPin(k)});exitSelect()}},O.icon('pin'),O.tr('Pin','Закрепить')),
+      h('button',{class:'chip',onclick:()=>{sel.forEach(k=>O.isModelPinned(k)&&O.toggleModelPin(k));exitSelect()}},O.icon('x'),O.tr('Unpin','Открепить')),
+      h('button',{class:'chip',onclick:()=>{
+        const folders=O.modelFolders();
+        const items=folders.map(f=>({label:f.name,icon:'folder',fn:()=>{sel.forEach(k=>O.addModelToFolder(k,f.id));exitSelect()}}));
+        items.push({label:O.tr('New folder…','Новая папка…'),icon:'plus',fn:async()=>{
+          const name=await O.ask(O.tr('New folder','Новая папка'),O.tr('Folder name','Название папки'));
+          if(!name)return;const f=O.createModelFolder(name);
+          sel.forEach(k=>O.addModelToFolder(k,f.id));exitSelect();
+        }});
+        O.actions(O.tr('Group into folder','Сгруппировать в папку'),items);
+      }},O.icon('folder'),O.tr('To folder','В папку')),
+      h('button',{class:'chip',onclick:()=>{sel.forEach(k=>O.hideModel(k));exitSelect()}},O.icon('trash'),O.tr('Delete','Удалить')));
+  };
 
   const connectCard=h('button',{class:'detached-card',onclick:()=>{s.close();O.openConnect()}},
     h('div',{class:'detached-card-left'},
@@ -202,7 +232,7 @@ O.openModels=()=>{
   }
   const folderBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelFolders(()=>draw())},O.icon('folder'),O.tr('Folders & profiles','Папки и профили'));
   const compareBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelCompare()},O.icon('branch'),O.tr('Compare models on one prompt','Сравнить модели на одном запросе'));
-  const container=h('div',null,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,effortCard,connectCard);
+  const container=h('div',null,effortCard,selectBar,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
 
   function hiddenRow(){
@@ -308,12 +338,18 @@ O.openModels=()=>{
       }
       const sub=parts.join(' · ');
 
-      const row=h('button',{class:'model-row'+(isSel?' on':''),onclick:()=>{
+      const inSel=sel.has(key);
+      const selecting=sel.size>0;
+      // Square checkbox: checked for selected rows, empty for the rest (only in selection mode).
+      const box=selecting?h('span',{class:'model-check-box'+(inSel?' on':'')},inSel?O.icon('check'):null):null;
+      const row=h('button',{class:'model-row'+(isSel?' on':'')+(inSel?' picked':''),onclick:()=>{
         if(row._lpFired){row._lpFired=false;return}
+        if(selecting){enterSelect(x);return}
         O.setModel(x.pid,x.mid);
         s.close();
         O.toast(O.tr('Selected: ','Выбрана: ')+(x.name||x.mid),1500);
       }},
+        box,
         h('div',{class:'model-row-left'},
           h('div',{style:{display:'flex',alignItems:'center',gap:'6px',flexWrap:'wrap'}},
             isPinned?O.icon('pin','pin-ic'):null,
@@ -322,9 +358,10 @@ O.openModels=()=>{
           ),
           sub?h('span',{class:'model-row-sub'},sub):null
         ),
-        isSel?O.icon('check','model-check'):null
+        isSel&&!selecting?O.icon('check','model-check'):null
       );
-      O.longPress(row,()=>modelActions(x,()=>draw()));
+      // long press enters selection (previously it opened the action sheet directly)
+      O.longPress(row,()=>enterSelect(x));
       return row;
     };
 

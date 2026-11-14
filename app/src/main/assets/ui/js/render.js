@@ -92,10 +92,29 @@ O.mdInto=(el,t,opts)=>{
   // Never let the rendered text shrink while unfinished: a late snapshot arriving after newer
   // deltas would otherwise blink the answer backwards.
   if(!o.final&&st.txt&&typeof t==='string'&&st.txt.length>t.length&&st.txt.startsWith(t))return;
+  // Replacing innerHTML changes the element height. If that element sits above the viewport,
+  // the browser keeps scrollTop and the user's reading position jumps. Measuring the distance to
+  // the bottom of the nearest scroll container and restoring it keeps the text visually still.
+  const scrollParent=()=>{
+    let n=el.parentNode;
+    while(n&&n!==document.body){
+      const cs=getComputedStyle(n);
+      if((cs.overflowY==='auto'||cs.overflowY==='scroll')&&n.scrollHeight>n.clientHeight)return n;
+      n=n.parentNode;
+    }
+    return null;
+  };
   const apply=()=>{
     st.timer=null;
     st.at=Date.now();
+    const sc=scrollParent();
+    const before=sc?sc.scrollHeight-sc.scrollTop:0;
+    const nearBottom=sc?before<120:true;
     try{el.innerHTML=O.md(st.txt);O.enhance(el)}catch(e){}
+    if(sc&&!nearBottom){
+      const after=sc.scrollHeight-sc.scrollTop;
+      if(after!==before)sc.scrollTop=sc.scrollHeight-before;
+    }
   };
   st.txt=t;
   if(o.final){

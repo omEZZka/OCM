@@ -12,7 +12,15 @@ const busy=()=>{const s=S.status[S.sid];return !!s&&s.type!=='idle'};
 
 O.chatInit=root=>{
   chatRoot=root;
-  msgsEl=h('div',{id:'msgs',class:'sel',onscroll:()=>{stick=nearBottom();jumpEl.classList.toggle('hide',stick);maybeLoadOlder()}});
+  msgsEl=h('div',{id:'msgs',class:'sel',onscroll:()=>{
+    const nb=nearBottom();
+    // Leaving the bottom stops every pending "follow" behaviour at once: pin timers, scheduled
+    // renders and tool re-flows all check `stick`, which used to lag one event behind.
+    if(!nb&&stick)stick=false;
+    stick=nb;
+    jumpEl.classList.toggle('hide',stick);
+    maybeLoadOlder();
+  }});
   jumpEl=h('button',{id:'jump',class:'hide',onclick:()=>scrollEnd(true)},O.icon('chevD'));
   revEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
   todoEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
@@ -111,6 +119,15 @@ O.checkTokenWarning=sid=>{
   }
 };
 const nearBottom=()=>msgsEl.scrollHeight-msgsEl.scrollTop-msgsEl.clientHeight<140;
+// Preserves the reading position across a re-render that happens above the viewport.
+const keepAnchor=(fn)=>{
+  const sh=msgsEl.scrollHeight,st=msgsEl.scrollTop;
+  const near=sh-st-msgsEl.clientHeight<140;
+  fn();
+  if(near)return;
+  const after=msgsEl.scrollHeight;
+  if(after!==sh)msgsEl.scrollTop=st+(after-sh);
+};
 const scrollEnd=f=>{requestAnimationFrame(()=>{msgsEl.scrollTop=msgsEl.scrollHeight;if(f){stick=true;jumpEl.classList.add('hide')}})};
 // Keep the chat pinned to the bottom for a short while after an open/render:
 // images, code blocks and markdown inflate the height asynchronously, which
@@ -122,6 +139,9 @@ const pinBottom=ms=>{
   pinT=setInterval(()=>{
     if(!msgsEl.isConnected){clearInterval(pinT);pinT=null;return}
     if(Date.now()>until){clearInterval(pinT);pinT=null;return}
+    // The user scrolled away while images/code were still inflating: stop pinning immediately,
+    // otherwise the list keeps yanking itself back down under their finger.
+    if(!stick){clearInterval(pinT);pinT=null;return}
     msgsEl.scrollTop=msgsEl.scrollHeight;
   },60);
 };
@@ -173,8 +193,11 @@ function ensureMsg(m){
   let el=msgEls.get(m.info.id);
   if(!el){const e=msgsEl.querySelector('.empty');if(e)e.remove();if(chatRoot)chatRoot.classList.remove('is-empty');el=buildMsg(m);
     let before=null;for(const c of msgsEl.children){if(c.dataset.id&&c.dataset.id>m.info.id){before=c;break}}
-    msgsEl.insertBefore(el,before)}
-  else{syncParts(el,m);metaUpdate(el,m)}}
+    if(stick)msgsEl.insertBefore(el,before);
+    else keepAnchor(()=>msgsEl.insertBefore(el,before));}
+  // Updating a message above the viewport must not move what the user is reading.
+  else if(stick){syncParts(el,m);metaUpdate(el,m)}
+  else keepAnchor(()=>{syncParts(el,m);metaUpdate(el,m)})}
 function buildMsg(m){
   const el=h('div',{class:'msg '+m.info.role,'data-id':m.info.id},h('div',{class:'m-body'}),h('div',{class:'m-meta'}));
   msgEls.set(m.info.id,el);syncParts(el,m);metaUpdate(el,m);return el}
@@ -203,7 +226,11 @@ function fillPart(el,p,m,fresh){
     // output streams too: throttle it so a chatty bash command cannot monopolise the main thread
     const running=st.status==='running'||st.status==='pending';
     if(fresh)fillTool(el,p);
-    else if(running){if(!el._tt)el._tt=setTimeout(()=>{el._tt=null;fillTool(el,el._p);if(stick)scrollEnd()},140)}
+    else if(running){if(!el._tt)el._tt=setTimeout(()=>{
+      el._tt=null;
+      if(stick){fillTool(el,el._p);scrollEnd()}
+      else keepAnchor(()=>fillTool(el,el._p));
+    },140)}
     else fillTool(el,p);
     break}
   case'file':el.className='part fchips';el.textContent='';
@@ -264,7 +291,11 @@ function render(el){
 }
 function renderR(el,b){const p=el._p;const t=p.text||p.reasoning||p.thinking||'';if(b._t===t)return;b._t=t;O.mdInto(b,t);
   const run=!(p.time&&p.time.end);el._d.firstChild.textContent=run?'Думает…':'Размышления'}
-function sched(id,fn){if(timers.has(id))return;timers.set(id,setTimeout(()=>{timers.delete(id);fn();if(stick)scrollEnd()},100))}
+function sched(id,fn){if(timers.has(id))return;timers.set(id,setTimeout(()=>{
+  timers.delete(id);
+  if(stick){fn();scrollEnd()}
+  else keepAnchor(fn);   // reading above: re-render without moving the viewport
+},100))}
 function dropTimer(id){const t=timers.get(id);if(t){clearTimeout(t);timers.delete(id)}}
 
 function metaUpdate(el,m){
@@ -687,13 +718,29 @@ function updateChips(){
     },{threshold:36});
   }
   // long-press on the model chip: quick profile switching without opening the whole list
+  // Long-press on the model chip: reasoning effort ladder first (the most used control),
+  // then profiles and folder management.
   if(modelChip&&!modelChip._profLp){
     modelChip._profLp=1;
     O.longPress(modelChip,()=>{
+      const levels=O.effortLevels?O.effortLevels():['low','medium','high'];
+      const cur=O.currentEffort?O.currentEffort():'';
+      const eff=levels.map(v=>({
+        label:O.effortLabel?O.effortLabel(v):v,
+        sub:v===cur?O.tr('current','выбрано'):'',
+        icon:v===cur?'check':'dot',
+        fn:()=>O.setEffort(v)
+      }));
+      eff.push({label:O.tr('Default','По умолчанию'),sub:cur?'':O.tr('current','выбрано'),icon:cur?'dots':'check',fn:()=>O.setEffort('')});
       const names=Object.keys(O.modelProfiles());
-      const items=names.map(n=>({label:n,icon:'star',fn:()=>O.applyModelProfile(n)}));
-      items.push({label:O.tr('Manage folders & profiles…','Папки и профили…'),icon:'sliders',fn:()=>O.openModelFolders()});
-      O.actions(O.tr('Model profiles','Профили моделей'),items);
+      O.actions((O.modelInfo&&S.model&&O.modelInfo(S.model.providerID,S.model.modelID)||{}).name||O.tr('Model','Модель'),[
+        ...eff,
+        names.length?{label:O.tr('Profiles…','Профили…'),icon:'star',fn:()=>{
+          O.actions(O.tr('Model profiles','Профили моделей'),names.map(n=>({label:n,icon:'star',fn:()=>O.applyModelProfile(n)})).concat([{label:O.tr('Manage folders & profiles…','Папки и профили…'),icon:'sliders',fn:()=>O.openModelFolders()}]));
+        }}:null,
+        {label:O.tr('Manage folders & profiles…','Папки и профили…'),icon:'sliders',fn:()=>O.openModelFolders()},
+        {label:O.tr('All models','Все модели'),icon:'cpu',fn:()=>O.openModels()}
+      ].filter(Boolean));
     });
   }
   const nokey=!m&&!S.offline&&S.up;
