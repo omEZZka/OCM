@@ -89,6 +89,9 @@ O.mdInto=(el,t,opts)=>{
   const o=opts||{};
   el._md=el._md||{txt:'',at:0,timer:null};
   const st=el._md;
+  // Never let the rendered text shrink while unfinished: a late snapshot arriving after newer
+  // deltas would otherwise blink the answer backwards.
+  if(!o.final&&st.txt&&typeof t==='string'&&st.txt.length>t.length&&st.txt.startsWith(t))return;
   const apply=()=>{
     st.timer=null;
     st.at=Date.now();

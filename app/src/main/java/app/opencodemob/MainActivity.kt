@@ -1417,39 +1417,49 @@ class MainActivity : ComponentActivity() {
          * separate GIT_DIR so the user's own repository index/history is never touched.
          */
         @JavascriptInterface fun checkpointCreate(dir: String, label: String): String = try {
+            // IMPORTANT: this used to run git synchronously inside a @JavascriptInterface call, which
+            // blocks the WebView JS thread — every prompt paid several seconds (sometimes tens of
+            // seconds) of "waiting for the model". It runs on a background thread now and reports
+            // the result through the "checkpoint" event.
             val u = uid()
             if (!Runtime.isInstalled(this@MainActivity)) JSONObject().put("ok", false).put("err", "runtime not installed").toString()
             else {
-                // Inside proot the profile home is mounted at /root, so the shadow repo must be
-                // addressed with the guest path, not the host one.
-                val id = System.currentTimeMillis().toString()
-                val q = { a: String -> "'" + a.replace("'", "'\\''") + "'" }
-                val script = buildString {
-                    append("export GIT_DIR=/root/.ocm/checkpoints/repo GIT_WORK_TREE=").append(q(dir.ifEmpty { "/root" }))
-                    append(" GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C; ")
-                    append("mkdir -p /root/.ocm/checkpoints/repo/info; ")
-                    // build artifacts and dependency trees are regenerable: excluding them keeps the
-                    // shadow repo small and makes restore fast
-                    append("printf 'node_modules/\n.git/\ndist/\nbuild/\n.cache/\ntmp/\n*.log\n' > /root/.ocm/checkpoints/repo/info/exclude; ")
-                    append("git rev-parse --git-dir >/dev/null 2>&1 || git init -q; ")
-                    append("git add -A >/dev/null 2>&1; ")
-                    append("git -c user.name=OCM -c user.email=bot@ocm.local commit -q -m ").append(q(label.ifEmpty { "checkpoint" })).append(" --allow-empty 2>&1; ")
-                    append("git rev-parse HEAD")
-                }
-                val p = Runtime.prootCmd(this@MainActivity, u, listOf("/bin/sh", "-c", script))
-                val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
-                val done = p.waitFor(90, java.util.concurrent.TimeUnit.SECONDS)
-                if (!done) try { p.destroyForcibly() } catch (_: Exception) {}
-                val sha = out.lines().lastOrNull { it.length in 7..64 && it.all { c -> c.isLetterOrDigit() } } ?: ""
-                if (sha.isEmpty()) JSONObject().put("ok", false).put("err", "checkpoint failed: " + out.take(300)).toString()
-                else {
+                thread {
                     try {
-                        java.io.File(Runtime.home(this@MainActivity, u), ".ocm/checkpoints/index.tsv").appendText(
-                            id + "\t" + sha + "\t" + dir + "\t" + label.replace('\t', ' ').replace('\n', ' ') + "\n"
-                        )
-                    } catch (_: Exception) {}
-                    JSONObject().put("ok", true).put("id", id).put("sha", sha).toString()
+                        val id = System.currentTimeMillis().toString()
+                        val q = { a: String -> "'" + a.replace("'", "'\\''") + "'" }
+                        val script = buildString {
+                            append("export GIT_DIR=/root/.ocm/checkpoints/repo GIT_WORK_TREE=").append(q(dir.ifEmpty { "/root" }))
+                            append(" GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C; ")
+                            append("mkdir -p /root/.ocm/checkpoints/repo/info; ")
+                            append("printf 'node_modules/\n.git/\ndist/\nbuild/\n.cache/\ntmp/\n*.log\n' > /root/.ocm/checkpoints/repo/info/exclude; ")
+                            append("git rev-parse --git-dir >/dev/null 2>&1 || git init -q; ")
+                            append("git add -A >/dev/null 2>&1; ")
+                            // --porcelain is empty when nothing changed: skip the commit entirely
+                            append("if [ -z \"$(git status --porcelain)\" ]; then echo NONE; exit 0; fi; ")
+                            append("git -c user.name=OCM -c user.email=bot@ocm.local commit -q -m ").append(q(label.ifEmpty { "checkpoint" })).append(" --allow-empty 2>&1; ")
+                            append("git rev-parse HEAD")
+                        }
+                        val p = Runtime.prootCmd(this@MainActivity, u, listOf("/bin/sh", "-c", script))
+                        val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
+                        val done = p.waitFor(90, java.util.concurrent.TimeUnit.SECONDS)
+                        if (!done) try { p.destroyForcibly() } catch (_: Exception) {}
+                        val sha = out.lines().lastOrNull { it.length in 7..64 && it.all { c -> c.isLetterOrDigit() } } ?: ""
+                        if (sha.isEmpty()) {
+                            emit("checkpoint", JSONObject().put("ok", true).put("skipped", out.contains("NONE")).put("id", id))
+                        } else {
+                            try {
+                                java.io.File(Runtime.home(this@MainActivity, u), ".ocm/checkpoints/index.tsv").appendText(
+                                    id + "\t" + sha + "\t" + dir + "\t" + label.replace('\t', ' ').replace('\n', ' ') + "\n"
+                                )
+                            } catch (_: Exception) {}
+                            emit("checkpoint", JSONObject().put("ok", true).put("id", id).put("sha", sha))
+                        }
+                    } catch (e: Exception) {
+                        emit("checkpoint", JSONObject().put("ok", false).put("err", e.message ?: "failed"))
+                    }
                 }
+                JSONObject().put("ok", true).put("queued", true).toString()
             }
         } catch (e: Exception) {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()

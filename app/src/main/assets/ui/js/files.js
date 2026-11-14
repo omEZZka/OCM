@@ -213,17 +213,20 @@ O.openRepoMap=async()=>{
 };
 
 // ---- checkpoints (shadow git snapshots of the working tree) ----
-let cpJob=null;
+let cpBusy=false,cpQueued=null;
+// Snapshot is fire-and-forget: the native side runs git on a background thread and answers with a
+// "checkpoint" event, so sending a message never waits for the filesystem.
 O.checkpointBeforeSend=text=>{
   if(!O.native.checkpointCreate)return;
-  // one snapshot in flight at a time; the label is the first line of the prompt
-  if(cpJob)return;
   const label=String(text||'').split('\n')[0].slice(0,80);
-  cpJob=setTimeout(()=>{
-    try{O.native.checkpointCreate(S.dir,label)}catch(_){}
-    cpJob=null;
-  },400);
+  if(cpBusy){cpQueued=label;return}
+  cpBusy=true;
+  try{O.native.checkpointCreate(S.dir,label)}catch(_){cpBusy=false}
 };
+O.on('checkpoint',d=>{
+  cpBusy=false;
+  if(cpQueued){const l=cpQueued;cpQueued=null;setTimeout(()=>O.checkpointBeforeSend(l),50)}
+});
 O.openCheckpoints=()=>{
   const body=h('div',null,h('div',{class:'mut',style:{padding:'12px'}},O.tr('Loading…','Загрузка…')));
   const s=O.sheet(O.tr('Project checkpoints','Точки восстановления'),body,{full:true});

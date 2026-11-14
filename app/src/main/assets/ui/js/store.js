@@ -53,11 +53,29 @@ O.msgs=sid=>{let x=M.get(sid);if(!x){x={list:[],idx:new Map()};M.set(sid,x)}retu
 const cmp=(a,b)=>a.info.id<b.info.id?-1:a.info.id>b.info.id?1:0;
 O.upsertMsg=info=>{const s=O.msgs(info.sessionID);let m=s.idx.get(info.id);
   if(m)m.info=info;else{m={info,parts:[]};s.idx.set(info.id,m);s.list.push(m);if(s.list.length>1&&cmp(s.list[s.list.length-2],m)>0)s.list.sort(cmp)}return m};
+// A streaming part receives text from two sources: `part.delta` (incremental) and
+// `part.updated` / periodic resync (full snapshot). Snapshots are produced by the server a moment
+// later than the deltas, so blindly replacing the part made the answer visibly rewind — "text
+// appears, disappears, another appears". Text must only ever grow while the part is unfinished.
+const mergePart=(cur,next)=>{
+  if(!cur)return next;
+  const done=!!(next.time&&next.time.end);
+  const out=Object.assign({},next);
+  if(!done){
+    const curT=cur.text||'',nextT=typeof next.text==='string'?next.text:'';
+    if(curT.length>nextT.length&&curT.startsWith(nextT))out.text=curT;
+    for(const f of ['reasoning','thinking']){
+      const a=cur[f]||'',b=typeof next[f]==='string'?next[f]:'';
+      if(a.length>b.length&&a.startsWith(b))out[f]=a;
+    }
+  }
+  return out;
+};
 O.upsertPart=part=>{const s=O.msgs(part.sessionID);let m=s.idx.get(part.messageID);
   if(!m)m=O.upsertMsg({id:part.messageID,sessionID:part.sessionID,role:'assistant',time:{created:Date.now()}});
   if(m.local){m.parts=[];m.local=false}
   const i=m.parts.findIndex(p=>p.id===part.id);
-  if(i>=0)m.parts[i]=part;else{m.parts.push(part);if(m.parts.length>1&&m.parts[m.parts.length-2].id>part.id)m.parts.sort((a,b)=>a.id<b.id?-1:1)}return m};
+  if(i>=0)m.parts[i]=mergePart(m.parts[i],part);else{m.parts.push(part);if(m.parts.length>1&&m.parts[m.parts.length-2].id>part.id)m.parts.sort((a,b)=>a.id<b.id?-1:1)}return m};
 O.visibleMsgs=sid=>{const s=O.msgs(sid),ses=S.sessions.find(x=>x.id===sid)||O.child(sid),rv=ses&&ses.revert&&ses.revert.messageID;
   return rv?s.list.filter(m=>m.info.id<rv):s.list};
 O.child=sid=>S.childSessions&&S.childSessions[sid];
@@ -92,7 +110,10 @@ O.syncSessionMessages=async(sid)=>{
   try{
     const arr=await api('GET','/session/'+sid+'/message',null,{timeout:15000});
     if(!Array.isArray(arr))return;
+    // Periodically the UI pulls the whole message list as a safety net. That snapshot can be a
+    // little behind the live deltas, so parts are merged (see mergePart) instead of replaced.
     for(const m of arr){
+      if(!m||!m.info)continue;
       O.upsertMsg(m.info);
       if(Array.isArray(m.parts)){
         for(const pt of m.parts) O.upsertPart(pt);
