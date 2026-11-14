@@ -1,6 +1,10 @@
 package app.opencodemob
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
@@ -26,6 +30,34 @@ class Speaker(private val context: Context, private val emit: (String, JSONObjec
     private var queue = ArrayList<String>()
     private var seq = 0
     private val ui = Handler(Looper.getMainLooper())
+    private var focus: AudioFocusRequest? = null
+
+    /** Takes transient-exclusive audio focus: music pauses instead of talking over the agent. */
+    private fun grabFocus() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (focus == null) {
+                focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build())
+                    .setWillPauseWhenDucked(true)
+                    .setOnAudioFocusChangeListener { }
+                    .build()
+            }
+            am.requestAudioFocus(focus!!)
+        } catch (_: Exception) {}
+    }
+
+    private fun releaseFocus() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            focus?.let { am.abandonAudioFocusRequest(it) }
+        } catch (_: Exception) {}
+    }
 
     fun init(voice: String, rate: Float, pitch: Float) {
         this.voiceId = voice
@@ -106,6 +138,7 @@ class Speaker(private val context: Context, private val emit: (String, JSONObjec
 
     private fun speakNow(text: String) {
         val t = tts ?: return
+        grabFocus()
         // Long chunks are split: some engines truncate around 4k characters.
         val parts = splitForSpeech(text)
         parts.forEach { p ->
@@ -142,7 +175,7 @@ class Speaker(private val context: Context, private val emit: (String, JSONObjec
     }
 
     private fun drainNext() {
-        if (queue.isEmpty()) return
+        if (queue.isEmpty()) { releaseFocus(); return }
         val next = queue.removeAt(0)
         speakNow(next)
     }
@@ -150,6 +183,7 @@ class Speaker(private val context: Context, private val emit: (String, JSONObjec
     fun stop() {
         queue.clear()
         try { tts?.stop() } catch (_: Exception) {}
+        releaseFocus()
     }
 
     fun shutdown() {

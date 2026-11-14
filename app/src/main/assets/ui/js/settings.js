@@ -115,8 +115,8 @@ O.openSettings=()=>{
   // 4b. Voice call
   body.append(h('div',{class:'settings-section-title'},O.tr('Voice & Calls','Голос и звонки')));
   body.append(h('div',{class:'settings-card'},
-    O.listRow('mic',O.tr('Call with the agent','Звонок с агентом'),O.tr('Speak naturally; files and tools run silently in the background','Говорите голосом; файлы и инструменты выполняются молча'),
-      O.icon(O.callActive&&O.callActive()?'wave':'chevR'),()=>{s.close();setTimeout(()=>{O.startCall&&O.startCall()},200)}),
+    O.listRow('mic',O.tr('Voice input & calls','Голосовой ввод и звонки'),O.tr('Dictation or a live call — choose on the microphone button','Диктовка или живой звонок — выбор на кнопке микрофона'),
+      O.icon(O.callActive&&O.callActive()?'wave':'chevR'),()=>{s.close();setTimeout(()=>{O.onMicChoice&&O.onMicChoice()},200)}),
     O.listRow('sliders',O.tr('Recognition engine & voice','Движок распознавания и голос'),O.tr('System / on-device / cloud, language, speech rate','Системный / на устройстве / облако, язык, скорость речи'),
       O.icon('chevR'),()=>{s.close();setTimeout(()=>{O.openCallSettings&&O.openCallSettings()},200)})));
 

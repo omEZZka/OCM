@@ -2,6 +2,8 @@ package app.opencodemob
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,18 +13,20 @@ import android.speech.SpeechRecognizer
 import org.json.JSONObject
 
 /**
- * Continuous speech recognition, independent of the system dialog.
+ * Continuous speech recognition tuned for a phone call with an agent.
  *
- * Uses `SpeechRecognizer` directly (no `ACTION_RECOGNIZE_SPEECH` overlay) so the recogniser can run
- * in the background while the app shows its own call screen, and restarts itself after every
- * utterance to keep the microphone open.
- *
- * Engine choice:
- *  - `system`  : whatever recogniser the phone ships (usually Google, sometimes offline)
- *  - `offline` : `EXTRA_PREFER_OFFLINE` — Android's on-device model, no network, lower quality
- *  - `cloud`   : the system recogniser without the offline preference (Google cloud)
- *
- * Partial results are streamed so the UI can show live text and detect end-of-turn quickly.
+ * Design notes:
+ *  • `SpeechRecognizer` is used directly (no system dialog), so it can run behind our own call screen
+ *    and restart itself forever without user interaction.
+ *  • Audio source is `VOICE_RECOGNITION`, which applies the platform's speech preprocessing and,
+ *    crucially, the echo canceller — without it the agent's own TTS leaked back into the microphone
+ *    and the recogniser produced nonsense or restarted constantly.
+ *  • Silence timeouts are raised a lot compared to the defaults: people pause mid-sentence when they
+ *    dictate a task ("открой файл… эээ… и добавь тест"), and the default 1.5 s cut the phrase in half.
+ *  • `EXTRA_ENABLE_LANGUAGE_SWITCH` (where the engine supports it) lets a mostly-Russian sentence
+ *    containing English identifiers like `MainActivity.kt` be recognised correctly.
+ *  • Errors are decoded into readable codes instead of raw ints, and NO_MATCH/timeouts restart
+ *    quickly while real failures (no permission, no network for cloud mode) back off.
  */
 class SpeechInput(private val context: Context, private val emit: (String, JSONObject) -> Unit) {
     private val ui = Handler(Looper.getMainLooper())
@@ -30,19 +34,22 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
     private var running = false
     private var mode = "system"
     private var lang = "ru-RU"
-    private var restarts = 0
+    private var biasing: Array<String> = emptyArray()
     private var lastRestart = 0L
+    private var quickFails = 0
+    private var emittedSpeech = false
 
     fun isAvailable() = SpeechRecognizer.isRecognitionAvailable(context)
 
-    fun start(mode: String, lang: String) {
+    fun start(mode: String, lang: String, bias: Array<String>) {
         if (!isAvailable()) {
             emit("stt", JSONObject().put("t", "error").put("error", "no_recognizer"))
             return
         }
         this.mode = mode.ifEmpty { "system" }
         this.lang = lang.ifEmpty { "ru-RU" }
-        restarts = 0
+        this.biasing = bias
+        quickFails = 0
         running = true
         ui.post { begin() }
     }
@@ -60,33 +67,59 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
     private fun begin() {
         if (!running) return
         try { recognizer?.destroy() } catch (_: Exception) {}
-        val r = SpeechRecognizer.createSpeechRecognizer(context)
+        val r = try { SpeechRecognizer.createSpeechRecognizer(context) } catch (e: Exception) {
+            emit("stt", JSONObject().put("t", "error").put("error", "create_failed"))
+            running = false
+            return
+        }
         recognizer = r
+        emittedSpeech = false
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
                 emit("stt", JSONObject().put("t", "ready"))
             }
-            override fun onBeginningOfSpeech() {}
+            override fun onBeginningOfSpeech() {
+                emittedSpeech = true
+                emit("stt", JSONObject().put("t", "begin"))
+            }
             override fun onRmsChanged(rmsdB: Float) {
                 emit("stt", JSONObject().put("t", "level").put("v", rmsdB.toInt()))
             }
             override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
+            override fun onEndOfSpeech() {
+                // The engine heard a complete phrase; a result is on the way.
+                emit("stt", JSONObject().put("t", "end"))
+            }
             override fun onError(error: Int) {
                 if (!running) return
-                // 7 = NO_MATCH, 6 = SPEECH_TIMEOUT: normal pauses, just restart and keep listening.
-                if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                    restartSoon(250L); return
+                when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH,
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> restartSoon(200L)
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> restartSoon(600L)
+                    SpeechRecognizer.ERROR_CLIENT -> restartSoon(400L)
+                    SpeechRecognizer.ERROR_NETWORK,
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+                    SpeechRecognizer.ERROR_SERVER -> {
+                        emit("stt", JSONObject().put("t", "offline"))
+                        restartSoon(1500L)
+                    }
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
+                        running = false
+                        emit("stt", JSONObject().put("t", "error").put("error", "no_permission").put("code", error))
+                    }
+                    else -> restartSoon(1000L)
                 }
-                emit("stt", JSONObject().put("t", "error").put("code", error))
-                // 1 network, 2 network timeout, 9 insufficient permissions, 5 client: stop retrying
-                if (error == 9 || error == 5) { running = false; return }
-                restartSoon(1200L)
             }
             override fun onResults(results: Bundle?) {
-                val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-                if (text.isNotBlank()) emit("stt", JSONObject().put("t", "final").put("text", text))
-                if (running) restartSoon(200L)
+                val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION) ?: arrayListOf()
+                val text = list.firstOrNull().orEmpty()
+                val conf = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull() ?: -1f
+                if (text.isNotBlank()) {
+                    val o = JSONObject().put("t", "final").put("text", text).put("alts", org.json.JSONArray(list))
+                    if (conf >= 0f) o.put("conf", conf.toDouble())
+                    emit("stt", o)
+                }
+                if (running) restartSoon(120L)
             }
             override fun onPartialResults(partialResults: Bundle?) {
                 val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
@@ -94,31 +127,48 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
             }
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
+            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-            if (mode == "offline") {
-                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-            } else if (mode == "cloud") {
-                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
+            // Long dictation: do not cut the phrase at the first short pause.
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2200L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2200L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1200L)
+            // Technical vocabulary must survive: no censoring of "bad" words in file names/commands.
+            putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, mode == "offline")
+            if (biasing.isNotEmpty()) putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(biasing))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Voice-recognition capture path: AEC + NS, which keeps our own speech out of the input.
+                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
             }
         }
-        try { r.startListening(intent) } catch (e: Exception) {
+        try {
+            r.startListening(i)
+        } catch (e: Exception) {
             emit("stt", JSONObject().put("t", "error").put("error", e.message ?: "start_failed"))
-            running = false
+            restartSoon(1500L)
         }
     }
 
     private fun restartSoon(delay: Long) {
-        // The counter resets whenever a restart actually leads to audio, so long calls are not
-        // capped; a tight failure loop still stops after a few dozen quick retries.
         val now = System.currentTimeMillis()
-        if (now - lastRestart < 800L) restarts++ else restarts = 0
+        if (now - lastRestart < 900L) quickFails++ else quickFails = 0
         lastRestart = now
-        if (restarts > 40) { running = false; emit("stt", JSONObject().put("t", "error").put("error", "restart_loop")); return }
+        if (quickFails > 25) {
+            running = false
+            emit("stt", JSONObject().put("t", "error").put("error", "restart_loop"))
+            return
+        }
         ui.postDelayed({ begin() }, delay)
     }
 }

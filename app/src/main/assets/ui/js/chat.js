@@ -27,13 +27,14 @@ O.chatInit=root=>{
   agentChip=h('button',{class:'hud-pill agent-pill',onclick:()=>O.openAgents()},h('span',null,'Build'),O.icon('chevD'));
   if(agentChip._mmWatch===undefined){agentChip._mmWatch=1;bus.on('mm',updateChips)}
   modelChip=h('button',{class:'hud-pill model-pill',onclick:()=>O.openModels()},h('span',null,O.tr('Select model','Выбрать модель')),O.icon('chevD'));
+  // Tap: while a call runs it ends it, otherwise a sheet asks what the user wants.
+  // Long-press: straight to dictation, the fastest path for a single phrase.
   const micBtn=h('button',{class:'hud-icon-btn mic-btn',onclick:()=>{
-    // while a call is running the same button ends it; otherwise it starts a call
-    if(O.callActive&&O.callActive())O.endCall();
-    else if(O.startCall)O.startCall();
-    else onMic();
+    if(O.callActive&&O.callActive()){O.endCall();return}
+    if(O.onMicChoice)O.onMicChoice();else onMic();
   }},O.icon('mic'));
-  O.longPress(micBtn,()=>{if(onMic)onMic();},500);
+  O.longPress(micBtn,()=>{if(O.voiceDictate)O.voiceDictate();else onMic();},450);
+  bus.on('call',()=>micBtn.classList.toggle('on-call',!!(O.callActive&&O.callActive())));
   sendBtn=h('button',{id:'send',onclick:onSend},O.icon('send'));
   const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentChip,modelChip);
   const cbarRight=h('div',{class:'cbar-right'},micBtn,sendBtn);
@@ -652,49 +653,10 @@ const quotaHint=()=>S.account&&S.account.email
   ?'Квота этой модели исчерпана. Перезапустите сервер (Настройки → Совместимость), выберите другую модель или подключите свой ключ: Настройки → Модели → Подключить провайдера'
   :'Квота исчерпана. Войдите в аккаунт opencode (Google/GitHub): Настройки → Аккаунт opencode — или подключите свой ключ: Настройки → Модели → Подключить провайдера';
 function onMic(){
-  const co=O.store.get('call.opts',{});
-  const lang=co.lang||(O.store.get('lang','ru')==='en'?'en-US':'ru-RU');
-  // One-shot dictation through the same continuous recogniser, so the chosen engine is honoured.
-  if(O.native.sttAvailable&&O.native.sttAvailable()){
-    let got=false;
-    const off1=O.on('stt',d=>{
-      if(d.t==='final'&&d.text&&!got){
-        got=true;cleanup();
-        ta.value=(ta.value?ta.value+' ':'')+d.text;onInput();ta.focus();
-        try{O.native.sttStop()}catch(_){}
-      }else if(d.t==='error'){cleanup();O.toast(O.tr('Voice input error','Ошибка голосового ввода'),2000)}
-      else if(d.t==='ready'&&!got)O.toast(O.tr('Listening...','Слушаю...'),1500);
-    });
-    const cleanup=()=>{try{off1&&off1()}catch(_){};try{O.native.sttStop()}catch(_){}};
-    O.native.sttStart(co.sttMode||'system',lang);
-    // safety: never leave the microphone on for a stray dictation
-    setTimeout(()=>{if(!got)cleanup()},30000);
-    return;
-  }
-  if(window.OC&&window.OC.startVoiceInput){
-    window.OC.startVoiceInput(lang);
-    return;
-  }
-  const SpeechRec=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(SpeechRec){
-    try{
-      const rec=new SpeechRec();
-      rec.lang=lang==='en'?'en-US':'ru-RU';
-      rec.interimResults=false;
-      const b=O.$('.mic-btn');if(b)b.style.color='#ef4444';
-      O.toast(O.tr('Listening... Speak now','Слушаю... Говорите'),2500);
-      rec.onresult=e=>{
-        const t=e.results[0][0].transcript;
-        ta.value=(ta.value?ta.value+' ':'')+t;
-        onInput();ta.focus();
-      };
-      rec.onerror=e=>{const b=O.$('.mic-btn');if(b)b.style.color='';O.toast(O.tr('Voice input error: ','Ошибка ввода: ')+(e.error||'недоступно'),2000)};
-      rec.onend=()=>{const b=O.$('.mic-btn');if(b)b.style.color=''};
-      rec.start();
-      return;
-    }catch(e){}
-  }
-  O.toast(O.tr('Voice input active. Speak using keyboard mic or type.','Голосовой ввод: используйте микрофон на клавиатуре или введите текст.'),3000);
+  // Single entry point: call.js owns engine choice, biasing and the fallback chain.
+  if(O.voiceDictate){O.voiceDictate();return}
+  const lang=O.store.get('lang','ru')==='en'?'en-US':'ru-RU';
+  if(window.OC&&window.OC.startVoiceInput)window.OC.startVoiceInput(lang);
 }
 function updateChips(){
   const m=S.model,mi=m&&O.modelInfo(m.providerID,m.modelID);

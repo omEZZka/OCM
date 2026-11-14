@@ -2693,3 +2693,11 @@ a:hover {
 }
 .call-orb .ic svg { width: 40px; height: 40px; }
 .call-body { min-height: 100%; }
+
+/* mic button while a call is running */
+.mic-btn.on-call { color: #38bdf8; }
+.mic-btn.on-call svg { animation: callPulse 1.6s ease-in-out infinite; }
+@keyframes callPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .mic-btn.on-call svg { animation: none; }
+}

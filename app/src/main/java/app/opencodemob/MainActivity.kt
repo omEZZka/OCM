@@ -1240,14 +1240,17 @@ class MainActivity : ComponentActivity() {
         }
 
         // --- continuous speech input (call mode) ---
-        @JavascriptInterface fun sttStart(mode: String, lang: String) {
+        @JavascriptInterface fun sttStart(mode: String, lang: String, bias: String) {
             runOnUiThread {
                 if (stt == null) stt = SpeechInput(this@MainActivity) { n, d -> emit(n, d) }
                 if (stt?.isAvailable() != true) {
                     emit("stt", JSONObject().put("t", "error").put("error", "no_recognizer"))
                     return@runOnUiThread
                 }
-                stt?.start(mode, lang)
+                // Biasing strings (file names, commands, agent names) dramatically improve recognition
+                // of the project's vocabulary; passed as a comma-separated list from the UI.
+                val words = bias.split(',').map { it.trim() }.filter { it.isNotEmpty() }.take(200).toTypedArray()
+                stt?.start(mode, lang, words)
             }
         }
 
