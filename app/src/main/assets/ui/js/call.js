@@ -24,6 +24,7 @@ const C=O.call={
   pitch:1.0,
   handsFree:true,
   bargeIn:true,
+  interrupted:false,
   autoSendMs:1700,
   readReplies:true,        // speak the final answer
   readThinking:false,      // speak reasoning fragments too (off by default: noisy)
@@ -95,22 +96,30 @@ O.voiceDictate=()=>{
   if(perms.mic===false){try{OC.grant('mic')}catch(_){}O.toast(O.tr('Allow microphone access','Разрешите доступ к микрофону'),3000);return}
   cfgLoad();
   const ta=O.$('#composer textarea');
+  const base=ta?ta.value:'';
   let done=false;
+  const restore=()=>{if(ta)ta.placeholder=O.tr('Chat with OpenCode...','Чат с OpenCode...')};
   const stop=()=>{try{O.native.sttStop()}catch(_){};try{off&&off()}catch(_){}};
+  const commit=txt=>{
+    if(done)return;
+    done=true;stop();restore();
+    const t=String(txt||'').trim();
+    if(!t){O.toast(O.tr('No speech detected','Речь не распознана'),2200,'error');return}
+    if(O.insertText)O.insertText(base?(base+' '+t):t);
+    O.setTab('chat');
+  };
   const off=O.on('stt',d=>{
     if(done)return;
     if(d.t==='partial'&&ta&&!ta.value.trim())ta.placeholder=d.text||'';
-    if(d.t==='final'&&d.text){
-      done=true;const txt=d.text.trim();stop();
-      if(ta)ta.placeholder=O.tr('Chat with OpenCode...','Чат с OpenCode...');
-      if(O.insertText)O.insertText(txt);
-      O.setTab('chat');
-    }
-    if(d.t==='error'){done=true;stop();O.toast(O.tr('Voice input error','Ошибка голосового ввода'),2500)}
+    // 'final' may arrive after the recogniser already stopped on its own
+    if(d.t==='final'){commit(d.text);return}
+    if(d.t==='empty'){done=true;stop();restore();O.toast(O.tr('No speech detected','Речь не распознана'),2200,'error');return}
+    if(d.t==='error'){done=true;stop();restore();O.toast(O.tr('Voice input error','Ошибка голосового ввода'),2500,'error')}
   });
   O.toast(O.tr('Listening... speak now','Слушаю... говорите'),2000);
-  O.native.sttStart(C.sttMode,C.lang,buildBias());
-  setTimeout(()=>{if(!done){stop();if(ta)ta.placeholder=O.tr('Chat with OpenCode...','Чат с OpenCode...');O.toast(O.tr('No speech detected','Речь не распознана'),2500)}},30000);
+  // one-shot: the native side delivers exactly one phrase and stops by itself
+  O.native.sttStart(C.sttMode,C.lang,buildBias(),true);
+  setTimeout(()=>{if(!done){stop();restore();O.toast(O.tr('No speech detected','Речь не распознана'),2500,'error')}},30000);
 };
 
 // ---- speech events ----
@@ -118,15 +127,26 @@ O.on('stt',d=>{
   if(!C.active)return;
   if(d.t==='level'){
     C.level=d.v||0;
+    // Two independent barge-in triggers. RMS alone was unreliable: the echo canceller keeps the
+    // level low even when the user clearly speaks, so the agent finished its whole answer first.
     if(C.state==='speaking'&&C.bargeIn&&C.level>6&&Date.now()-C.speakingStarted>900)interruptAgent();
     return;
   }
-  if(d.t==='begin')return;
+  if(d.t==='begin'){
+    // The recogniser heard a human voice. While the agent speaks this is the most reliable
+    // interruption signal we get from the platform.
+    if(C.state==='speaking'&&C.bargeIn&&Date.now()-C.speakingStarted>700)interruptAgent();
+    return;
+  }
   if(d.t==='partial'){
     C.partial=d.text||'';
     renderLive();
     clearTimeout(C.turnTimer);
-    if(C.partial.trim())C.turnTimer=setTimeout(()=>commitTurn(),C.autoSendMs);
+    if(!C.partial.trim())return;
+    // While the agent is talking, a partial that is clearly our own voice is ignored; anything else
+    // starts the countdown for a new turn, which is what "barge-in" means in practice.
+    if(C.state==='speaking'&&isEcho(C.partial))return;
+    C.turnTimer=setTimeout(()=>commitTurn(),C.autoSendMs);
     return;
   }
   if(d.t==='final'){
@@ -134,6 +154,8 @@ O.on('stt',d=>{
     C.partial='';
     clearTimeout(C.turnTimer);
     if(!text||isEcho(text))return;
+    // If the user interrupts while the answer is still playing, that phrase starts a new turn.
+    if(C.state==='speaking'){try{O.native.ttsStop()}catch(_){}C._ttsBatch=0}
     commitTurn(text);
     return;
   }
@@ -152,8 +174,9 @@ O.on('stt',d=>{
 O.on('tts',d=>{
   if(!C.active)return;
   if(d.t==='ready'){C.ttsReady=true;return}
-  if(d.t==='start'){C.speakingStarted=Date.now();setState('speaking');return}
+  if(d.t==='start'){C.speakingStarted=Date.now();setState('speaking');armDuringPlayback();return}
   if(d.t==='done'||d.t==='error'){
+    if(C.interrupted){C._ttsBatch=0;return}   // user took the floor: stay silent
     if(C._ttsBatch>0){C._ttsBatch--;return}
     resumeListening();
   }
@@ -182,10 +205,22 @@ bus.on('part',(sid,m,p)=>{
 
 const norm=s=>String(s||'').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 let recentSpoken=[];
+// Partial transcripts during playback are unreliable: the recogniser often hears the tail of our
+// own voice. Compare against word prefixes instead of whole strings, and ignore very short hits.
 function isEcho(text){
   const n=norm(text);
-  if(!n||n.length<5)return false;
-  return recentSpoken.some(sp=>sp&&(sp===n||sp.includes(n)||n.includes(sp)));
+  if(!n||n.length<6)return false;
+  const words=new Set(n.split(' ').filter(w=>w.length>3));
+  return recentSpoken.some(sp=>{
+    if(!sp)return false;
+    if(sp===n||sp.includes(n)||n.includes(sp))return true;
+    // e.g. spoken "создам файл тест" vs heard "создам файл": most long words overlap
+    const spw=new Set(sp.split(' ').filter(w=>w.length>3));
+    if(!words.size||!spw.size)return false;
+    let hit=0;
+    for(const w of words)if(spw.has(w))hit++;
+    return hit/words.size>0.7;
+  });
 }
 
 // ---- core ----
@@ -207,6 +242,7 @@ function startCall(){
   C.sid=S.sid;
   setCallFlag(true);
   O.native.ttsInit(C.voice,C.rate,C.pitch);
+  try{O.native.callAudio(true)}catch(_){}
   listen();
   openCallSheet();
   pushLog('note',O.tr('Call started','Звонок начат'));
@@ -219,6 +255,7 @@ function endCall(){
   clearTimeout(C.turnTimer);clearInterval(C.timer);
   try{O.native.sttStop()}catch(_){}
   try{O.native.ttsStop()}catch(_){}
+  try{O.native.callAudio(false)}catch(_){}
   C.partial='';
   const sh=C.sheet;
   C.sheet=null;
@@ -233,6 +270,12 @@ function listen(){
   setState('listening');
   O.native.sttStart(C.sttMode,C.lang,C.bias);
 }
+// During playback the microphone stays open (that is the whole point of barge-in), but its text
+// must not be treated as a new turn unless it survives the echo guard.
+function armDuringPlayback(){
+  if(!C.active||!C.bargeIn)return;
+  try{O.native.sttStart(C.sttMode,C.lang,C.bias)}catch(_){}
+}
 function resumeListening(){
   if(!C.active)return;
   if(C.handsFree)listen();else setState('idle');
@@ -240,8 +283,10 @@ function resumeListening(){
 function interruptAgent(){
   try{O.native.ttsStop()}catch(_){}
   C._ttsBatch=0;
+  C.interrupted=true;
   setState('listening');
-  O.native.sttStart(C.sttMode,C.lang,C.bias);
+  // Do not restart the recogniser here: it is already listening during playback, and restarting
+  // throws away the partial that caused the interruption.
   O.toast(O.tr('Interrupted — listening','Перебил — слушаю'),1200);
 }
 
@@ -251,6 +296,8 @@ async function commitTurn(spoken){
   if(!text||C.state==='thinking')return;
   C.partial='';clearTimeout(C.turnTimer);
   try{O.native.sttStop()}catch(_){}
+  try{O.native.ttsStop()}catch(_){}
+  C._ttsBatch=0;C.interrupted=false;
   C.turns++;
   pushLog('user',text);
   setState('thinking');

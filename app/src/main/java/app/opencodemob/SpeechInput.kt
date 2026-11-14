@@ -35,13 +35,18 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
     private var mode = "system"
     private var lang = "ru-RU"
     private var biasing: Array<String> = emptyArray()
+    // One-shot mode (dictation): deliver a single phrase and stop. Restarting the recogniser
+    // after every result is right for a call, but for dictation it produced ERROR_CLIENT loops
+    // and the phrase was lost before the UI could pick it up.
+    private var oneShot = false
+    private var lastPartial = ""
     private var lastRestart = 0L
     private var quickFails = 0
     private var emittedSpeech = false
 
     fun isAvailable() = SpeechRecognizer.isRecognitionAvailable(context)
 
-    fun start(mode: String, lang: String, bias: Array<String>) {
+    fun start(mode: String, lang: String, bias: Array<String>, single: Boolean = false) {
         if (!isAvailable()) {
             emit("stt", JSONObject().put("t", "error").put("error", "no_recognizer"))
             return
@@ -49,6 +54,8 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
         this.mode = mode.ifEmpty { "system" }
         this.lang = lang.ifEmpty { "ru-RU" }
         this.biasing = bias
+        this.oneShot = single
+        this.lastPartial = ""
         quickFails = 0
         running = true
         ui.post { begin() }
@@ -92,6 +99,18 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
             }
             override fun onError(error: Int) {
                 if (!running) return
+                if (oneShot) {
+                    // Dictation: NO_MATCH means "we heard something but could not map it" — surface
+                    // the partial text instead of losing the whole phrase.
+                    if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                        if (lastPartial.isNotBlank()) emit("stt", JSONObject().put("t", "final").put("text", lastPartial).put("salvaged", true))
+                        else emit("stt", JSONObject().put("t", "empty"))
+                    } else {
+                        emit("stt", JSONObject().put("t", "error").put("code", error))
+                    }
+                    running = false
+                    return
+                }
                 when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH,
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> restartSoon(200L)
@@ -112,18 +131,28 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
             }
             override fun onResults(results: Bundle?) {
                 val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION) ?: arrayListOf()
-                val text = list.firstOrNull().orEmpty()
+                // Engines sometimes return an empty list after a good partial: keep the partial text.
+                val text = list.firstOrNull().orEmpty().ifBlank { lastPartial }
                 val conf = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull() ?: -1f
                 if (text.isNotBlank()) {
                     val o = JSONObject().put("t", "final").put("text", text).put("alts", org.json.JSONArray(list))
                     if (conf >= 0f) o.put("conf", conf.toDouble())
                     emit("stt", o)
+                    lastPartial = ""
+                }
+                if (oneShot) {
+                    if (text.isBlank()) emit("stt", JSONObject().put("t", "empty"))
+                    running = false
+                    return
                 }
                 if (running) restartSoon(120L)
             }
             override fun onPartialResults(partialResults: Bundle?) {
                 val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-                if (text.isNotBlank()) emit("stt", JSONObject().put("t", "partial").put("text", text))
+                if (text.isNotBlank()) {
+                    lastPartial = text
+                    emit("stt", JSONObject().put("t", "partial").put("text", text))
+                }
             }
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })

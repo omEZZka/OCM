@@ -1244,7 +1244,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // --- continuous speech input (call mode) ---
-        @JavascriptInterface fun sttStart(mode: String, lang: String, bias: String) {
+        @JavascriptInterface fun sttStart(mode: String, lang: String, bias: String, single: Boolean) {
             runOnUiThread {
                 if (stt == null) stt = SpeechInput(this@MainActivity) { n, d -> emit(n, d) }
                 if (stt?.isAvailable() != true) {
@@ -1254,11 +1254,34 @@ class MainActivity : ComponentActivity() {
                 // Biasing strings (file names, commands, agent names) dramatically improve recognition
                 // of the project's vocabulary; passed as a comma-separated list from the UI.
                 val words = bias.split(',').map { it.trim() }.filter { it.isNotEmpty() }.take(200).toTypedArray()
-                stt?.start(mode, lang, words)
+                stt?.start(mode, lang, words, single)
             }
         }
 
         @JavascriptInterface fun sttStop() { runOnUiThread { stt?.stop() } }
+
+        /**
+         * Puts the audio stack into (or out of) voice-communication mode for a call.
+         * In MODE_IN_COMMUNICATION the platform enables its own echo canceller and noise
+         * suppressor for the microphone, which is what makes barge-in workable: without it the
+         * agent's TTS leaked into the recogniser and every reply looked like user speech.
+         */
+        @JavascriptInterface fun callAudio(on: Boolean) {
+            runOnUiThread {
+                try {
+                    val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                    if (on) {
+                        @Suppress("DEPRECATION")
+                        am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                        am.isSpeakerphoneOn = true
+                    } else {
+                        am.isSpeakerphoneOn = false
+                        @Suppress("DEPRECATION")
+                        am.mode = android.media.AudioManager.MODE_NORMAL
+                    }
+                } catch (_: Exception) {}
+            }
+        }
 
         @JavascriptInterface fun sttAvailable(): Boolean = try { SpeechRecognizer.isRecognitionAvailable(this@MainActivity) } catch (_: Exception) { false }
 
