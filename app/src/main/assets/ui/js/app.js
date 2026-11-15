@@ -3,8 +3,6 @@ const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 let built=false,tab='chat',sideTab='term',T={},P={},B={},SP={},SB={};
 const wide=()=>innerWidth>=820;
 
-O.tr=(en,ru)=>(O.store.get('lang','ru')==='en'?en:ru);
-
 function build(){
   if(built)return;built=true;
   const app=O.$('#app');

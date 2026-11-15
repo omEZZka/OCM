@@ -563,7 +563,11 @@ const probeModels=async(url,key,patchHeaders)=>{
   Object.assign(hd,patchHeaders||{});
   let json=null;
   // Native first: the WebView origin is https, so a direct fetch to a provider is blocked by CORS.
-  const nat=O.native.netGet?O.native.netGet(target,hd,20000):null;
+  // The async bridge keeps the WebView responsive while the provider answers (a synchronous bridge
+  // call froze every animation and handler for the whole request).
+  const nat=O.native.netGetAsync
+    ?await O.native.netGetAsync(target,hd,20000)
+    :(O.native.netGet?O.native.netGet(target,hd,20000):null);
   if(nat&&nat.ok&&nat.body){
     try{json=JSON.parse(nat.body)}catch(_){json=null}
   }
@@ -1016,7 +1020,9 @@ O.openCustomProvider=parentSheet=>{
       }
       // Native bridge first: a WebView fetch to a third-party host is blocked by CORS.
       let json=null;
-      const nat=O.native.netGet?O.native.netGet(target,hd,20000):null;
+      const nat=O.native.netGetAsync
+        ?await O.native.netGetAsync(target,hd,20000)
+        :(O.native.netGet?O.native.netGet(target,hd,20000):null);
       if(nat&&nat.ok&&nat.body){try{json=JSON.parse(nat.body)}catch(_){json=null}}
       if(!json){
         const resp=await fetch(target,{method:'GET',headers:hd});

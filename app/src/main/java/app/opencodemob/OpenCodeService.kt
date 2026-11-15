@@ -95,6 +95,19 @@ class OpenCodeService : Service() {
             } catch (_: Exception) { "" }
             ServerState.error = "Не удалось запустить сервер OpenCode" + (if (logTail.isNotEmpty()) ":\n$logTail" else "")
         }
+        // Giving up must not leave a wake lock behind for days: that drained the battery after every
+        // failed start. stopSelf() also suppresses the START_STICKY restart, which would otherwise
+        // loop the same failing start forever; the UI's "start" button launches a fresh instance.
+        if (!stopping) {
+            ServerState.ready = false
+            ServerState.phase = "down"
+            try { ProxyShim.stop() } catch (_: Exception) {}
+            try { wake?.release() } catch (_: Exception) {}
+            wake = null
+            Notifier.updateRuntime(this, "Остановлен: " + (ServerState.error ?: "ошибка запуска").lineSequence().first())
+            ServerTileService.sync(this)
+            stopSelf()
+        }
     }
 
     @Volatile private var watcherGen = 0

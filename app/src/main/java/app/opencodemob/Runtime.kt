@@ -133,6 +133,9 @@ object Runtime {
         md.digest().joinToString("") { "%02x".format(it) }
     } catch (_: Exception) { "" }
 
+    // Serialised: the UI can start an install and a "reset and reinstall" at the same time; both
+    // share rootfs.new and swap rootfs, so concurrent runs corrupted each other's extraction.
+    @Synchronized
     fun install(c: Context, progress: (Int) -> Unit) {
         val id = assetId(c)
         // Verify the archive before touching the old environment. A truncated APK download (very

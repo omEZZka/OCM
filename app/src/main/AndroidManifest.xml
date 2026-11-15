@@ -81,6 +81,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Sandboxed viewer for generated project previews: a separate WebView with no OC bridge -->
+        <activity
+            android:name=".PreviewActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|uiMode|density|fontScale"
+            android:hardwareAccelerated="true" />
+
         <service
             android:name=".ServerTileService"
             android:exported="true"

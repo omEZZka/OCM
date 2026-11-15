@@ -32,8 +32,43 @@ const slug=s=>String(s||'').toLowerCase().replace(/[^a-zа-я0-9]+/gi,'-').repla
 const stamp=()=>new Date().toISOString().replace(/[-:T]/g,'').slice(0,14);
 
 // ---- provider storage ----
-O.mediaProviders=()=>O.store.get('mediaProviders',[]);
-O.saveMediaProviders=list=>{O.store.set('mediaProviders',(list||[]).slice(0,40));bus.emit('media')};
+// Keys never go to localStorage: each provider key lives in the Keystore-backed secure store, the
+// localStorage record only keeps the non-secret fields plus an `hasKey` marker.
+O.mediaProviders=()=>{
+  const stored=O.store.get('mediaProviders',[]);
+  const list=Array.isArray(stored)?stored:[];
+  let migrated=false;
+  const out=list.map(p=>{
+    if(!p||typeof p!=='object')return p;
+    const rec=Object.assign({},p);
+    if(rec.apiKey){
+      // legacy plaintext record: move the key into the secure store once, but keep it in memory
+      // for this call (a queued job may use it right away)
+      if(O.native.securePut('media.provider.'+rec.id,rec.apiKey)){migrated=true;rec.hasKey=true}
+    }else if(rec.id&&rec.hasKey){
+      rec.apiKey=O.native.secureGet('media.provider.'+rec.id)
+    }
+    return rec;
+  });
+  if(migrated)O.store.set('mediaProviders',out.map(p=>{const c=Object.assign({},p);delete c.apiKey;return c}));
+  return out;
+};
+O.saveMediaProviders=list=>{
+  const stored=[];
+  const keep=new Set();
+  for(const p of (list||[]).slice(0,40)){
+    if(!p||!p.id)continue;
+    keep.add(p.id);
+    const copy=Object.assign({},p);
+    if(copy.apiKey)copy.hasKey=true;else delete copy.hasKey;
+    if(copy.apiKey&&!O.native.securePut('media.provider.'+copy.id,copy.apiKey))throw new Error(O.tr('Could not store the API key securely','Не удалось безопасно сохранить API-ключ'));
+    delete copy.apiKey;
+    stored.push(copy);
+  }
+  // A deleted provider must not leave its key behind in the Keystore store.
+  try{for(const p of O.store.get('mediaProviders',[]))if(p&&p.id&&!keep.has(p.id))O.native.secureRemove('media.provider.'+p.id)}catch(_){}
+  O.store.set('mediaProviders',stored);bus.emit('media')
+};
 O.mediaProvider=id=>O.mediaProviders().find(p=>p.id===id)||null;
 O.mediaProvidersOf=kind=>O.mediaProviders().filter(p=>p.kind===kind);
 
@@ -48,32 +83,14 @@ const pushHistory=entry=>{
   bus.emit('media');
 };
 
-// ---- prompt translation ----
-// Providers understand English prompts far better. The setting is explicit so nothing is sent
-// through a translator without the user knowing.
-O.mediaPromptLang=()=>O.store.get('media.promptLang','auto');
-O.setMediaPromptLang=v=>{O.store.set('media.promptLang',v||'auto');bus.emit('media')};
-
-const translateToEnglish=async text=>{
-  const t=String(text||'');
-  if(!/[а-яё]/i.test(t))return t;
-  if(O.mediaPromptLang()!=='auto')return t;
-  try{
-    const sid=S.sid;
-    if(!sid||!S.model)return t;
-    const r=await O.api('POST','/session/'+sid+'/prompt_async',{
-      messageID:O.mid(),
-      agent:S.agent,
-      model:S.model,
-      parts:[{type:'text',text:'Translate this image prompt to English. Reply with the translation only, no quotes, no explanations:\n\n'+t}]
-    },{timeout:30000});
-    return t; // the real translation arrives as a message; we keep the original to stay deterministic
-  }catch(_){return t}
-};
+// ---- prompt language ----
+// The old "auto-translate" toggle never translated anything (the helper below just posted a
+// prompt into the user's chat and returned the original text), so the switch only promised a
+// feature that did not exist. Prompts are now sent exactly as typed, and the setting is gone.
 
 // ---- request building ----
 const KIND_CFG={
-  image:{path:'/images/generations',body:p=>({model:p.model,prompt:p.prompt,n:p.n||1,size:p.size||'1024x1024',response_format:'b64_json'})},
+  image:{path:'/images/generations',body:p=>({model:p.model,prompt:p.prompt,n:Number(p.n)||1,size:p.size||'1024x1024',response_format:'b64_json'})},
   video:{path:'/videos/generations',body:p=>({model:p.model,prompt:p.prompt,duration:clamp(p.duration||5,1,60),size:p.size||'1280x720'})},
   tts:{path:'/audio/speech',body:p=>({model:p.model,input:p.prompt,voice:p.voice||'alloy',response_format:p.format||'mp3'})},
   voice:{path:'/audio/voices',body:p=>({name:p.name||('voice-'+stamp()),samples:p.samples||[]})},
@@ -81,10 +98,8 @@ const KIND_CFG={
 };
 const EXT={image:'png',video:'mp4',tts:'mp3',voice:'json',music:'mp3'};
 
-const guessUrl=p=>{
-  const b=String(p.baseURL||'').replace(/\/+$/,'');
-  return b;
-};
+const guessUrl=p=>String(p.baseURL||'').replace(/\/+$/,'');
+const hostOf=url=>{try{return new URL(url).host.toLowerCase()}catch(_){return''}};
 
 // ---- queue ----
 let seq=0;
@@ -130,7 +145,8 @@ async function runJob(job){
     else headers['Authorization']='Bearer '+prov.apiKey;
   }
   try{
-    const r=O.native.netPostToFile(url,headers,JSON.stringify(body),dest,job.kind==='video'?600000:240000);
+    // Async: a blocking bridge call froze the whole WebView (queue, tabs) until the provider answered.
+    const r=await (O.native.netPostToFileAsync||O.native.netPostToFile)(url,headers,JSON.stringify(body),dest,job.kind==='video'?600000:240000);
     if(!r||!r.ok)throw new Error((r&&r.err)||('HTTP '+(r&&r.status)));
     if(r.json){
       // JSON handshake: find a URL or inline base64
@@ -139,7 +155,11 @@ async function runJob(job){
       const urlFound=findMediaUrl(data);
       const b64=findBase64(data);
       if(urlFound){
-        const d2=O.native.netDownloadToFile(urlFound,headers,dest,240000);
+        // Never forward provider credentials to a third-party CDN host: the signed URL is enough,
+        // and sending the key there leaked it to anyone able to answer the API call.
+        const sameHost=hostOf(urlFound)===hostOf(url);
+        const dlHeaders=sameHost?headers:Object.assign({},{'Content-Type':'application/json'});
+        const d2=await (O.native.netDownloadToFileAsync||O.native.netDownloadToFile)(urlFound,dlHeaders,dest,240000);
         if(!d2||!d2.ok)throw new Error(d2&&d2.err||O.tr('Download failed','Не удалось скачать файл'));
         job.path=d2.path||dest;
       }else if(b64){
@@ -313,8 +333,11 @@ function drawGenerator(pane,kind){
   const improveBtn=h('button',{class:'chip',onclick:async()=>{
     const cur=promptTa.value.trim();
     if(!cur)return O.toast(O.tr('Type a prompt first','Сначала введите запрос'),2000);
-    promptTa.value=cur;
-    O.toast(O.tr('Ask the agent to improve this prompt in the chat','Попросите агента улучшить промпт в чате'),2500);
+    // The old handler just re-assigned the same text and showed a toast: it never did anything.
+    // Hand the prompt to the agent in the chat and switch there, so the user can send it.
+    O.insertText(O.tr('Improve this generation prompt, keep it one paragraph, reply with the prompt only:\n\n','Улучши этот промпт для генерации, оставь один абзац, ответь только промптом:\n\n')+cur);
+    O.setTab('chat');
+    O.toast(O.tr('Prompt copied to the chat','Промпт перенесён в чат'),2000);
   }},O.icon('bulb'),O.tr('Improve prompt','Улучшить промпт'));
 
   const genBtn=h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:()=>{
@@ -385,7 +408,12 @@ function drawHistory(pane){
   });
   pane.append(h('div',{class:'media-history-head'},
     h('b',{class:'grow'},O.mediaHistory().length+' '+O.tr('items','элементов')),
-    h('button',{class:'ibtn s',onclick:()=>{if(confirm(O.tr('Clear history?','Очистить историю?'))){O.store.set('mediaHistory',[]);bus.emit('media')}}},O.icon('trash'))),grid);
+    h('button',{class:'ibtn s',onclick:async()=>{
+      // window.confirm() is silently false in a WebView without onJsConfirm, so the old call
+      // never cleared anything.
+      if(!await O.confirm(O.tr('Clear history?','Очистить историю?'),O.tr('Only the list is cleared, files stay on disk.','Очищается только список, файлы остаются на диске.'),O.tr('Clear','Очистить'),true))return;
+      O.store.set('mediaHistory',[]);bus.emit('media');
+    }},O.icon('trash'))),grid);
 }
 O.mediaItemActions=it=>{
   O.actions(O.basename(it.path),[
@@ -404,10 +432,22 @@ O.openMediaProvider=(existing,kind)=>{
   const s=O.sheet(existing?O.tr('Edit provider','Изменить провайдера'):O.tr('New media provider','Новый медиа-провайдер'),body,{full:true});
   const idInp=h('input',{value:p.id,placeholder:'id (латиница)'});
   const nameInp=h('input',{value:p.name,placeholder:O.tr('Display name','Название')});
-  const kindSel=h('div',{class:'seg'},[['image','Фото'],['video','Видео'],['tts','Голос'],['voice','Клон голоса'],['music','Музыка']].map(([k,l])=>
-    h('button',{class:p.kind===k?'on':'',onclick:e=>{p.kind=k;[...kindSel.children].forEach(b=>b.classList.remove('on'));e.currentTarget.classList.add('on')}},l)));
+  const kindSel=h('div',{class:'seg'},[['image','Фото'],['video','Видео'],['tts','Голос'],['music','Музыка']].map(([k,l])=>
+    h('button',{class:p.kind===k?'on':'',onclick:e=>{
+      if(pathInp&&String(pathInp.value||'').trim()){p.paths=Object.assign({},p.paths||{});p.paths[p.kind]=String(pathInp.value).trim()}
+      p.kind=k;[...kindSel.children].forEach(b=>b.classList.remove('on'));e.currentTarget.classList.add('on');
+      if(pathInp)pathInp.value=(p.paths&&p.paths[k])||'';
+    }},l)));
   const urlInp=h('input',{class:'mono',value:p.baseURL,placeholder:'https://api.example.com/v1'});
-  const keyInp=h('input',{type:'password',class:'mono',value:p.apiKey,placeholder:'API key'});
+  const pathInp=h('input',{class:'mono',value:(p.paths&&p.paths[p.kind])||'',placeholder:'/images/generations'});
+  const authStyle=(p.authStyle==='x-api-key')?'x-api-key':'bearer';
+  const authSel=h('div',{class:'seg'},[['bearer','Authorization: Bearer'],['x-api-key','x-api-key']].map(([k,l])=>
+    h('button',{class:authStyle===k?'on':'',onclick:e=>{p.authStyle=k;[...authSel.children].forEach(b=>b.classList.remove('on'));e.currentTarget.classList.add('on')}},l)));
+  const extraInp=h('textarea',{class:'mono',rows:3,placeholder:'{"quality":"hd"}'});
+  extraInp.value=p.extraBody?JSON.stringify(p.extraBody):'';
+  // A stored key is never echoed back into the field: an empty field means "keep the current key",
+  // so editing other settings cannot accidentally wipe it either.
+  const keyInp=h('input',{type:'password',class:'mono',value:'',placeholder:existing&&p.apiKey?O.tr('Key saved — leave empty to keep','Ключ сохранён — оставьте пустым, чтобы не менять'):'API key'});
   const modelsBox=h('div',{class:'fchips'});
   const status=h('div',{class:'mut s',style:{margin:'8px 0'}});
   const drawModels=()=>{
@@ -424,7 +464,8 @@ O.openMediaProvider=(existing,kind)=>{
     status.textContent=O.tr('Probing…','Проверяю…');
     const url=String(urlInp.value||'').replace(/\/+$/,'');
     if(!url)return status.textContent=O.tr('Base URL is required','Нужен Base URL');
-    const r=O.native.netGet(url+'/models',{'Authorization':'Bearer '+(keyInp.value||'')},20000);
+    const probeKey=String(keyInp.value||'').trim()||p.apiKey||'';
+    const r=await (O.native.netGetAsync?O.native.netGetAsync(url+'/models',{'Authorization':'Bearer '+probeKey},20000):Promise.resolve(O.native.netGet(url+'/models',{'Authorization':'Bearer '+probeKey},20000)));
     if(r&&r.ok&&r.body){
       try{
         const o=JSON.parse(r.body);
@@ -440,11 +481,22 @@ O.openMediaProvider=(existing,kind)=>{
     const id=String(idInp.value||'').trim().toLowerCase().replace(/[^a-z0-9_-]/g,'');
     if(!id)return O.toast(O.tr('Provider id is required','Нужен ID провайдера'),2500);
     if(!String(urlInp.value||'').trim())return O.toast(O.tr('Base URL is required','Нужен Base URL'),2500);
+    const paths=Object.assign({},p.paths||{});
+    const extraRaw=String(extraInp.value||'').trim();
+    let extraBody=null;
+    if(extraRaw){
+      try{extraBody=JSON.parse(extraRaw)}catch(_){return O.toast(O.tr('Extra body must be valid JSON','Доп. параметры должны быть корректным JSON'),3000)}
+      if(!extraBody||typeof extraBody!=='object'||Array.isArray(extraBody))return O.toast(O.tr('Extra body must be a JSON object','Доп. параметры должны быть JSON-объектом'),3000);
+    }
+    const pathValue=String(pathInp.value||'').trim();
+    if(pathValue)paths[p.kind]=pathValue;else delete paths[p.kind];
     const rec={id,name:String(nameInp.value||id),kind:p.kind,baseURL:String(urlInp.value||'').trim(),
-      apiKey:String(keyInp.value||'').trim(),models:(p.models||[]).slice(0,200),paths:p.paths||{},headers:p.headers||{}};
+      apiKey:(String(keyInp.value||'').trim()||(existing?p.apiKey:'')),models:(p.models||[]).slice(0,200),paths,
+      authStyle:p.authStyle==='x-api-key'?'x-api-key':'bearer',headers:p.headers||{}};
+    if(extraBody)rec.extraBody=extraBody;
     const list=O.mediaProviders().filter(x=>x.id!==id);
     list.push(rec);
-    O.saveMediaProviders(list);
+    try{O.saveMediaProviders(list)}catch(e){return O.toast(e.message||String(e),3500)}
     O.toast(O.tr('Saved','Сохранено'),1500);
     s.close();
   }},O.icon('check'),O.tr('Save','Сохранить'));
@@ -453,7 +505,10 @@ O.openMediaProvider=(existing,kind)=>{
     h('div',{class:'field'},h('label',null,O.tr('Name','Название')),nameInp),
     h('div',{class:'field'},h('label',null,O.tr('Kind','Тип')),kindSel),
     h('div',{class:'field'},h('label',null,O.tr('Base URL','Базовый адрес')),urlInp),
+    h('div',{class:'field'},h('label',null,O.tr('Request path','Путь запроса')),pathInp),
+    h('div',{class:'field'},h('label',null,O.tr('Auth header','Заголовок авторизации')),authSel),
     h('div',{class:'field'},h('label',null,O.tr('API key','API-ключ')),keyInp),
+    h('div',{class:'field'},h('label',null,O.tr('Extra JSON body','Доп. JSON в запросе')),extraInp),
     h('div',{class:'field'},h('label',null,O.tr('Models','Модели')),modelsBox),
     probe,status,save);
   if(existing)body.append(h('button',{class:'btn dng wide',style:{marginTop:'8px'},onclick:()=>{
@@ -476,8 +531,8 @@ O.openMediaSettings=()=>{
     body.append(O.listRow('folder',O.tr('Save folder','Папка сохранения'),O.mediaFolder(),O.icon('chevR'),()=>{
       O.browseDir(O.mediaFolder(),dir=>{O.setMediaFolder(dir);draw()});
     }));
-    body.append(O.listRow('globe',O.tr('Prompt language','Язык промптов'),O.mediaPromptLang()==='auto'?O.tr('Auto-translate to English','Авто-перевод на английский'):O.tr('As typed','Как введено'),O.icon('chevR'),()=>{
-      O.setMediaPromptLang(O.mediaPromptLang()==='auto'?'asis':'auto');draw();
+    body.append(O.listRow('globe',O.tr('Prompt language','Язык промптов'),O.tr('Sent as typed','Отправляется как введено'),O.icon('info'),()=>{
+      O.toast(O.tr('Prompts are sent to the provider exactly as you type them.','Промпт уходит провайдеру ровно так, как вы его написали.'),3000);
     }));
     body.append(h('div',{class:'grp',style:{marginTop:'14px'}},O.tr('Notifications','Уведомления')));
     body.append(O.toggleRow('bell',O.tr('Notify when media is ready','Уведомлять о готовности медиа'),

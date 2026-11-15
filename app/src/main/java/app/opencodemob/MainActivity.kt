@@ -109,6 +109,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Sets WebView debugging on debug builds only; a release WebView must not expose a DevTools socket. */
+    private fun applyWebViewSecurity(w: WebView) {
+        if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
+        w.settings.allowFileAccess = false
+        w.settings.allowContentAccess = false
+        w.settings.allowFileAccessFromFileURLs = false
+        w.settings.allowUniversalAccessFromFileURLs = false
+        w.settings.setGeolocationEnabled(false)
+        w.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        w.settings.javaScriptCanOpenWindowsAutomatically = false
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -147,6 +159,7 @@ class MainActivity : ComponentActivity() {
             settings.domStorageEnabled = true
             settings.allowFileAccess = false
             settings.setSupportZoom(false)
+            applyWebViewSecurity(this)
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(v: WebView, r: WebResourceRequest): WebResourceResponse? {
                     val url = r.url
@@ -174,37 +187,11 @@ class MainActivity : ComponentActivity() {
                         return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                     }
                     if (url.host == "appassets.androidplatform.net" && url.path?.startsWith("/_preview/") == true) {
-                        val relPath = url.path!!.removePrefix("/_preview/").ifEmpty { "index.html" }
-                        val previewDir = File(cacheDir, "preview")
-                        val file = File(previewDir, relPath)
-                        // keep the preview sandboxed: no ../ escapes out of the preview dir
-                        val inSandbox = try {
-                            file.canonicalPath.startsWith(previewDir.canonicalPath + File.separator)
-                        } catch (_: Exception) { false }
-                        if (inSandbox && file.exists() && file.isFile) {
-                            val mime = when (file.extension.lowercase()) {
-                                "html", "htm" -> "text/html"
-                                "css" -> "text/css"
-                                "js", "mjs" -> "application/javascript"
-                                "json" -> "application/json"
-                                "png" -> "image/png"
-                                "jpg", "jpeg" -> "image/jpeg"
-                                "svg" -> "image/svg+xml"
-                                "webp" -> "image/webp"
-                                "gif" -> "image/gif"
-                                "ico" -> "image/x-icon"
-                                "woff2" -> "font/woff2"
-                                "woff" -> "font/woff"
-                                "ttf" -> "font/ttf"
-                                else -> "application/octet-stream"
-                            }
-                            val headers = mapOf(
-                                "Access-Control-Allow-Origin" to "*",
-                                "Cache-Control" to "no-cache, no-store, must-revalidate",
-                                "Pragma" to "no-cache"
-                            )
-                            return WebResourceResponse(mime, "UTF-8", 200, "OK", headers, file.inputStream())
-                        }
+                        // Project previews no longer load inside this WebView at all: JavascriptInterface
+                        // is injected into every frame, so preview HTML served from this origin could
+                        // call the native bridge (files, keys, network). PreviewActivity serves the same
+                        // cache directory from its own bridge-less WebView.
+                        return WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                     }
                     return loader.shouldInterceptRequest(r.url)
                 }
@@ -1422,6 +1409,36 @@ class MainActivity : ComponentActivity() {
             JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString()
         }
 
+        /**
+         * Async variants of the three media transfers above. A synchronous @JavascriptInterface
+         * call runs on the WebView JS thread, so one 10-minute video generation blocked the whole
+         * UI (no repaint, no taps) until the provider answered. These return immediately and report
+         * through the "mediaNet" event; the UI awaits a promise keyed by id.
+         */
+        @JavascriptInterface fun netGetAsync(id: String, url: String, headersJson: String, timeoutMs: Int) {
+            thread {
+                val result = try { netGet(url, headersJson, timeoutMs) }
+                catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString() }
+                emit("mediaNet", JSONObject().put("id", id).put("result", result))
+            }
+        }
+
+        @JavascriptInterface fun netPostToFileAsync(id: String, url: String, headersJson: String, body: String, destPath: String, timeoutMs: Int) {
+            thread {
+                val result = try { netPostToFile(url, headersJson, body, destPath, timeoutMs) }
+                catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString() }
+                emit("mediaNet", JSONObject().put("id", id).put("result", result))
+            }
+        }
+
+        @JavascriptInterface fun netDownloadToFileAsync(id: String, url: String, headersJson: String, destPath: String, timeoutMs: Int) {
+            thread {
+                val result = try { netDownloadToFile(url, headersJson, destPath, timeoutMs) }
+                catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString() }
+                emit("mediaNet", JSONObject().put("id", id).put("result", result))
+            }
+        }
+
         /** Writes a data: URL (base64) straight to a file — used when the model returns inline bytes. */
         @JavascriptInterface fun writeDataUrlToFile(dataUrl: String, destPath: String): String {
             return try {
@@ -1764,6 +1781,22 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface fun openApp(target: String): Boolean = this@MainActivity.launchApp(target)
 
         @JavascriptInterface fun preparePreview(path: String): String = this@MainActivity.prepareWebPreview(path)
+
+        /**
+         * Opens a prepared preview in its own sandboxed WebView (no OC bridge). Serving preview
+         * HTML from the appassets origin inside an iframe leaked the native bridge to arbitrary
+         * project code, which could then read files and stored keys.
+         */
+        @JavascriptInterface fun openPreviewWindow(url: String, title: String): Boolean = try {
+            if (!url.startsWith("https://appassets.androidplatform.net/_preview/")) false
+            else {
+                runOnUiThread {
+                    startActivity(Intent(this@MainActivity, PreviewActivity::class.java)
+                        .putExtra("url", url).putExtra("title", title))
+                }
+                true
+            }
+        } catch (_: Exception) { false }
 
         // --- OTA ---
         @JavascriptInterface fun checkUpdates() {

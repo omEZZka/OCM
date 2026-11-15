@@ -252,7 +252,12 @@ object ProxyShim {
                 var score = 0
                 if (key.isNotEmpty() && bearer.isNotEmpty() && key == bearer) score = 3
                 else if (key.isNotEmpty() && bearer.contains(key)) score = 2
+                // A provider with a stored key may only be used when the caller proved it knows that
+                // key. Matching by model name alone let any local app that guessed a model name run
+                // requests on the user's paid account. Keyless providers carry no secret, so they
+                // stay reachable by model name.
                 if (score < 2) {
+                    if (key.isNotEmpty()) continue
                     val models = p.optJSONObject("models")
                     if (models != null && models.has(model)) score = 1
                 }
@@ -674,6 +679,9 @@ object ProxyShim {
     }
 
     private fun readBody(input: InputStream, headers: Map<String, String>): String {
+        // Hard cap: the listener is unauthenticated on loopback, so an arbitrary Content-Length
+        // (or chunk size) used to be able to allocate gigabytes and kill the app.
+        val max = 32 * 1024 * 1024
         val te = headers["transfer-encoding"] ?: ""
         if (te.contains("chunked", true)) {
             val sb = StringBuilder()
@@ -681,6 +689,7 @@ object ProxyShim {
                 val sizeLine = readLine(input) ?: break
                 val n = sizeLine.trim().substringBefore(';').toIntOrNull(16) ?: break
                 if (n == 0) { readLine(input); break }
+                if (n < 0 || sb.length + n > max) break
                 val buf = ByteArray(n)
                 var off = 0
                 while (off < n) {
@@ -693,7 +702,8 @@ object ProxyShim {
             }
             return sb.toString()
         }
-        val len = headers["content-length"]?.toIntOrNull() ?: return ""
+        val rawLen = headers["content-length"]?.toIntOrNull() ?: return ""
+        val len = rawLen.coerceIn(0, max)
         if (len <= 0) return ""
         val buf = ByteArray(len)
         var off = 0

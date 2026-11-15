@@ -71,32 +71,49 @@ object Backup {
     }
 
     fun restoreZip(src: File, home: File, password: String) {
-        FileInputStream(src).use { fis ->
-            val magic = ByteArray(5)
-            if (fis.read(magic) != 5 || String(magic) != "OCMB1") throw IllegalArgumentException("not an OCM backup")
-            val salt = ByteArray(16); if (fis.read(salt) != 16) throw IllegalArgumentException("corrupt backup")
-            val iv = ByteArray(12); if (fis.read(iv) != 12) throw IllegalArgumentException("corrupt backup")
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, deriveKey(password, salt), GCMParameterSpec(128, iv))
-            CipherInputStream(fis, cipher).use { cis ->
-                ZipInputStream(cis).use { zis ->
-                    var e = zis.nextEntry
-                    while (e != null) {
-                        val name = e.name
-                        if (name.startsWith("/") || name.contains("..")) {
-                            zis.closeEntry(); e = zis.nextEntry; continue
+        // Extract into a staging directory first: AES-GCM only proves authenticity when the stream
+        // reaches its end, so decrypting straight into HOME used to leave a half-restored profile
+        // behind when the password was wrong or the file was truncated.
+        val staging = File(home.parentFile, home.name + ".restore-" + System.currentTimeMillis())
+        try {
+            staging.mkdirs()
+            FileInputStream(src).use { fis ->
+                val magic = ByteArray(5)
+                if (fis.read(magic) != 5 || String(magic) != "OCMB1") throw IllegalArgumentException("not an OCM backup")
+                val salt = ByteArray(16); if (fis.read(salt) != 16) throw IllegalArgumentException("corrupt backup")
+                val iv = ByteArray(12); if (fis.read(iv) != 12) throw IllegalArgumentException("corrupt backup")
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, deriveKey(password, salt), GCMParameterSpec(128, iv))
+                CipherInputStream(fis, cipher).use { cis ->
+                    ZipInputStream(cis).use { zis ->
+                        var e = zis.nextEntry
+                        while (e != null) {
+                            val name = e.name
+                            if (name.startsWith("/") || name.contains("..")) {
+                                zis.closeEntry(); e = zis.nextEntry; continue
+                            }
+                            val dest = File(staging, name)
+                            if (!dest.canonicalPath.startsWith(staging.canonicalPath + File.separator)) {
+                                zis.closeEntry(); e = zis.nextEntry; continue
+                            }
+                            dest.parentFile?.mkdirs()
+                            FileOutputStream(dest).use { zis.copyTo(it) }
+                            zis.closeEntry()
+                            e = zis.nextEntry
                         }
-                        val dest = File(home, name)
-                        if (!dest.canonicalPath.startsWith(home.canonicalPath + File.separator)) {
-                            zis.closeEntry(); e = zis.nextEntry; continue
-                        }
-                        dest.parentFile?.mkdirs()
-                        FileOutputStream(dest).use { zis.copyTo(it) }
-                        zis.closeEntry()
-                        e = zis.nextEntry
                     }
                 }
             }
+            // Fully authenticated by now: merge the staged tree into the live profile.
+            staging.walkTopDown().forEach { f ->
+                if (!f.isFile) return@forEach
+                val rel = f.relativeTo(staging).path
+                val dest = File(home, rel)
+                dest.parentFile?.mkdirs()
+                f.copyTo(dest, overwrite = true)
+            }
+        } finally {
+            try { staging.deleteRecursively() } catch (_: Exception) {}
         }
     }
 

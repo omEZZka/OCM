@@ -44,14 +44,60 @@ for f in sorted(os.listdir(UI)):
         if m in src:
             fail.append(f'{f} contains a leftover marker {m}')
 
-# 4. quick brace balance on Kotlin files (syntax accidents)
+# 4. quick brace balance on Kotlin files (syntax accidents). String literals, char literals and
+# comments are stripped first: the preview builder embeds raw HTML/CSS that contains braces, and a
+# naive count reported every such file as broken.
+def strip_kotlin(text):
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if text.startswith('"""', i):
+            j = text.find('"""', i + 3)
+            i = n if j < 0 else j + 3
+            out.append('""')
+            continue
+        if c == '"':
+            i += 1
+            while i < n:
+                if text[i] == '\\':
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            out.append('""')
+            continue
+        if c == "'":
+            i += 1
+            while i < n:
+                if text[i] == '\\':
+                    i += 2
+                    continue
+                if text[i] == "'":
+                    i += 1
+                    break
+                i += 1
+            out.append("''")
+            continue
+        if text.startswith('//', i):
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+            continue
+        if text.startswith('/*', i):
+            j = text.find('*/', i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
 for f in sorted(os.listdir(os.path.dirname(KT))):
     if not f.endswith('.kt'): continue
-    src = open(os.path.join(os.path.dirname(KT), f), encoding='utf-8').read()
-    if src.count('{') != src.count('}'):
-        fail.append(f'{f}: unbalanced braces {{ {src.count("{")} }} {src.count("}")}')
-    if src.count('"') % 2:
-        fail.append(f'{f}: odd number of double quotes')
+    src = strip_kotlin(open(os.path.join(os.path.dirname(KT), f), encoding='utf-8').read())
+    for open_ch, close_ch, label in (('{', '}', 'braces'), ('(', ')', 'parens'), ('[', ']', 'brackets')):
+        if src.count(open_ch) != src.count(close_ch):
+            fail.append(f'{f}: unbalanced {label} {src.count(open_ch)} vs {src.count(close_ch)}')
 
 print(f'bridge methods used by UI: {len(used)}; @JavascriptInterface in Kotlin: {len(kt_methods)}')
 if fail:

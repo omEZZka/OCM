@@ -131,13 +131,21 @@ object MediaServer {
                 }
                 val req = try { JSONObject(String(buf, 0, read)) } catch (_: Exception) { JSONObject() }
                 val id = "media-" + System.currentTimeMillis().toString(36)
-                var answered = false
-                pending[id] = { res -> answered = true; reply(200, res.toString()) }
+                // The callback runs on the UI/emit thread while this thread polls: a plain Boolean
+                // gave no visibility guarantee and could time out a request that was answered.
+                val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+                val done = java.util.concurrent.atomic.AtomicBoolean(false)
+                pending[id] = { res ->
+                    if (done.compareAndSet(false, true)) {
+                        answered.set(true)
+                        reply(200, res.toString())
+                    }
+                }
                 emit("mediaRequest", JSONObject().put("id", id).put("kind", req.optString("kind", "image"))
                     .put("prompt", req.optString("prompt", "")).put("model", req.optString("model", "")))
                 val deadline = System.currentTimeMillis() + 890_000
-                while (!answered && System.currentTimeMillis() < deadline) Thread.sleep(200)
-                if (!answered) {
+                while (!answered.get() && System.currentTimeMillis() < deadline) Thread.sleep(200)
+                if (!answered.get() && done.compareAndSet(false, true)) {
                     pending.remove(id)
                     reply(504, JSONObject().put("ok", false).put("err", "timeout").toString())
                 }

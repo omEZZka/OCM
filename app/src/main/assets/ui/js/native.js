@@ -1,9 +1,11 @@
 (function(){
 const O=window.OCM;
-const pend=new Map();let seq=0;const L={};
+const pend=new Map();let seq=0;const mediaPend=new Map();let mediaSeq=0;const L={};
 O.on=(n,f)=>{(L[n]=L[n]||[]).push(f);return()=>O.off(n,f)};
 O.off=(n,f)=>{const a=L[n];if(!a)return;const i=a.indexOf(f);if(i>=0)a.splice(i,1)};
-window.OCEvent=(n,d)=>{if(n==='http'){finishHttp(d);return}(L[n]||[]).forEach(f=>{try{f(d)}catch(e){console.error(n,e)}})};
+window.OCEvent=(n,d)=>{if(n==='http'){finishHttp(d);return}
+  if(n==='mediaNet'){finishMediaNet(d);return}
+  (L[n]||[]).forEach(f=>{try{f(d)}catch(e){console.error(n,e)}})};
 O.dir='';
 // ---- read-only request cache (opt-in) ----
 // Read-only endpoints get polled from several places at once (status bar, file tree, diffs).
@@ -52,10 +54,21 @@ function rawApi(method,path,body,opt){opt=opt||{};
 async function finishHttp(d){const p=pend.get(d.id);if(!p)return;pend.delete(d.id);clearTimeout(p.timer);
   if(d.err){p.rej(Object.assign(new Error(d.err),{status:0,net:true}));return}
   let text=d.body||'';
-  if(d.file){try{text=await(await fetch('/_resp/'+d.id)).text()}catch(e){p.rej(e);return}finally{try{OC.drop(d.id)}catch{}}}
-  let data=text;if(!p.raw&&text&&(d.ct||'').includes('json')){try{data=JSON.parse(text)}catch{}}
-  if(d.status>=200&&d.status<300)p.res(data);
-  else p.rej(Object.assign(new Error((data&&data.data&&data.data.message)||(data&&data.message)||(typeof data==='string'&&data.slice(0,200))||('HTTP '+d.status)),{status:d.status,data}))}
+  if(d.file){fetch('/_resp/'+d.id).then(r=>r.text()).then(v=>resolve(v)).catch(reject).finally(()=>{try{OC.drop(d.id)}catch{}})}else resolve(text);
+  function resolve(v){let data=v;if(!p.raw&&v&&(d.ct||'').includes('json')){try{data=JSON.parse(v)}catch{}}
+    if(d.status>=200&&d.status<300)p.res(data);
+    else p.rej(Object.assign(new Error((data&&data.data&&data.data.message)||(data&&data.message)||(typeof data==='string'&&data.slice(0,200))||('HTTP '+d.status)),{status:d.status,data}))}
+  function reject(e){p.rej(e)}
+}
+function finishMediaNet(d){const p=mediaPend.get(d.id);if(!p)return;mediaPend.delete(d.id);clearTimeout(p.timer);
+  try{const r=JSON.parse(d.result||'{}');if(r.ok)p.res(r);else p.rej(Object.assign(new Error(r.err||('HTTP '+(r.status||0))),{status:r.status||0,data:r}))}
+  catch(e){p.rej(e)}}
+function mediaRequest(method,args,timeout){return new Promise((res,rej)=>{
+  const id='m'+(++mediaSeq)+'_'+Date.now().toString(36);
+  const timer=setTimeout(()=>{if(mediaPend.delete(id))rej(Object.assign(new Error('timeout'),{net:true}))},timeout+10000);
+  mediaPend.set(id,{res,rej,timer});
+  try{OC[method](id,...args)}catch(e){clearTimeout(timer);mediaPend.delete(id);rej(e)}
+})}
 // native helpers (sync, local)
 const j=s=>{try{return JSON.parse(s)}catch{return null}};
 O.native={
@@ -67,6 +80,7 @@ O.native={
   copy:t=>{try{OC.copy(t);O.toastQuiet('Скопировано')}catch{}},share:t=>OC.share(t),open:u=>OC.openLink(u),
   openApp:t=>(window.OC&&OC.openApp?OC.openApp(t):false),
   preparePreview:p=>(window.OC&&OC.preparePreview?OC.preparePreview(p):''),
+  openPreviewWindow:(u,t)=>{try{return !!(window.OC&&OC.openPreviewWindow&&OC.openPreviewWindow(u,t||''))}catch(_){return false}},
   notify:(kind,title,text)=>{try{if(window.OC&&OC.notify)OC.notify(kind,title,text)}catch(_){}},
   autoBackupState:()=>{try{return j(OC.autoBackupState())||{}}catch(_){return{}}},
   autoBackupConfigure:(enabled,hours,password)=>{try{return j(OC.autoBackupConfigure(enabled,hours,password))||{ok:false}}catch(_){return{ok:false}}},
@@ -84,9 +98,14 @@ O.native={
   sttAvailable:()=>{try{return !!OC.sttAvailable()}catch(_){return false}},
   callAudio:on=>{try{OC.callAudio(!!on)}catch(_){}},
   netGet:(url,headers,timeout)=>{try{return j(OC.netGet(url,JSON.stringify(headers||{}),timeout||20000))||{ok:false,err:'bridge failed'}}catch(e){return{ok:false,err:String(e)}}},
+  netGetAsync:(url,headers,timeout)=>mediaRequest('netGetAsync',[url,JSON.stringify(headers||{}),timeout||20000],timeout||20000),
   // Media bridge: binary-safe transfers that would otherwise need base64 through the WebView.
+  // Async variants: a synchronous @JavascriptInterface call blocks the WebView JS thread for the
+  // whole transfer (seconds to minutes), which froze the queue and every other UI handler.
   netPostToFile:(url,headers,body,dest,timeout)=>{try{return j(OC.netPostToFile(url,JSON.stringify(headers||{}),body||'',dest,timeout||180000))||{ok:false}}catch(e){return{ok:false,err:String(e)}}},
   netDownloadToFile:(url,headers,dest,timeout)=>{try{return j(OC.netDownloadToFile(url,JSON.stringify(headers||{}),dest,timeout||180000))||{ok:false}}catch(e){return{ok:false,err:String(e)}}},
+  netPostToFileAsync:(url,headers,body,dest,timeout)=>mediaRequest('netPostToFileAsync',[url,JSON.stringify(headers||{}),body||'',dest,timeout||180000],timeout||180000),
+  netDownloadToFileAsync:(url,headers,dest,timeout)=>mediaRequest('netDownloadToFileAsync',[url,JSON.stringify(headers||{}),dest,timeout||180000],timeout||180000),
   writeDataUrlToFile:(data,dest)=>{try{return j(OC.writeDataUrlToFile(data,dest))||{ok:false}}catch(e){return{ok:false,err:String(e)}}},
   notifyMedia:(title,text)=>{try{OC.notifyMedia(title||'',text||'')}catch(_){}},
   mediaServerStart:()=>{try{OC.mediaServerStart()}catch(_){}},

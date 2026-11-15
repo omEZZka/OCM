@@ -47,7 +47,17 @@ window.OC={
  ls:p=>JSON.stringify({ok:true,path:p,items:[{name:'app',dir:true},{name:'notes.txt',dir:false}]}),fs:()=>JSON.stringify({ok:true}),readText:()=>JSON.stringify({ok:true,text:'abc'}),writeText:()=>JSON.stringify({ok:true}),
  cfgRead:()=>window.__cfg||'{\n // comment\n "plugin":["a"],\n "mcp":{"ctx7":{"type":"remote","url":"https://m.example/mcp","enabled":true}}\n}',cfgWrite(t){window.__cfg=t;return JSON.stringify({ok:true})},readLog:()=>'log line',
  pickFile(k,d){window.__picked=[k,d]},shimUrl:()=>'',backupProfile:()=>JSON.stringify({ok:false,err:'mock'}),restoreProfile:()=>JSON.stringify({ok:false,err:'mock'}),copy(t){window.__copied=t},pasteText:()=>'pasted',share(t){window.__shared=t},openLink(u){window.__opened=u},
-  openApp(t){return true},preparePreview(p){return ''},startVoiceInput(l){},notify(k,t,x){window.__notified=[k,t,x]},
+  openApp(t){return true},preparePreview(p){return ''},openPreviewWindow(u,t){window.__previewWindow=[u,t];return true},startVoiceInput(l){},notify(k,t,x){window.__notified=[k,t,x]},
+ netGet(u,h,t){return JSON.stringify({ok:true,status:200,body:'{"data":[]}'})},netGetAsync(u,h,t){return Promise.resolve({ok:true,status:200,body:'{"data":[]}'})},
+ netPostToFile(){return JSON.stringify({ok:true,path:'/root/media/x.png'})},netPostToFileAsync(){return Promise.resolve({ok:true,path:'/root/media/x.png'})},
+ netDownloadToFile(){return JSON.stringify({ok:true,path:'/root/media/x.png'})},netDownloadToFileAsync(){return Promise.resolve({ok:true,path:'/root/media/x.png'})},
+ writeDataUrlToFile(){return JSON.stringify({ok:true,path:'/root/media/x.png'})},notifyMedia(){},mediaServerStart(){},mediaServerStop(){},mediaAnswer(){},
+ securePut(){return true},secureGet(){return ''},secureRemove(){return true},secureImportLegacy(){return true},
+ autoBackupState(){return JSON.stringify({enabled:false,intervalHours:'24',hasPassword:false})},autoBackupConfigure(){return JSON.stringify({ok:true})},autoBackupNow(){return JSON.stringify({ok:true,path:'/sdcard/Download/x.ocmbak',size:1})},
+ diagnostic:0,diagnose(){return JSON.stringify({ready:true,port:4096,tcp:true,healthCode:200})},gitRun(){return JSON.stringify({ok:true,out:''})},
+ checkpointCreate(){return JSON.stringify({ok:true,queued:true})},checkpointList(){return JSON.stringify({ok:true,items:[]})},checkpointRestore(){return JSON.stringify({ok:true})},
+ startOverlay(){},stopOverlay(){},overlayState(){return JSON.stringify({allowed:false,running:false})},setOverlayState(){},
+ sttStart(){},sttStop(){},sttAvailable(){return true},callAudio(){},ttsInit(){},ttsSpeak(){},ttsStop(){},ttsConfigure(){},ttsVoices(){return '[]'},
  checkUpdates(){setTimeout(()=>OCEvent('update',{core:'v1.18.6'}),5)},applyAppUpdate(){},applyCoreUpdate(){}
 };
 window.__onPrompt=b=>{const sid='ses_1';const P=(part)=>__push({type:'message.part.updated',properties:{part:Object.assign({sessionID:sid},part)}});

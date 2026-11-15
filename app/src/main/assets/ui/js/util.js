@@ -12,6 +12,10 @@ const h=O.h=function(tag,props,...kids){
   for(const c of kids.flat(Infinity)){if(c==null||c===false)continue;e.append(c.nodeType?c:document.createTextNode(String(c)))}
   return e};
 O.esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Localisation helper lives here, not in app.js: modules loaded before app.js (media.js builds its
+// tab table at load time) called O.tr while it was still undefined, which threw during script
+// evaluation and silently left those modules half-defined.
+O.tr=(en,ru)=>(O.store.get('lang','ru')==='en'?en:ru);
 O.basename=p=>String(p||'').replace(/\/+$/,'').split('/').pop();
 O.dirname=p=>{p=String(p||'').replace(/\/+$/,'');const i=p.lastIndexOf('/');return i<0?'.':i===0?'/':p.slice(0,i)};
 O.ext=p=>{const b=O.basename(p).toLowerCase();const i=b.lastIndexOf('.');return i>0?b.slice(i+1):(i===0?b.slice(1):'')};
