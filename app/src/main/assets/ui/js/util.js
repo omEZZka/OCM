@@ -98,11 +98,14 @@ O.sheet=(title,body,opts)=>{opts=opts||{};
   // Only de-duplicate the *same* sheet opened twice by a burst of queued taps (e.g. user taps the
   // model chip while a long answer re-renders, and three click events fire at once). Any other
   // sheet must still open immediately — a global time lock silently swallowed legitimate menus.
+  // De-duplicate only against a sheet that is still open *and* not already closing. Without the
+  // `_closed` check, chaining "menu → screen with the same title" inside 700 ms (Media → Photo)
+  // returned the sheet that was being dismissed, so the new screen never appeared.
   const top=stack[stack.length-1];
-  if(top&&top._key===key&&now-top._openedAt<700)return top;
-  const api={};api._key=key;api._openedAt=now;
+  if(top&&!top._closed&&top._key===key&&now-top._openedAt<700)return top;
+  const api={};api._key=key;api._openedAt=now;api._closed=false;
   let closed=false;
-  api.close=()=>{if(closed)return;closed=true;api.root.classList.remove('on');
+  api.close=()=>{if(closed)return;closed=true;api._closed=true;api.root.classList.remove('on');
     setTimeout(()=>{if(api.root.isConnected)api.root.remove()},260);
     const i=stack.indexOf(api);if(i>=0)stack.splice(i,1);
     // onClose used to run again on a second close() (back gesture + button tap), which
@@ -216,9 +219,10 @@ O.ask=(title,label,val,multiline)=>new Promise(res=>{let done=false;
   setTimeout(()=>inp.focus(),200)});
 
 // items may contain {section:'Title'} entries: they render as a group heading, no row.
-O.actions=(title,items)=>{const s=O.sheet(title,h('div',null,items.filter(Boolean).map(it=>{
+O.actions=(title,items)=>{
+  const s=O.sheet(title,h('div',null,items.filter(Boolean).map(it=>{
   if(it.section)return h('div',{class:'grp'},it.section);
-  return h('button',{class:'settings-row'+(it.danger?' danger':''),onclick:()=>{s.close();it.fn()}},
+  return h('button',{class:'settings-row'+(it.danger?' danger':''),onclick:()=>{s.close();setTimeout(()=>{try{it.fn()}catch(e){console.error(e)}},60)}},
     O.icon(it.icon||'dots'),
     h('div',{class:'settings-row-text'},
       h('b',{class:it.danger?'err':''},it.label),

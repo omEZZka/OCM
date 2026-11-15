@@ -59,6 +59,9 @@ O.openSessions=()=>{
     navItem('branch',O.tr('Changes','Изменения'),()=>O.setTab('changes')),
     // Media opens a small chooser first: it is a factory with four different tools.
     h('button',{class:'drawer-nav-item',onclick:()=>{
+      // Close the drawer first: stacking a chooser on top of it makes the tap feel like nothing
+      // happened (the drawer stays visible behind), and two same-titled sheets would fight.
+      s.close();
       O.actions(O.tr('Media','Медиа'),[
         {label:O.tr('Photo','Фото'),sub:O.tr('Text to image, edits, upscale','Текст в изображение, правки, апскейл'),icon:'image',fn:()=>O.openMedia&&O.openMedia('image')},
         {label:O.tr('Video','Видео'),sub:O.tr('Text or image to video, up to 60s','Текст или фото в видео, до 60 с'),icon:'film',fn:()=>O.openMedia&&O.openMedia('video')},
