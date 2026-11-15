@@ -51,6 +51,7 @@ import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.security.MessageDigest
 import kotlin.concurrent.thread
@@ -149,6 +150,29 @@ class MainActivity : ComponentActivity() {
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(v: WebView, r: WebResourceRequest): WebResourceResponse? {
                     val url = r.url
+                    // /_media/<base64 path> serves files produced by the media factory. A plain
+                    // file:// URL is not usable here (allowFileAccess is off for security), and
+                    // base64 keeps the path unambiguous regardless of spaces or non-ASCII names.
+                    if (url.host == "appassets.androidplatform.net" && url.path?.startsWith("/_media/") == true) {
+                        val encoded = url.path!!.removePrefix("/_media/")
+                        val guestPath = try {
+                            String(android.util.Base64.decode(encoded, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP))
+                        } catch (_: Exception) { "" }
+                        val f = if (guestPath.isEmpty()) null else Runtime.hostPath(this@MainActivity, uid(), guestPath)
+                        if (f != null && f.isFile && f.length() < 512L * 1024 * 1024) {
+                            val mime = when (f.extension.lowercase()) {
+                                "png" -> "image/png"; "jpg", "jpeg" -> "image/jpeg"
+                                "webp" -> "image/webp"; "gif" -> "image/gif"
+                                "mp4" -> "video/mp4"; "webm" -> "video/webm"; "mov" -> "video/quicktime"
+                                "mp3" -> "audio/mpeg"; "wav" -> "audio/wav"
+                                "m4a" -> "audio/mp4"; "ogg", "opus" -> "audio/ogg"; "flac" -> "audio/flac"
+                                else -> "application/octet-stream"
+                            }
+                            val headers = mapOf("Access-Control-Allow-Origin" to "*", "Cache-Control" to "no-cache")
+                            return WebResourceResponse(mime, null, 200, "OK", headers, f.inputStream())
+                        }
+                        return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                    }
                     if (url.host == "appassets.androidplatform.net" && url.path?.startsWith("/_preview/") == true) {
                         val relPath = url.path!!.removePrefix("/_preview/").ifEmpty { "index.html" }
                         val previewDir = File(cacheDir, "preview")

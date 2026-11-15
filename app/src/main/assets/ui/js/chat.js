@@ -299,6 +299,13 @@ function fillPart(el,p,m,fresh){
       if(!fresh&&el._media)return;
       el._media=true;
       el.append(h('audio',{class:'thumb-audio',src:url,controls:true,preload:'metadata'}));
+    }else if(url&&/^https:\/\//.test(url)&&/\.(png|jpe?g|webp|gif|mp4|webm|mp3|wav|m4a|ogg)$/i.test(url)){
+      // Attachments whose mime is missing but the URL looks like media (older sessions).
+      if(!fresh&&el._media)return;
+      el._media=true;
+      el.append(/mp4|webm/i.test(url)
+        ?h('video',{class:'thumb-video',src:url,controls:true,preload:'metadata'})
+        :h('img',{class:'thumb',src:url,loading:'lazy'}));
     }else{
       el.append(h('span',{class:'chip'},O.fileIcon(p.filename||'file'),h('span',null,p.filename||'file')));
     }

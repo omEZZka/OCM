@@ -239,9 +239,13 @@ O.openModels=()=>{
     selectBar.textContent='';
     selectBar.classList.remove('hide');
     const n=sel.size;
+    const actions=h('div',{class:'sel-actions'});
     selectBar.append(
-      h('button',{class:'ibtn s',onclick:exitSelect},O.icon('x')),
-      h('b',{class:'grow',style:{fontSize:'13px'}},n+' '+O.tr('selected','выбрано')),
+      h('div',{class:'sel-head'},
+        h('button',{class:'ibtn s',onclick:exitSelect},O.icon('x')),
+        h('b',{class:'grow',style:{fontSize:'13px'}},n+' '+O.tr('selected','выбрано'))),
+      actions);
+    actions.append(
       h('button',{class:'chip',onclick:()=>{sel.forEach(k=>{if(!O.isModelPinned(k))O.toggleModelPin(k)});exitSelect()}},O.icon('pin'),O.tr('Pin','Закрепить')),
       h('button',{class:'chip',onclick:()=>{sel.forEach(k=>O.isModelPinned(k)&&O.toggleModelPin(k));exitSelect()}},O.icon('x'),O.tr('Unpin','Открепить')),
       h('button',{class:'chip',onclick:()=>{

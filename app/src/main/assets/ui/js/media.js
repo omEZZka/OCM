@@ -21,6 +21,13 @@ const M=O.media={
 };
 
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+// Media files are served through a WebView route: file:// is blocked by allowFileAccess=false.
+O.mediaUrl=path=>{
+  try{
+    const b64=btoa(unescape(encodeURIComponent(String(path||'')))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    return 'https://appassets.androidplatform.net/_media/'+b64;
+  }catch(_){return ''}
+};
 const slug=s=>String(s||'').toLowerCase().replace(/[^a-zа-я0-9]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,40)||'media';
 const stamp=()=>new Date().toISOString().replace(/[-:T]/g,'').slice(0,14);
 
@@ -193,7 +200,7 @@ O.mediaSendToChat=async (item,text)=>{
   try{
     if(!S.sid)await O.newSession();
     const mid=O.mid();
-    const parts=[{type:'file',mime,filename:name,url:'file://'+path,source:{type:'file',path,text:{value:'@'+name,start:0,end:0}}}];
+    const parts=[{type:'file',mime,filename:name,url:O.mediaUrl(path),source:{type:'file',path,text:{value:'@'+name,start:0,end:0}}}];
     if(text)parts.unshift({type:'text',text:String(text)});
     await O.api('POST','/session/'+S.sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,parts},{timeout:30000});
     O.toast(O.tr('Sent to chat','Отправлено в чат'),1800);
@@ -322,6 +329,8 @@ function drawGenerator(pane,kind){
   const queueBox=h('div',{class:'media-queue'});
   pane.append(actionBar,info,promptTa,h('div',{class:'media-row'},improveBtn),paramsBox,genBtn,queueBox);
   drawQueue(queueBox);
+  // Jobs change state outside this view (queue pump, notifications): repaint while it is on screen.
+  const off=bus.on('media',()=>{if(queueBox.isConnected)drawQueue(queueBox);else off()});
 }
 
 function drawQueue(box){
@@ -350,9 +359,9 @@ O.mediaPreview=item=>{
   const kind=item.kind||guessKind(path);
   const body=h('div',{class:'media-preview'});
   const s=O.sheet(O.basename(path),body,{full:true});
-  if(kind==='image')body.append(h('img',{src:'file://'+path,style:{maxWidth:'100%',borderRadius:'12px'}}));
-  else if(kind==='video')body.append(h('video',{src:'file://'+path,controls:true,style:{width:'100%',borderRadius:'12px'}}));
-  else body.append(h('audio',{src:'file://'+path,controls:true,style:{width:'100%'}}));
+  if(kind==='image')body.append(h('img',{src:O.mediaUrl(path),style:{maxWidth:'100%',borderRadius:'12px'}}));
+  else if(kind==='video')body.append(h('video',{src:O.mediaUrl(path),controls:true,style:{width:'100%',borderRadius:'12px'}}));
+  else body.append(h('audio',{src:O.mediaUrl(path),controls:true,style:{width:'100%'}}));
   body.append(h('div',{class:'mut s',style:{marginTop:'8px',wordBreak:'break-all'}},path));
   body.append(h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
     h('button',{class:'btn grow',onclick:()=>O.mediaSendToChat({path,kind},item.prompt)},O.icon('chat'),O.tr('To chat','В чат')),
@@ -369,7 +378,7 @@ function drawHistory(pane){
   list.forEach(it=>{
     const kind=it.kind||guessKind(it.path);
     const thumb=kind==='image'
-      ?h('img',{src:'file://'+it.path,loading:'lazy'})
+      ?h('img',{src:O.mediaUrl(it.path),loading:'lazy'})
       :h('div',{class:'media-thumb-icon'},O.icon(kind==='video'?'film':kind==='music'?'note':'wave'));
     grid.append(h('button',{class:'media-cell',onclick:()=>O.mediaPreview(it),oncontextmenu:e=>{e.preventDefault();O.mediaItemActions(it)}},thumb,
       h('span',{class:'media-cell-tag'},it.kind)));

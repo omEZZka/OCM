@@ -342,6 +342,10 @@ a:hover {
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  /* Nothing inside may push the layout wider than the screen: a single long string in a row
+     used to create a horizontal scroll for the whole app. */
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 #top {
@@ -904,6 +908,7 @@ a:hover {
   flex: 1;
   min-width: 0;
   padding-right: 12px;
+  overflow: hidden;
 }
 .model-row-title {
   font-size: 16px;
@@ -2751,11 +2756,14 @@ a:hover {
 /* ---- model picker: selection mode ---- */
 .model-select-bar {
   position: sticky; top: -10px; z-index: 5;
-  display: flex; align-items: center; gap: 6px;
-  padding: 8px 10px; margin: -4px -2px 8px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 8px 10px; margin: -4px -2px 8px; max-width: 100%;
   background: #141417; border-bottom: 1px solid var(--line);
+  box-sizing: border-box;
 }
-.model-select-bar .chip { white-space: nowrap; font-size: 11.5px; }
+.model-select-bar .chip { white-space: nowrap; font-size: 11.5px; flex: 0 0 auto; }
+.model-select-bar .sel-head { display: flex; align-items: center; gap: 6px; width: 100%; }
+.model-select-bar .sel-actions { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
 .model-check-box {
   width: 20px; height: 20px; flex: none; margin-right: 8px;
   border-radius: 6px; border: 1.6px solid var(--line);
@@ -2831,3 +2839,8 @@ a:hover {
 .thumb-video { max-width: min(100%, 320px); border-radius: 12px; display: block; background: #000; }
 .thumb-audio { width: min(100%, 300px); display: block; }
 .part.aud .thumb-audio { height: 36px; }
+
+/* sliders and checkboxes must not inherit the text-input box styling */
+input[type="range"] { width: auto; padding: 0; border: 0; background: none; accent-color: var(--acc); }
+input[type="checkbox"] { width: auto; padding: 0; border: 0; background: none; accent-color: var(--acc); }
+input[type="color"] { width: 42px; padding: 0; border: 0; background: none; }
