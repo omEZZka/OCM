@@ -1399,18 +1399,23 @@ class MainActivity : ComponentActivity() {
         }
 
         /** Writes a data: URL (base64) straight to a file — used when the model returns inline bytes. */
-        @JavascriptInterface fun writeDataUrlToFile(dataUrl: String, destPath: String): String = try {
-            val comma = dataUrl.indexOf(',')
-            if (comma < 0) return JSONObject().put("ok", false).put("err", "not a data url").toString()
-            val meta = dataUrl.substring(0, comma)
-            val payload = dataUrl.substring(comma + 1)
-            val bytes = if (meta.contains(";base64")) Base64.decode(payload, Base64.DEFAULT) else payload.toByteArray()
-            val dest = Runtime.hostPath(this@MainActivity, uid(), destPath)
-            dest.parentFile?.mkdirs()
-            dest.writeBytes(bytes)
-            JSONObject().put("ok", true).put("path", destPath).put("size", bytes.size).toString()
-        } catch (e: Exception) {
-            JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString()
+        @JavascriptInterface fun writeDataUrlToFile(dataUrl: String, destPath: String): String {
+            return try {
+                val comma = dataUrl.indexOf(',')
+                if (comma < 0) {
+                    JSONObject().put("ok", false).put("err", "not a data url").toString()
+                } else {
+                    val meta = dataUrl.substring(0, comma)
+                    val payload = dataUrl.substring(comma + 1)
+                    val bytes = if (meta.contains(";base64")) Base64.decode(payload, Base64.DEFAULT) else payload.toByteArray()
+                    val dest = Runtime.hostPath(this@MainActivity, uid(), destPath)
+                    dest.parentFile?.mkdirs()
+                    dest.writeBytes(bytes)
+                    JSONObject().put("ok", true).put("path", destPath).put("size", bytes.size).toString()
+                }
+            } catch (e: Exception) {
+                JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString()
+            }
         }
 
         @JavascriptInterface fun mediaServerStart() { runOnUiThread { MediaServer.start(this@MainActivity) { n, d -> emit(n, d) } } }

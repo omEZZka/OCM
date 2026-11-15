@@ -70,21 +70,24 @@ object MediaServer {
             val bin = File(home, "bin")
             bin.mkdirs()
             val script = File(bin, "media-gen")
-            script.writeText(
-                "#!/bin/sh\n" +
-                    "# Ask the OpenCode Mobile media factory to generate something.\n" +
-                    "# Usage: media-gen <image|video|tts|music> <prompt> [model]\n" +
-                    "INFO=\"$HOME/.ocm/media.json\"\n" +
-                    "[ -f \"$INFO\" ] || { echo 'media factory is not running' >&2; exit 1; }\n" +
-                    "PORT=$(sed -n 's/.*\"port\":\\([0-9]*\\).*/\\1/p' \"$INFO\")\n" +
-                    "TOKEN=$(sed -n 's/.*\"token\":\"\\([a-f0-9]*\\)\".*/\\1/p' \"$INFO\")\n" +
-                    "KIND=\"$1\"; shift\n" +
-                    "PROMPT=\"$1\"; shift\n" +
-                    "MODEL=\"$1\"\n" +
-                    "curl -s --max-time 900 -X POST \"http://127.0.0.1:$PORT/generate\" \\\n" +
-                    "  -H \"X-OCM-Token: $TOKEN\" -H 'Content-Type: application/json' \\\n" +
-                    "  -d \"{\\\"kind\\\":\\\"$KIND\\\",\\\"prompt\\\":$(printf '%s' \"$PROMPT\" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'),\\\"model\\\":\\\"$MODEL\\\"}\"\n"
-            )
+            // The script is shell code, not a Kotlin template: `$` is written as § first and
+            // substituted at the end, because a raw Kotlin string cannot escape a dollar sign.
+            val sh = """
+                |#!/bin/sh
+                |# Ask the OpenCode Mobile media factory to generate something.
+                |# Usage: media-gen <image|video|tts|music> <prompt> [model]
+                |INFO="§HOME/.ocm/media.json"
+                |[ -f "§INFO" ] || { echo 'media factory is not running' >&2; exit 1; }
+                |PORT=§(sed -n 's/.*"port":\([0-9]*\).*/\1/p' "§INFO")
+                |TOKEN=§(sed -n 's/.*"token":"\([a-f0-9]*\)".*/\1/p' "§INFO")
+                |KIND="§1"; shift
+                |PROMPT="§1"; shift
+                |MODEL="§1"
+                |BODY=§(python3 -c 'import json,sys;print(json.dumps({"kind":sys.argv[1],"prompt":sys.argv[2],"model":sys.argv[3]}))' "§KIND" "§PROMPT" "§MODEL")
+                |curl -s --max-time 900 -X POST "http://127.0.0.1:§PORT/generate" \
+                |  -H "X-OCM-Token: §TOKEN" -H 'Content-Type: application/json' -d "§BODY"
+                |""".trimMargin().replace("§", "$")
+            script.writeText(sh + "\n")
             try { android.system.Os.chmod(script.path, 0x1ED) } catch (_: Exception) {}
         } catch (_: Exception) {}
     }
