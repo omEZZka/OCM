@@ -1313,6 +1313,29 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        /**
+         * One-shot HTTP GET to an arbitrary URL, used to probe provider catalogues.
+         * The WebView runs on an https origin, so fetching a provider API from JS is subject to CORS
+         * and most providers do not send permissive headers. Doing it natively avoids the problem
+         * entirely and keeps the key out of the page.
+         */
+        @JavascriptInterface fun netGet(url: String, headersJson: String, timeoutMs: Int): String = try {
+            val hdrs = try { JSONObject(headersJson) } catch (_: Exception) { JSONObject() }
+            val client = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout((timeoutMs.takeIf { it > 0 } ?: 20000).toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+                .followRedirects(true)
+                .build()
+            val rb = okhttp3.Request.Builder().url(url).get()
+            hdrs.keys().forEach { k -> try { rb.header(k, hdrs.optString(k)) } catch (_: Exception) {} }
+            client.newCall(rb.build()).execute().use { r ->
+                val body = r.body?.string() ?: ""
+                JSONObject().put("ok", r.isSuccessful).put("status", r.code).put("body", body.take(2_000_000)).toString()
+            }
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("status", 0).put("err", e.message ?: e.toString()).toString()
+        }
+
         // --- network (local server) ---
         @JavascriptInterface fun http(id: String, method: String, path: String, body: String) {
             Net.request(this@MainActivity, id, method, path, body) { n, d -> emit(n, d) }

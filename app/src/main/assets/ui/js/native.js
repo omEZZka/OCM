@@ -83,6 +83,7 @@ O.native={
   sttStop:()=>{try{OC.sttStop()}catch(_){}},
   sttAvailable:()=>{try{return !!OC.sttAvailable()}catch(_){return false}},
   callAudio:on=>{try{OC.callAudio(!!on)}catch(_){}},
+  netGet:(url,headers,timeout)=>{try{return j(OC.netGet(url,JSON.stringify(headers||{}),timeout||20000))||{ok:false,err:'bridge failed'}}catch(e){return{ok:false,err:String(e)}}},
   ttsInit:(voice,rate,pitch)=>{try{OC.ttsInit(voice||'',rate||1,pitch||1)}catch(_){}},
   ttsSpeak:t=>{try{OC.ttsSpeak(t||'')}catch(_){}},
   ttsStop:()=>{try{OC.ttsStop()}catch(_){}},

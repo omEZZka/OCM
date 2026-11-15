@@ -215,8 +215,16 @@ O.ask=(title,label,val,multiline)=>new Promise(res=>{let done=false;
     h('button',{class:'btn grow',onclick:()=>fin(null)},O.tr('Cancel','Отмена')),h('button',{class:'btn pri grow',onclick:()=>fin(inp.value)},O.tr('OK','ОК')))),{hud:true,onClose:()=>{if(!done){done=true;res(null)}}});
   setTimeout(()=>inp.focus(),200)});
 
-O.actions=(title,items)=>{const s=O.sheet(title,h('div',null,items.filter(Boolean).map(it=>h('button',{class:'settings-row',onclick:()=>{s.close();it.fn()}},
-  O.icon(it.icon||'dots'),h('div',{class:'settings-row-text'},h('b',{class:it.danger?'err':''},it.label),it.sub?h('span',null,it.sub):null)))),{hud:true});return s};
+// items may contain {section:'Title'} entries: they render as a group heading, no row.
+O.actions=(title,items)=>{const s=O.sheet(title,h('div',null,items.filter(Boolean).map(it=>{
+  if(it.section)return h('div',{class:'grp'},it.section);
+  return h('button',{class:'settings-row'+(it.danger?' danger':''),onclick:()=>{s.close();it.fn()}},
+    O.icon(it.icon||'dots'),
+    h('div',{class:'settings-row-text'},
+      h('b',{class:it.danger?'err':''},it.label),
+      it.sub?h('span',null,it.sub):null),
+    it.right||null);
+})),{hud:true});return s};
 
 O.back=()=>{const s=stack[stack.length-1];if(s){s.close();return true}return false};
 

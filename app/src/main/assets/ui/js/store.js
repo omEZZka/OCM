@@ -564,7 +564,7 @@ O.modelFolders=()=>{
   return Array.isArray(l)?l.filter(f=>f&&f.id):[];
 };
 O.modelFolderOf=key=>{const f=O.modelFolders().find(x=>(x.keys||[]).includes(key));return f||null};
-O.saveModelFolders=l=>{O.store.set('modelFolders',(l||[]).slice(0,60));bus.emit('meta')};
+O.saveModelFolders=l=>{O.store.set('modelFolders',(l||[]).slice(0,60));bus.emit('meta');bus.emit('folders')};
 O.createModelFolder=name=>{
   const f={id:'fld_'+Date.now().toString(36),name:String(name||'').trim()||O.tr('New folder','Новая папка'),keys:[],order:O.modelFolders().length,color:''};
   const l=O.modelFolders();l.push(f);O.saveModelFolders(l);return f;
@@ -682,10 +682,14 @@ O.cycleModel=dir=>{
   O.toast(O.tr('Model: ','Модель: ')+(next.name||next.mid),1400);
 };
 O.setModel=(pid,mid)=>{
+  // Switching model invalidates the reasoning variant: keeping the old one silently sent an
+  // unsupported level to the new model (some providers reject it, others ignore it).
+  const prevModel=S.model?S.model.providerID+'/'+S.model.modelID:'';
   S.model={providerID:pid,modelID:mid};
   O.store.set('model.'+S.agent,S.model);
   if(S.sid)O.store.set('session.model.'+S.sid,S.model);
   O.pushRecentModel(pid+'/'+mid);
+  if(prevModel&&prevModel!==(pid+'/'+mid))S.variant=null;
   O.pickDefaults();
   if(O.updateReadmeForModel) O.updateReadmeForModel(mid);
   bus.emit('meta');

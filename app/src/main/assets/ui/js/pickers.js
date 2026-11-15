@@ -243,6 +243,19 @@ O.openModels=()=>{
         }});
         O.actions(O.tr('Group into folder','Сгруппировать в папку'),items);
       }},O.icon('folder'),O.tr('To folder','В папку')),
+      h('button',{class:'chip',onclick:()=>{
+        // Remove from whichever folder each selected model currently lives in
+        const moved=O.modelFolders().filter(f=>(f.keys||[]).some(k=>sel.has(k)));
+        if(!moved.length){O.toast(O.tr('Selection is not in any folder','Выбранные модели не в папках'),2000);return}
+        const items=[{section:O.tr('Remove from folder','Убрать из папки')}].concat(moved.map(f=>({
+          label:f.name,icon:'folder',fn:()=>{
+            sel.forEach(k=>O.removeModelFromFolder(k,f.id));
+            O.toastQuiet(O.tr('Removed from folder','Убрано из папки'));
+            exitSelect();
+          }
+        })));
+        O.actions(O.tr('Remove from folder','Убрать из папки'),items);
+      }},O.icon('x'),O.tr('From folder','Из папки')),
       h('button',{class:'chip',onclick:()=>{sel.forEach(k=>O.hideModel(k));exitSelect()}},O.icon('trash'),O.tr('Delete','Удалить')));
   };
 
@@ -265,6 +278,10 @@ O.openModels=()=>{
   const compareBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelCompare()},O.icon('branch'),O.tr('Compare models on one prompt','Сравнить модели на одном запросе'));
   const container=h('div',null,effortCard,selectBar,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
+  // Folder edits from the action sheet / folder manager must repaint the list live.
+  const offFolders=bus.on('folders',()=>{if(s.root&&s.root.isConnected)draw()});
+  const prevClose=s.close;
+  s.close=()=>{try{offFolders&&offFolders()}catch(_){};prevClose()};
 
   function hiddenRow(){
     const hid=O.hiddenModels();
@@ -465,39 +482,172 @@ function modelActions(x,redraw){
   const pinned=O.isModelPinned(key);
   const folder=O.modelFolderOf(key);
   const folders=O.modelFolders();
-  const folderItems=[
-    {label:folder?O.tr('Move to another folder…','Переместить в другую папку…'):O.tr('Add to folder…','Добавить в папку…'),icon:'folder',fn:()=>{
-      const items=folders.filter(f=>f.id !== (folder&&folder.id)).map(f=>({label:f.name,icon:'folder',fn:()=>O.addModelToFolder(key,f.id)&&redraw()}));
-      items.push({label:O.tr('New folder…','Новая папка…'),icon:'plus',fn:async()=>{
-        const n=await O.ask(O.tr('New folder','Новая папка'),O.tr('Folder name','Название папки'));
-        if(!n)return;const f=O.createModelFolder(n);O.addModelToFolder(key,f.id);redraw();
-      }});
-      if(folder)items.push({label:O.tr('Remove from folder','Убрать из папки'),icon:'x',fn:()=>{O.removeModelFromFolder(key,folder.id);redraw()}});
-      O.actions(folder?folder.name:O.tr('Folder','Папка'),items);
-    }},
-    {label:O.tr('Manage folders…','Управление папками…'),icon:'sliders',fn:()=>O.openModelFolders(redraw)},
-    {label:O.tr('Create model profile here','Сделать профилем модели'),icon:'star',fn:()=>O.openModelProfiles(redraw)}
-  ];
+  const provider=x.pname||(x.pid==='opencode'?'OpenCode Zen':x.pid);
+
+  const pickFolder=()=>{
+    const items=[{section:O.tr('Move to folder','Переместить в папку')}];
+    folders.forEach(f=>{
+      const isCur=folder&&folder.id===f.id;
+      items.push({
+        label:f.name+(isCur?' · '+O.tr('current','текущая'):''),
+        icon:isCur?'check':'folder',
+        fn:()=>{O.addModelToFolder(key,f.id);O.toastQuiet(O.tr('Moved','Перемещено'));redraw&&redraw()}
+      });
+    });
+    if(folder)items.push({label:O.tr('Remove from folder','Убрать из папки'),icon:'x',fn:()=>{O.removeModelFromFolder(key,folder.id);O.toastQuiet(O.tr('Removed from folder','Убрано из папки'));redraw&&redraw()}});
+    items.push({label:O.tr('New folder…','Новая папка…'),icon:'plus',fn:async()=>{
+      const n=await O.ask(O.tr('New folder','Новая папка'),O.tr('Folder name','Название папки'));
+      if(!n)return;const f=O.createModelFolder(n);O.addModelToFolder(key,f.id);redraw&&redraw();
+    }});
+    O.actions(O.tr('Folders','Папки'),items);
+  };
+
   O.actions(x.name||x.mid,[
-    {label:pinned?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'pin',fn:()=>{O.toggleModelPin(key);redraw()}},
-    ...folderItems,
-    {label:O.tr('Start chat in another session','Начать диалог в другой сессии'),icon:'plus',fn:async()=>{
+    {section:provider},
+    {label:pinned?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),sub:O.tr('Keep it at the top of the list','Держать в начале списка'),icon:'pin',fn:()=>{O.toggleModelPin(key);redraw&&redraw()}},
+    folder
+      ?{label:O.tr('In folder','В папке')+': '+folder.name,sub:O.tr('Change or remove','Сменить или убрать'),icon:'folder',fn:pickFolder}
+      :{label:O.tr('Add to folder','Добавить в папку'),sub:O.tr('Group models across providers','Объединить модели разных провайдеров'),icon:'folder',fn:pickFolder},
+    {section:O.tr('Use','Использование')},
+    {label:O.tr('Start a new chat with this model','Новый чат с этой моделью'),icon:'plus',fn:async()=>{
       try{
-        const ses=await O.newSession();
+        await O.newSession();
         O.setModel(x.pid,x.mid);
         O.setTab('chat');
-        O.toast(O.tr('New session with ','Новая сессия с ')+(x.name||x.mid),1800);
       }catch(e){O.toast(e.message)}
     }},
-    {label:O.tr('Delete model','Удалить модель'),icon:'trash',danger:true,fn:async()=>{
-      if(await O.confirm(O.tr('Delete model?','Удалить модель?'),(x.name||x.mid)+' — '+O.tr('will be hidden from the model list','будет скрыта из списка моделей'),O.tr('Delete','Удалить'),true)){
-        O.hideModel(key);
-        if(S.model&&(S.model.providerID+'/'+S.model.modelID)===key){const rest=O.allModels().filter(m=>!O.isModelHidden(m.pid+'/'+m.mid)&&m.pid+'/'+m.mid!==key);if(rest.length)O.setModel(rest[0].pid,rest[0].mid)}
-        redraw();
+    {label:O.tr('Reasoning effort…','Уровень рассуждения…'),sub:O.currentEffort&&O.currentEffort()?O.effortLabel(O.currentEffort()):O.tr('Default','По умолчанию'),icon:'bulb',fn:()=>O.openEffortPicker&&O.openEffortPicker()},
+    {label:O.tr('Save as profile','Сохранить как профиль'),sub:O.tr('Model plus its fallback chain','Модель и цепочка резервных'),icon:'star',fn:()=>O.openModelProfiles(redraw)},
+    {section:O.tr('Manage','Управление')},
+    {label:O.tr('Update models from provider','Обновить модели у провайдера'),sub:O.tr('Check the API for models added since connecting','Проверить API на новые модели'),icon:'refresh',fn:()=>O.refreshProviderModels(x.pid)},
+    {label:O.tr('Delete model','Удалить модель'),sub:O.tr('Hidden from the list, can be restored','Скрыть из списка, можно вернуть'),icon:'trash',danger:true,fn:async()=>{
+      if(!await O.confirm(O.tr('Delete model?','Удалить модель?'),(x.name||x.mid)+' — '+O.tr('will be hidden from the model list','будет скрыта из списка моделей'),O.tr('Delete','Удалить'),true))return;
+      O.hideModel(key);
+      if(S.model&&(S.model.providerID+'/'+S.model.modelID)===key){
+        const rest=O.allModels().filter(m=>!O.isModelHidden(m.pid+'/'+m.mid)&&m.pid+'/'+m.mid!==key);
+        if(rest.length)O.setModel(rest[0].pid,rest[0].mid);
       }
+      redraw&&redraw();
     }}
   ]);
 }
+
+// ---- refresh provider catalogue ----
+// Providers add models over time; the config in opencode.json is a snapshot taken at connect time.
+// This asks the provider for its current /models list and merges the new entries in, keeping the
+// user's existing model settings and never deleting anything.
+const probeModels=async(url,key,patchHeaders)=>{
+  let target=url.trim().replace(/\/+$/,'');
+  if(!/^https?:\/\//i.test(target))target='https://'+target;
+  if(!target.endsWith('/models'))target+='/models';
+  const hd={'Accept':'application/json'};
+  if(key)hd['Authorization']='Bearer '+key;
+  Object.assign(hd,patchHeaders||{});
+  let json=null;
+  // Native first: the WebView origin is https, so a direct fetch to a provider is blocked by CORS.
+  const nat=O.native.netGet?O.native.netGet(target,hd,20000):null;
+  if(nat&&nat.ok&&nat.body){
+    try{json=JSON.parse(nat.body)}catch(_){json=null}
+  }
+  if(!json){
+    try{
+      const resp=await fetch(target,{method:'GET',headers:hd});
+      if(!resp.ok)throw new Error('HTTP '+resp.status);
+      json=await resp.json();
+    }catch(e){
+      throw new Error((nat&&nat.err)?nat.err:(nat&&nat.status?('HTTP '+nat.status):e.message));
+    }
+  }
+  const raw=Array.isArray(json)?json:(json.data||json.models||[]);
+  return raw.map(m=>typeof m==='string'?m:(m.id||m.name)).filter(Boolean);
+};
+
+O.refreshProviderModels=async pid=>{
+  const body=h('div',null,h('div',{class:'mut',style:{padding:'16px'}},O.tr('Checking the provider…','Проверяю провайдера…')));
+  const s=O.sheet(O.tr('Update models','Обновить модели'),body,{full:true});
+  let cfgObj=null;
+  try{
+    const t=O.native.cfgRead();
+    cfgObj=t.trim()?O.parseJsonc(t):{};
+  }catch(e){body.textContent='';body.append(h('div',{class:'errbox'},O.tr('Config is not valid JSON: ','Конфиг не является корректным JSON: ')+e.message));return}
+
+  const prov=(cfgObj.provider||{})[pid];
+  const url=(prov&&prov.options&&(prov.options.upstreamBaseURL||prov.options.baseURL))||'';
+  if(!url){
+    body.textContent='';
+    body.append(h('div',{class:'errbox'},O.tr('This provider has no Base URL in the config.','У этого провайдера нет Base URL в конфиге.')),
+      h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{s.close();O.openCustomProvider()}},O.icon('cpu'),O.tr('Open custom provider','Открыть свой провайдер')));
+    return;
+  }
+  const key=O.keyRingActive?O.keyRingActive(pid):'';
+  const headers=(prov&&prov.options&&prov.options.headers)||{};
+  let found=[];
+  try{
+    found=await probeModels(url,key,headers);
+  }catch(e){
+    body.textContent='';
+    body.append(h('div',{class:'errbox'},O.tr('Could not reach the provider: ','Не удалось получить список: ')+e.message),
+      h('div',{class:'note',style:{marginTop:'8px'}},url),
+      h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{s.close();O.refreshProviderModels(pid)}},O.icon('refresh'),O.tr('Retry','Повторить')));
+    return;
+  }
+  if(!found.length){
+    body.textContent='';
+    body.append(h('div',{class:'mut',style:{padding:'16px'}},O.tr('The provider returned an empty model list.','Провайдер вернул пустой список моделей.')));
+    return;
+  }
+
+  const existing=Object.keys((prov&&prov.models)||{});
+  const have=new Set(existing);
+  const fresh=found.filter(m=>!have.has(m));
+  const gone=existing.filter(m=>!found.includes(m));
+  const chosen=new Set(fresh); // new models are added by default
+
+  const redraw=()=>{
+    body.textContent='';
+    body.append(h('div',{class:'note'},
+      O.tr('Found ','Найдено ')+found.length+' '+O.tr('models at the provider.','моделей у провайдера.')+' '+
+      O.tr('New: ','Новых: ')+fresh.length+'. '+
+      (gone.length?O.tr('No longer offered: ','Больше не предлагаются: ')+gone.length+' ('+O.tr('kept, nothing is deleted','оставлены, ничего не удаляется')+').':'')));
+    body.append(h('div',{class:'field'},h('label',null,O.tr('Endpoint','Адрес')),h('div',{class:'mono s mut',style:{wordBreak:'break-all'}},url)));
+
+    if(fresh.length){
+      body.append(h('div',{class:'grp'},O.tr('New models','Новые модели')));
+      const card=h('div',{class:'settings-card'});
+      fresh.forEach(mid=>{
+        const chk=h('input',{type:'checkbox',checked:true,style:{width:'auto',margin:'0 8px 0 0'}});
+        chk.onchange=()=>{if(chk.checked)chosen.add(mid);else chosen.delete(mid)};
+        card.append(h('label',{class:'settings-row',style:{cursor:'pointer'}},chk,h('div',{class:'settings-row-text'},h('b',{class:'mono'},mid))));
+      });
+      body.append(card);
+      body.append(h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
+        h('button',{class:'btn',onclick:()=>{fresh.forEach(m=>chosen.add(m));redraw()}},O.tr('Select all','Выбрать все')),
+        h('button',{class:'btn',onclick:()=>{chosen.clear();redraw()}},O.tr('Clear','Снять'))));
+    }else{
+      body.append(h('div',{class:'card',style:{padding:'14px',textAlign:'center'}},O.icon('check','ok'),h('div',{style:{marginTop:'6px'}},O.tr('Catalogue is up to date','Каталог актуален'))));
+    }
+    if(gone.length){
+      body.append(h('div',{class:'grp',style:{marginTop:'14px'}},O.tr('Missing at the provider','Отсутствуют у провайдера')));
+      body.append(h('div',{class:'note'},gone.join(', ')));
+    }
+    body.append(h('button',{class:'btn pri wide',style:{marginTop:'14px'},onclick:async()=>{
+      if(!chosen.size&&!fresh.length)return s.close();
+      const cur=(cfgObj.provider||{})[pid]||{};
+      cur.models=cur.models||{};
+      chosen.forEach(mid=>{if(!cur.models[mid])cur.models[mid]={name:mid}});
+      cfgObj.provider=cfgObj.provider||{};
+      cfgObj.provider[pid]=cur;
+      const w=O.native.cfgWrite(JSON.stringify(cfgObj,null,2));
+      if(!w||!w.ok)return O.toast((w&&w.err)||O.tr('Cannot write config','Не удалось записать конфиг'),4000);
+      try{await O.api('POST','/instance/dispose',null)}catch(_){}
+      await O.loadMeta();
+      O.toast(O.tr('Added models: ','Добавлено моделей: ')+chosen.size,2200);
+      O.invalidateCache&&O.invalidateCache();
+      s.close();
+    }},O.icon('check'),O.tr('Add selected','Добавить выбранные')+' ('+chosen.size+')'));
+  };
+  redraw();
+};
 
 // ---- model folders & profiles ----
 O.openModelFolders=(onDone)=>{
@@ -700,6 +850,8 @@ O.openConnect=async()=>{
     sorted.filter(p=>!f||(name(p)+p.id).toLowerCase().includes(f)).forEach(p=>{
       const hs=healthOf(p.id);
       const right=h('span',{style:{display:'flex',alignItems:'center',gap:'6px'}},
+        conn.has(p.id)?h('button',{class:'ibtn s',title:O.tr('Update models from API','Обновить модели из API'),
+          onclick:e=>{e.stopPropagation();O.refreshProviderModels(p.id)}},O.icon('refresh')):null,
         hs?h('i',{title:hs==='ok'?O.tr('Connected models found','Модели найдены'):O.tr('No models / check failed','Нет моделей / проверка не удалась'),
           style:{width:'7px',height:'7px',borderRadius:'50%',background:hs==='ok'?'#22c55e':'#ef4444'}}):null,
         conn.has(p.id)?O.icon('check','ok'):null);
@@ -844,9 +996,15 @@ O.openCustomProvider=parentSheet=>{
         hd['HTTP-Referer']='https://opencode.mobile';
         hd['X-Title']='OpenCode Mobile';
       }
-      const resp=await fetch(target,{method:'GET',headers:hd});
-      if(!resp.ok)throw new Error('HTTP '+resp.status);
-      const json=await resp.json();
+      // Native bridge first: a WebView fetch to a third-party host is blocked by CORS.
+      let json=null;
+      const nat=O.native.netGet?O.native.netGet(target,hd,20000):null;
+      if(nat&&nat.ok&&nat.body){try{json=JSON.parse(nat.body)}catch(_){json=null}}
+      if(!json){
+        const resp=await fetch(target,{method:'GET',headers:hd});
+        if(!resp.ok)throw new Error('HTTP '+resp.status);
+        json=await resp.json();
+      }
       const raw=Array.isArray(json)?json:(json.data||json.models||[]);
       foundModels=raw.map(m=>typeof m==='string'?m:(m.id||m.name)).filter(Boolean);
       if(!foundModels.length){statusBox.textContent='Ответ получен, но список моделей пуст.';modelList.classList.add('hide');return}

@@ -281,7 +281,13 @@ function fillPart(el,p,m,fresh){
     else fillTool(el,p);
     break}
   case'file':el.className='part fchips';el.textContent='';
-    if((p.mime||'').startsWith('image/')&&p.url)el.append(h('img',{class:'thumb',src:p.url}));
+    if((p.mime||'').startsWith('image/')&&p.url){
+      // data: URLs of attachments can be megabytes each; they live in state and IndexedDB.
+      // Old messages keep only a light marker after the first render to bound memory use.
+      if(String(p.url).startsWith('data:')&&!fresh&&el._img)return;
+      el._img=true;
+      el.append(h('img',{class:'thumb',src:p.url,loading:'lazy'}));
+    }
     else el.append(h('span',{class:'chip'},O.fileIcon(p.filename||'file'),h('span',null,p.filename||'file')));break;
   case'agent':el.className='part fchips';el.textContent='';el.append(h('span',{class:'chip'},O.icon('bot'),h('span',null,'@'+p.name)));break;
   case'patch':el.className='part';el.textContent='';el.append(h('span',{class:'chip'},O.icon('edit'),h('span',null,'Изменено файлов: '+((p.files||[]).length))));break;
@@ -1058,6 +1064,25 @@ O.chatTypeText=text=>{
   const el=ta;if(!el)return;
   el.placeholder=String(text||'').slice(0,120);
   setTimeout(()=>{if(el.placeholder.startsWith(String(text||'').slice(0,10)))el.placeholder=O.tr('Chat with OpenCode...','Чат с OpenCode...')},4000);
+};
+// Puts text into the composer and focuses it (used by widgets and prompt actions).
+O.insertPrompt=text=>{
+  if(!ta)return false;
+  ta.value=String(text||'');
+  onInput();
+  O.setTab('chat');
+  try{ta.focus()}catch(_){}
+  return true;
+};
+// Recomputes drawer/header badges: unread counts, pending questions and permissions.
+O.updateBadges=()=>{
+  try{
+    const q=(S.questions||[]).length,p=(S.perms||[]).length;
+    const dot=O.$('.top-title-dot');
+    if(dot)dot.classList.toggle('hide',!(q||p));
+    document.documentElement.dataset.pending=(q+p)?'1':'0';
+    bus.emit('badges',{q,p});
+  }catch(_){}
 };
 O.chat={renderAll,sess,focus:()=>ta&&ta.focus(),sendText:O.chatSendText,typeText:O.chatTypeText};
 })();

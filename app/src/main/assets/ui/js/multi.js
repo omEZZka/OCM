@@ -514,7 +514,7 @@ O.mmResume=async()=>{
   const sess=S.sid;if(!sess)return;
   O.continueGeneration(sess,{custom:O.tr('Continue the multimodal run: finish the remaining roles and produce the final answer.','Продолжи мультимодальный запуск: заверши оставшиеся роли и дай финальный ответ.')});
 };
-O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new Set();
+O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new Set();r.roleNames=r.roleNames||new Set();r.roleNames.add(name);
   const j=(r.jobs||[]).find(x=>x.role&&x.role.name===name);
   if(j&&j.sid){r.roleAborts.add(j.sid);api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{});O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}
   else if(j){j.state='stopped';j.err=O.tr('stopped by user','остановлена пользователем');O.toast(O.tr('Role stopped: ','Роль остановлена: ')+name,1800);bus.emit('mm:progress')}};
@@ -897,7 +897,8 @@ O.mmSend=async(text,parts)=>{
           const running=await mmRunningTask(sid);
           if(!tracking)return;
           if(running){
-            const j=run.jobs.find(x=>x.subagent===running&&x.state!=='done'&&x.state!=='stopped');
+            const stoppedByUser=run.roleNames&&run.jobs.some(x=>x.subagent===running&&run.roleNames.has(x.role&&x.role.name));
+            const j=!stoppedByUser&&run.jobs.find(x=>x.subagent===running&&x.state!=='done'&&x.state!=='stopped');
             if(j&&j.state!=='running'){j.state='running';j.started=j.started||Date.now();emit()}
           }
         }catch(e){}
@@ -912,7 +913,11 @@ O.mmSend=async(text,parts)=>{
       if(run.abort)throw new Error('aborted');
       // collect per-subagent results from the session messages
       const collected=await mmCollectTasks(sid,run);
-      run.jobs.forEach(j=>{const c=collected[j.subagent||j.role.name];if(c){j.result=c;j.state='done';j.finished=Date.now()}
+      run.jobs.forEach(j=>{
+        if(run.roleNames&&run.roleNames.has(j.role&&j.role.name)&&j.state!=='done'){
+          j.state='stopped';j.finished=Date.now();j.err=O.tr('stopped by user','остановлена пользователем');return;
+        }
+        const c=collected[j.subagent||j.role.name];if(c){j.result=c;j.state='done';j.finished=Date.now()}
         else if(j.state==='running'||j.state==='queued'){j.state='error';j.err=O.tr('no result','нет ответа');j.finished=Date.now()}});
       emit();
       // judge pass (optional): reviews everything before the lead writes the final answer
