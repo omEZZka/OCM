@@ -388,6 +388,7 @@ O.on('widget_action', d => {
       return;
     }
     if (d.action === 'status') { O.setTab('chat'); return; }
+    if (d.action === 'media') { if (O.openMedia) O.openMedia(); return; }
     if (d.action === 'abort_all') {
       (async()=>{
         const ids=Object.keys(S.status).filter(k=>S.status[k]&&S.status[k].type!=='idle');

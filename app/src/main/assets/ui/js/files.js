@@ -291,6 +291,7 @@ O.writeProjectMap=async (root,quiet)=>{
     const target=(root||S.dir)+'/PROJECT_MAP.md';
     O.native.writeText(target,r.md);
     if(O.ensureMapHint)O.ensureMapHint(root||S.dir);
+    if(O.ensureMediaHint)O.ensureMediaHint(root||S.dir);
     if(!quiet)O.toast(O.tr('Project map: ','Карта проекта: ')+r.count+' '+O.tr('files','файлов'),2000);
     return r;
   }catch(e){if(!quiet)O.toast(e.message||String(e),4000);return null}

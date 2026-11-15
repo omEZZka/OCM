@@ -1336,6 +1336,98 @@ class MainActivity : ComponentActivity() {
             JSONObject().put("ok", false).put("status", 0).put("err", e.message ?: e.toString()).toString()
         }
 
+        /**
+         * POST to an external API and save the raw response body to a file.
+         * Media APIs answer with binary data (PNG/MP3/MP4) or with JSON containing a URL, both of
+         * which are awkward to move through the WebView; doing it natively avoids base64 bloat and
+         * CORS entirely.
+         */
+        @JavascriptInterface fun netPostToFile(url: String, headersJson: String, body: String, destPath: String, timeoutMs: Int): String = try {
+            val hdrs = try { JSONObject(headersJson) } catch (_: Exception) { JSONObject() }
+            val dest = Runtime.hostPath(this@MainActivity, uid(), destPath)
+            dest.parentFile?.mkdirs()
+            val client = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout((timeoutMs.takeIf { it > 0 } ?: 180000).toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+                .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                .followRedirects(true)
+                .build()
+            val mediaType = (hdrs.optString("Content-Type", "application/json")).toMediaType()
+            hdrs.remove("Content-Type")
+            val rb = okhttp3.Request.Builder().url(url).post(body.toRequestBody(mediaType))
+            hdrs.keys().forEach { k -> try { rb.header(k, hdrs.optString(k)) } catch (_: Exception) {} }
+            client.newCall(rb.build()).execute().use { r ->
+                val bytes = r.body?.bytes() ?: ByteArray(0)
+                if (!r.isSuccessful) {
+                    return JSONObject().put("ok", false).put("status", r.code)
+                        .put("err", String(bytes, Charsets.UTF_8).take(400)).toString()
+                }
+                val ct = r.header("Content-Type") ?: ""
+                if (ct.startsWith("application/json") || (bytes.isNotEmpty() && bytes[0] == '{'.code.toByte())) {
+                    // The API returned JSON instead of the file itself (usually a URL to fetch).
+                    return JSONObject().put("ok", true).put("json", true).put("status", r.code)
+                        .put("body", String(bytes, Charsets.UTF_8).take(2_000_000)).toString()
+                }
+                dest.writeBytes(bytes)
+                JSONObject().put("ok", true).put("status", r.code).put("path", destPath)
+                    .put("size", bytes.size).put("mime", ct).toString()
+            }
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString()
+        }
+
+        /** Downloads a URL to a file (CDNs return the real media after a JSON handshake). */
+        @JavascriptInterface fun netDownloadToFile(url: String, headersJson: String, destPath: String, timeoutMs: Int): String = try {
+            val hdrs = try { JSONObject(headersJson) } catch (_: Exception) { JSONObject() }
+            val dest = Runtime.hostPath(this@MainActivity, uid(), destPath)
+            dest.parentFile?.mkdirs()
+            val client = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout((timeoutMs.takeIf { it > 0 } ?: 180000).toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+                .followRedirects(true)
+                .build()
+            val rb = okhttp3.Request.Builder().url(url).get()
+            hdrs.keys().forEach { k -> try { rb.header(k, hdrs.optString(k)) } catch (_: Exception) {} }
+            client.newCall(rb.build()).execute().use { r ->
+                if (!r.isSuccessful) return JSONObject().put("ok", false).put("status", r.code).toString()
+                r.body?.byteStream()?.use { inp -> dest.outputStream().use { out -> inp.copyTo(out, 1 shl 16) } }
+                JSONObject().put("ok", true).put("path", destPath).put("size", dest.length())
+                    .put("mime", r.header("Content-Type") ?: "").toString()
+            }
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString()
+        }
+
+        /** Writes a data: URL (base64) straight to a file — used when the model returns inline bytes. */
+        @JavascriptInterface fun writeDataUrlToFile(dataUrl: String, destPath: String): String = try {
+            val comma = dataUrl.indexOf(',')
+            if (comma < 0) return JSONObject().put("ok", false).put("err", "not a data url").toString()
+            val meta = dataUrl.substring(0, comma)
+            val payload = dataUrl.substring(comma + 1)
+            val bytes = if (meta.contains(";base64")) Base64.decode(payload, Base64.DEFAULT) else payload.toByteArray()
+            val dest = Runtime.hostPath(this@MainActivity, uid(), destPath)
+            dest.parentFile?.mkdirs()
+            dest.writeBytes(bytes)
+            JSONObject().put("ok", true).put("path", destPath).put("size", bytes.size).toString()
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString()
+        }
+
+        @JavascriptInterface fun mediaServerStart() { runOnUiThread { MediaServer.start(this@MainActivity) { n, d -> emit(n, d) } } }
+        @JavascriptInterface fun mediaServerStop() { MediaServer.stop() }
+        @JavascriptInterface fun mediaAnswer(id: String, payload: String) {
+            try { MediaServer.answer(id, JSONObject(payload)) } catch (_: Exception) {}
+        }
+
+        /** Media notification: points back to the media screen when the job finishes. */
+        @JavascriptInterface fun notifyMedia(title: String, text: String) {
+            runOnUiThread {
+                try {
+                    Notifier.media(this@MainActivity, title, text)
+                } catch (_: Exception) {}
+            }
+        }
+
         // --- network (local server) ---
         @JavascriptInterface fun http(id: String, method: String, path: String, body: String) {
             Net.request(this@MainActivity, id, method, path, body) { n, d -> emit(n, d) }
@@ -1686,6 +1778,6 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        val FLAG_KEYS = listOf("snd_done", "snd_action", "snd_quota", "noseccomp", "overlay_only_busy")
+        val FLAG_KEYS = listOf("snd_done", "snd_action", "snd_quota", "snd_media", "noseccomp", "overlay_only_busy")
     }
 }

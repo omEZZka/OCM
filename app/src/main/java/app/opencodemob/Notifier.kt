@@ -19,11 +19,12 @@ object Notifier {
     const val DONE = "done"
     const val ACTION = "action"
     const val QUOTA = "quota"
+    const val MEDIA = "media"
 
     fun ensureChannels(c: Context) {
         val nm = c.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("runtime", "Фоновая служба", NotificationManager.IMPORTANCE_LOW))
-        listOf(DONE to "Задача завершена", ACTION to "Требуется действие", QUOTA to "Квота исчерпана").forEach { (id, name) ->
+        listOf(DONE to "Задача завершена", ACTION to "Требуется действие", QUOTA to "Квота исчерпана", MEDIA to "Медиа готово").forEach { (id, name) ->
             // Sound is played by Notifier.beep so each event has its own pleasant harmonic chime
             nm.createNotificationChannel(NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH).apply { setSound(null, null) })
         }
@@ -116,6 +117,26 @@ object Notifier {
         if (kind == QUOTA) {
             b.addAction(0, "Настройки", open(c, sessionId))
         }
+        try { NotificationManagerCompat.from(c).notify(id, b.build()) } catch (_: SecurityException) {}
+    }
+
+    /** Media job finished: tapping opens the Media screen, not a chat. */
+    fun media(c: Context, title: String, text: String) {
+        if (!Prefs.flag(c, "snd_media", true)) return
+        val id = 11
+        val openMedia = PendingIntent.getActivity(
+            c, 42,
+            Intent(c, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra("widget_action", "media"),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val b = NotificationCompat.Builder(c, MEDIA)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
+            .setContentIntent(openMedia)
         try { NotificationManagerCompat.from(c).notify(id, b.build()) } catch (_: SecurityException) {}
     }
 

@@ -64,6 +64,7 @@ O.openSettings=()=>{
     O.listRow('search',O.tr('Custom API Provider','Свой API провайдер'),'OpenAI-compatible, Groq, OpenRouter...',O.icon('chevR'),()=>O.openCustomProvider(s)),
     O.listRow('refresh',O.tr('Fallback models','Резервные модели'),O.fallbackModels().length?O.fallbackModels().join(', '):O.tr('Used automatically when the main model fails','Автопереключение при ошибке основной модели'),O.icon('chevR'),()=>openFallback()),
     O.listRow('bot',O.tr('Multimodality','Мультимодальность'),O.tr('Team agents: lead model + role models','Командные агенты: главная модель + модели ролей'),O.icon('chevR'),()=>O.openMultimodal()),
+    O.listRow('image',O.tr('Media factory','Медиа-фабрика'),O.tr('Photo, video, voice and music providers','Провайдеры фото, видео, голоса и музыки'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openMediaSettings&&O.openMediaSettings(),200)}),
     O.listRow('cloud',O.tr('Remote Builds','Удалённая сборка'),O.tr('GitHub, GitLab, Bitbucket, CircleCI, Azure, Codemagic, Bitrise, GCB','Удалённая сборка APK по токену'),O.icon('chevR'),()=>O.openRemoteBuilds())
   );
   panes.main.append(modelsCard);
@@ -825,6 +826,23 @@ At the very end of EVERY response, you MUST output a separate line with line add
 let readmeWrote={};
 // Teaches the agent that a generated map exists, so it opens one file instead of walking the tree.
 // Written once per project; kept short so it does not inflate every request.
+// Tells the agent that it can generate media through the factory, and how.
+O.ensureMediaHint = root=>{
+  try{
+    const path=(root||S.dir)+'/AGENTS.md';
+    const cur=O.native.readText(path);
+    const text=(cur&&cur.ok&&cur.text)||'';
+    if(text.includes('media-gen'))return;
+    const hint='\n\n## Media generation\n\n'+
+      'You can create images, video, speech and music with the on-device media factory:\n\n'+
+      '```bash\nmedia-gen image "a red fox in snow, cinematic"\nmedia-gen video "waves at sunset" model-id\nmedia-gen tts "Привет, это озвучка"\nmedia-gen music "lo-fi beat, 30s"\n```\n\n'+
+      'The command prints JSON with the absolute path of the generated file. The user confirms every generation.\n'+
+      'Attach the returned path to your answer so it appears in the chat.\n';
+    O.native.fs('mkdir',O.dirname(path));
+    O.native.writeText(path,(text?text.replace(/\s+$/,'')+'\n':'')+hint);
+  }catch(_){}
+};
+
 O.ensureMapHint = root=>{
   try{
     const path=(root||S.dir)+'/AGENTS.md';

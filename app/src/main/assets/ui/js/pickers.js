@@ -57,6 +57,17 @@ O.openSessions=()=>{
     navItem('folder',O.tr('Files','Файлы'),()=>O.setTab('files')),
     navItem('terminal',O.tr('Terminal','Терминал'),()=>O.setTab('term')),
     navItem('branch',O.tr('Changes','Изменения'),()=>O.setTab('changes')),
+    // Media opens a small chooser first: it is a factory with four different tools.
+    h('button',{class:'drawer-nav-item',onclick:()=>{
+      O.actions(O.tr('Media','Медиа'),[
+        {label:O.tr('Photo','Фото'),sub:O.tr('Text to image, edits, upscale','Текст в изображение, правки, апскейл'),icon:'image',fn:()=>O.openMedia&&O.openMedia('image')},
+        {label:O.tr('Video','Видео'),sub:O.tr('Text or image to video, up to 60s','Текст или фото в видео, до 60 с'),icon:'film',fn:()=>O.openMedia&&O.openMedia('video')},
+        {label:O.tr('Voice','Голос'),sub:O.tr('Text to speech and voice cloning','Озвучка текста и клонирование голоса'),icon:'wave',fn:()=>O.openMedia&&O.openMedia('tts')},
+        {label:O.tr('Music','Музыка'),sub:O.tr('Tracks up to 60 seconds','Треки до 60 секунд'),icon:'note',fn:()=>O.openMedia&&O.openMedia('music')},
+        {label:O.tr('History','История'),sub:O.tr('Everything generated on this device','Всё, что создано на этом устройстве'),icon:'list',fn:()=>O.openMedia&&O.openMedia('history')},
+        {label:O.tr('Media settings','Настройки медиа'),sub:O.tr('Providers, save folder, prompt language','Провайдеры, папка, язык промптов'),icon:'sliders',fn:()=>O.openMediaSettings&&O.openMediaSettings()},
+      ]);
+    }},O.icon('image'),h('span',null,O.tr('Media','Медиа'))),
     navItem('down',O.tr('Import session','Импорт сессии'),()=>importSessionFile()),
     navItem('sliders',O.tr('Settings','Настройки'),()=>O.openSettings()),
     navItem('refresh',O.tr('Restart server','Перезапуск сервера'),()=>restartApp()));

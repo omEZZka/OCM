@@ -280,15 +280,29 @@ function fillPart(el,p,m,fresh){
     },140)}
     else fillTool(el,p);
     break}
-  case'file':el.className='part fchips';el.textContent='';
-    if((p.mime||'').startsWith('image/')&&p.url){
+  case'file':{
+    const mime=String(p.mime||''),url=p.url||'';
+    const isImg=mime.startsWith('image/'),isVid=mime.startsWith('video/'),isAud=mime.startsWith('audio/');
+    el.className='part fchips'+(isVid?' vid':isAud?' aud':'');
+    el.textContent='';
+    if(isImg&&url){
       // data: URLs of attachments can be megabytes each; they live in state and IndexedDB.
       // Old messages keep only a light marker after the first render to bound memory use.
-      if(String(p.url).startsWith('data:')&&!fresh&&el._img)return;
+      if(url.startsWith('data:')&&!fresh&&el._img)return;
       el._img=true;
-      el.append(h('img',{class:'thumb',src:p.url,loading:'lazy'}));
+      el.append(h('img',{class:'thumb',src:url,loading:'lazy'}));
+    }else if(isVid&&url){
+      if(!fresh&&el._media)return;
+      el._media=true;
+      el.append(h('video',{class:'thumb-video',src:url,controls:true,preload:'metadata'}));
+    }else if(isAud&&url){
+      if(!fresh&&el._media)return;
+      el._media=true;
+      el.append(h('audio',{class:'thumb-audio',src:url,controls:true,preload:'metadata'}));
+    }else{
+      el.append(h('span',{class:'chip'},O.fileIcon(p.filename||'file'),h('span',null,p.filename||'file')));
     }
-    else el.append(h('span',{class:'chip'},O.fileIcon(p.filename||'file'),h('span',null,p.filename||'file')));break;
+    break}
   case'agent':el.className='part fchips';el.textContent='';el.append(h('span',{class:'chip'},O.icon('bot'),h('span',null,'@'+p.name)));break;
   case'patch':el.className='part';el.textContent='';el.append(h('span',{class:'chip'},O.icon('edit'),h('span',null,'Изменено файлов: '+((p.files||[]).length))));break;
   case'retry':el.className='part warn s';el.textContent='Повтор: '+((p.error&&p.error.data&&p.error.data.message)||'запрос не удался');break;
