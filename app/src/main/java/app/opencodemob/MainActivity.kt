@@ -70,6 +70,8 @@ class MainActivity : ComponentActivity() {
     private var lastPhase = ""
     private var stt: SpeechInput? = null
     private var tts: Speaker? = null
+    private var voiceRec: android.media.MediaRecorder? = null
+    private var voiceRecPath: String? = null
     private var lastErr: String? = null
 
     private val loader by lazy {
@@ -1510,9 +1512,6 @@ class MainActivity : ComponentActivity() {
         }
 
         // ---- (35) voice sample recorder: short mic capture saved as a file for voice cloning ----
-        private var voiceRec: android.media.MediaRecorder? = null
-        private var voiceRecPath: String? = null
-
         @JavascriptInterface fun voiceSampleStart(destPath: String): String = try {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 JSONObject().put("ok", false).put("err", "mic permission").toString()
