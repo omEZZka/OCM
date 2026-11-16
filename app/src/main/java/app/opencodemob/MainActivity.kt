@@ -379,6 +379,8 @@ class MainActivity : ComponentActivity() {
         ui.removeCallbacksAndMessages(null)
         try { stt?.stop() } catch (_: Exception) {}
         try { tts?.shutdown() } catch (_: Exception) {}
+        try { voiceRec?.release() } catch (_: Exception) {}
+        voiceRec = null
         Net.sseStop()
         web.destroy()
         super.onDestroy()
@@ -1507,6 +1509,53 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // ---- (35) voice sample recorder: short mic capture saved as a file for voice cloning ----
+        private var voiceRec: android.media.MediaRecorder? = null
+        private var voiceRecPath: String? = null
+
+        @JavascriptInterface fun voiceSampleStart(destPath: String): String = try {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                JSONObject().put("ok", false).put("err", "mic permission").toString()
+            } else {
+                runOnUiThread {
+                    try {
+                        voiceRec?.release()
+                        val dest = Runtime.hostPath(this@MainActivity, uid(), destPath)
+                        dest.parentFile?.mkdirs()
+                        @Suppress("DEPRECATION")
+                        val r = android.media.MediaRecorder()
+                        r.setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
+                        r.setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4)
+                        r.setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC)
+                        r.setAudioSamplingRate(44100)
+                        r.setAudioEncodingBitRate(128000)
+                        r.setOutputFile(dest.absolutePath)
+                        r.prepare(); r.start()
+                        voiceRec = r; voiceRecPath = destPath
+                        // hard stop at 60 s: a forgotten recorder must not run forever
+                        ui.postDelayed({ try { voiceSampleStop() } catch (_: Exception) {} }, 60_000)
+                    } catch (e: Exception) {
+                        emit("voiceSample", JSONObject().put("ok", false).put("err", e.message ?: "record failed"))
+                    }
+                }
+                JSONObject().put("ok", true).toString()
+            }
+        } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
+
+        @JavascriptInterface fun voiceSampleStop(): String {
+            val r = voiceRec ?: return JSONObject().put("ok", false).put("err", "not recording").toString()
+            voiceRec = null
+            return try {
+                try { r.stop() } catch (_: Exception) {}
+                r.release()
+                val p = voiceRecPath ?: ""
+                voiceRecPath = null
+                val res = JSONObject().put("ok", true).put("path", p)
+                emit("voiceSample", res)
+                res.toString()
+            } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
+        }
+
         @JavascriptInterface fun mediaServerStart() { runOnUiThread { MediaServer.start(this@MainActivity) { n, d -> emit(n, d) } } }
         @JavascriptInterface fun mediaServerStop() { MediaServer.stop() }
         @JavascriptInterface fun mediaAnswer(id: String, payload: String) {
@@ -1583,6 +1632,41 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
 
         @JavascriptInterface fun readLog(): String = try { File(filesDir, "server.log").readText().takeLast(60_000) } catch (_: Exception) { "" }
+
+        /** (59) Live resource snapshot: app CPU/RAM, device RAM, storage of the profile dirs. */
+        @JavascriptInterface fun resourceStats(): String = try {
+            val o = JSONObject()
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val mi = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+            o.put("ramTotal", mi.totalMem); o.put("ramAvail", mi.availMem); o.put("ramLow", mi.lowMemory)
+            val rt = java.lang.Runtime.getRuntime()
+            o.put("jvmUsed", rt.totalMemory() - rt.freeMemory()); o.put("jvmMax", rt.maxMemory())
+            val pid = android.os.Process.myPid()
+            val mem = am.getProcessMemoryInfo(intArrayOf(pid))
+            if (mem.isNotEmpty()) o.put("appPssKb", mem[0].totalPss)
+            // CPU load: two /proc/stat samples 120 ms apart (cheap, no busy loop)
+            fun cpu(): LongArray {
+                val l = File("/proc/stat").readLines().first().split(Regex("\\s+")).drop(1).mapNotNull { it.toLongOrNull() }
+                val idle = (l.getOrElse(3) { 0L }) + (l.getOrElse(4) { 0L })
+                return longArrayOf(l.sum(), idle)
+            }
+            try {
+                val a = cpu(); Thread.sleep(120); val b = cpu()
+                val dt = (b[0] - a[0]).coerceAtLeast(1)
+                o.put("cpuPct", ((dt - (b[1] - a[1])) * 100 / dt).toInt().coerceIn(0, 100))
+            } catch (_: Exception) {}
+            fun dirSize(f: File): Long {
+                var n = 0L
+                try { f.walkTopDown().maxDepth(6).forEach { if (it.isFile) n += it.length() } } catch (_: Exception) {}
+                return n
+            }
+            o.put("rootfsBytes", dirSize(Runtime.rootfs(this@MainActivity)))
+            o.put("profileBytes", dirSize(File(filesDir, "users")))
+            val stat = android.os.StatFs(filesDir.path)
+            o.put("diskFree", stat.availableBytes); o.put("diskTotal", stat.totalBytes)
+            o.put("serverReady", ServerState.ready)
+            o.toString()
+        } catch (e: Exception) { JSONObject().put("err", e.message ?: "failed").toString() }
 
         /** End-to-end self check of the local pipeline: UI → Kotlin → 127.0.0.1 → server. */
         // --- encrypted storage for API key rings ---
@@ -1823,12 +1907,27 @@ class MainActivity : ComponentActivity() {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
         }
 
-        @JavascriptInterface fun backupProfile(password: String): String = try {
+        @JavascriptInterface fun backupProfile(password: String): String = backupProfileFull(password, "")
+
+        /** (89) Full export: profile files + WebView settings dump + media manifest, all encrypted. */
+        @JavascriptInterface fun backupProfileFull(password: String, settingsJson: String): String = try {
             val home = Runtime.home(this@MainActivity, uid())
             val dir = Backup.backupDir(this@MainActivity)
             val out = File(dir, "OCM-backup-" + System.currentTimeMillis() + ".ocmbak")
-            val skipped = Backup.backupZip(home, out, password)
-            JSONObject().put("ok", true).put("path", out.absolutePath).put("size", out.length()).put("skipped", skipped).toString()
+            val extras = HashMap<String, ByteArray>()
+            if (settingsJson.isNotEmpty()) extras["settings.json"] = settingsJson.toByteArray(Charsets.UTF_8)
+            try {
+                val mediaDir = File("/storage/emulated/0/Download/OCM/media")
+                if (mediaDir.isDirectory) {
+                    val manifest = org.json.JSONArray()
+                    mediaDir.walkTopDown().maxDepth(3).forEach { f ->
+                        if (f.isFile) manifest.put(JSONObject().put("path", f.absolutePath).put("size", f.length()).put("at", f.lastModified()))
+                    }
+                    extras["media-manifest.json"] = manifest.toString().toByteArray(Charsets.UTF_8)
+                }
+            } catch (_: Exception) {}
+            val skipped = Backup.backupZip(home, out, password, extras)
+            JSONObject().put("ok", true).put("path", out.absolutePath).put("size", out.length()).put("skipped", skipped).put("full", true).toString()
         } catch (e: Exception) {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
         }
@@ -1838,8 +1937,11 @@ class MainActivity : ComponentActivity() {
             val src = File(path.ifEmpty { File(cacheDir, "restore.ocmbak").absolutePath })
             if (!src.exists()) JSONObject().put("ok", false).put("err", "backup file not found").toString()
             else {
-                Backup.restoreZip(src, home, password)
-                JSONObject().put("ok", true).put("path", src.absolutePath).toString()
+                val extras = Backup.restoreZip(src, home, password)
+                val o = JSONObject().put("ok", true).put("path", src.absolutePath)
+                // (89) hand the settings dump back to the UI so it can re-apply localStorage
+                extras["settings.json"]?.let { o.put("settings", String(it, Charsets.UTF_8)) }
+                o.toString()
             }
         } catch (e: Exception) {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()

@@ -313,6 +313,169 @@ O.initCustomWidgets=function(root){
 };
 
 // Listen to native preview events (e.g. from openpreview CLI script or bridge)
+// ---- (59) resource monitor ----
+O.openResources=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Resources','Ресурсы'),body,{full:true});
+  const fmtB=n=>{n=Number(n)||0;if(n>1e9)return(n/1e9).toFixed(1)+' GB';if(n>1e6)return(n/1e6).toFixed(0)+' MB';return Math.round(n/1e3)+' KB'};
+  const bar=(pct,color)=>h('div',{style:{height:'6px',borderRadius:'3px',background:'var(--bg3)',overflow:'hidden',marginTop:'6px'}},
+    h('div',{style:{height:'100%',width:Math.max(2,Math.min(100,pct))+'%',background:color||'var(--acc)'}}));
+  let timer=null;
+  const draw=()=>{
+    if(!s.root.isConnected){clearInterval(timer);return}
+    const st=O.native.resourceStats?O.native.resourceStats():{};
+    body.textContent='';
+    if(st.err){body.append(h('div',{class:'errbox'},st.err));return}
+    const ramPct=st.ramTotal?Math.round((st.ramTotal-st.ramAvail)*100/st.ramTotal):0;
+    const jvmPct=st.jvmMax?Math.round(st.jvmUsed*100/st.jvmMax):0;
+    const diskPct=st.diskTotal?Math.round((st.diskTotal-st.diskFree)*100/st.diskTotal):0;
+    const row=(icon,title,val,pct,color)=>h('div',{class:'settings-row',style:{display:'block'}},
+      h('div',{style:{display:'flex',alignItems:'center',gap:'8px'}},O.icon(icon),h('b',{class:'grow'},title),h('span',{class:'mut s'},val)),
+      pct!=null?bar(pct,color):null);
+    body.append(row('cpu',O.tr('CPU','Процессор'),(st.cpuPct!=null?st.cpuPct+'%':'…'),st.cpuPct,st.cpuPct>80?'#ef4444':null));
+    body.append(row('memory',O.tr('Device RAM','ОЗУ устройства'),fmtB(st.ramTotal-st.ramAvail)+' / '+fmtB(st.ramTotal),ramPct,ramPct>85?'#ef4444':null));
+    body.append(row('zap',O.tr('App memory (JVM)','Память приложения (JVM)'),fmtB(st.jvmUsed)+' / '+fmtB(st.jvmMax),jvmPct));
+    body.append(row('zap',O.tr('App total (PSS)','Приложение всего (PSS)'),fmtB((st.appPssKb||0)*1024),null));
+    body.append(row('down',O.tr('Storage','Хранилище'),fmtB(st.diskTotal-st.diskFree)+' / '+fmtB(st.diskTotal),diskPct,diskPct>90?'#ef4444':null));
+    body.append(row('folder','Linux rootfs',fmtB(st.rootfsBytes),null));
+    body.append(row('user',O.tr('Profiles & chats','Профили и чаты'),fmtB(st.profileBytes),null));
+    body.append(h('div',{class:'note',style:{marginTop:'10px'}},
+      (st.serverReady?O.tr('Server: running','Сервер: работает'):O.tr('Server: stopped','Сервер: остановлен'))+' · '+O.tr('updates every 3 s','обновление каждые 3 с')));
+    if(st.ramLow)body.append(h('div',{class:'errbox',style:{marginTop:'8px'}},O.tr('Android reports low memory — close other apps','Android сообщает о нехватке памяти — закройте другие приложения')));
+  };
+  draw();timer=setInterval(draw,3000);
+};
+
+// ---- (62) global search: chats, messages, files, commands, models, actions ----
+O.openGlobalSearch=()=>{
+  const q=h('input',{placeholder:O.tr('Search everything…','Искать везде…'),style:{marginBottom:'10px'}});
+  const out=h('div');
+  const s=O.sheet(O.tr('Global search','Глобальный поиск'),h('div',null,q,out),{full:true});
+  let t=null;
+  const row=(icon,title,sub,fn)=>h('button',{class:'settings-row',onclick:()=>{s.close();fn()}},
+    O.icon(icon),h('div',{class:'settings-row-text'},h('b',null,title),sub?h('span',null,sub):null));
+  const run=async()=>{
+    const needle=String(q.value||'').trim().toLowerCase();
+    out.textContent='';
+    if(needle.length<2)return;
+    const grp=label=>out.append(h('div',{class:'grp'},label));
+    // actions / commands
+    const cmds=(O.builtins||[]).filter(c=>('/'+c.n+' '+(c.d||'')).toLowerCase().includes(needle));
+    if(cmds.length){grp(O.tr('Commands','Команды'));cmds.slice(0,5).forEach(c=>out.append(row(c.i||'slash','/'+c.n,c.d,()=>c.run())))}
+    // sessions
+    const ses=(O.S.sessions||[]).filter(x=>O.sessionTitle(x).toLowerCase().includes(needle));
+    if(ses.length){grp(O.tr('Sessions','Сессии'));ses.slice(0,6).forEach(x=>out.append(row('chat',O.sessionTitle(x),O.ago(x.time&&x.time.updated),()=>O.openSession(x.id))))}
+    // models
+    const models=O.allModels().filter(x=>(x.name+' '+x.mid+' '+x.pid).toLowerCase().includes(needle));
+    if(models.length){grp(O.tr('Models','Модели'));models.slice(0,5).forEach(x=>out.append(row('cpu',x.name||x.mid,x.pid,()=>{O.setModel(x.pid,x.mid);O.toast(x.name||x.mid,1200)})))}
+    // files (server-side find)
+    try{
+      const files=await O.api('GET','/find/file?query='+encodeURIComponent(needle)+'&limit=8');
+      if(Array.isArray(files)&&files.length){grp(O.tr('Files','Файлы'));files.slice(0,8).forEach(f=>{
+        const dir=f.endsWith('/');
+        out.append(row(O.fileIcon?'file':'folder',O.basename(f),f,()=>{if(!dir)O.openFile(f);else O.setTab('files')}));
+      })}
+    }catch(_){}
+    // message contents (async IndexedDB scan)
+    if(O.searchMessages){
+      const hits=await O.searchMessages(needle);
+      if(!s.root.isConnected)return;
+      if(hits.length){grp(O.tr('In messages','В сообщениях'));hits.slice(0,8).forEach(r=>{
+        const ses2=(O.S.sessions||[]).find(x=>x.id===r.sid);
+        out.append(row('search',ses2?O.sessionTitle(ses2):r.sid.slice(0,8),'…'+r.text.replace(/\s+/g,' ').slice(0,120)+'…',async()=>{
+          await O.openSession(r.sid);
+          setTimeout(()=>{const el=[...document.querySelectorAll('#msgs .msg')].find(e=>e.dataset.id===r.mid);if(el)el.scrollIntoView({block:'center'})},400);
+        }));
+      })}
+    }
+    if(!out.children.length)out.append(h('div',{class:'note'},O.tr('Nothing found','Ничего не найдено')));
+  };
+  q.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(run,250)});
+  setTimeout(()=>q.focus(),150);
+};
+
+// ---- (61) interactive onboarding tour ----
+O.openTour=()=>{
+  const steps=[
+    ['chat',O.tr('Chat with the agent','Чат с агентом'),O.tr('Type a task — the agent edits files, runs commands and shows diffs. @ mentions a file, ! runs a shell command, / opens commands.','Напишите задачу — агент правит файлы, выполняет команды и показывает diff. @ упоминает файл, ! запускает команду, / открывает меню команд.')],
+    ['folder',O.tr('Projects & files','Проекты и файлы'),O.tr('Each workspace keeps its folder, model and agent. Swipe left from chat to open files; long-press a file for actions.','У каждого проекта своя папка, модель и агент. Свайп влево из чата открывает файлы; долгое нажатие — действия.')],
+    ['image',O.tr('Media chats','Медиа-чаты'),O.tr('Photo, Video, Voice and Music are separate conversations. Add a provider, pick a model, type a prompt — results appear as messages.','Фото, Видео, Голос и Музыка — отдельные переписки. Добавьте провайдера, выберите модель, введите запрос — результаты появятся сообщениями.')],
+    ['wave',O.tr('Voice','Голос'),O.tr('Tap the mic for dictation or a live call. In a call, say "open files", "new chat", "read changes" — or set a wake phrase in call settings.','Микрофон — диктовка или живой звонок. В звонке говорите «открой файлы», «новый чат», «прочитай изменения» — или задайте кодовую фразу.')],
+    ['list',O.tr('Plans & queue','Планы и очередь'),O.tr('Enable step-by-step plans in Settings. While the agent works, new messages go to a queue and send automatically when it finishes.','Включите пошаговые планы в настройках. Пока агент работает, новые сообщения встают в очередь и отправятся сами.')],
+    ['search',O.tr('Find anything','Найти что угодно'),O.tr('Global search covers sessions, message text, files, models and commands. Open it from the drawer or /search.','Глобальный поиск ищет по сессиям, текстам сообщений, файлам, моделям и командам. Открывается из меню или /search.')],
+    ['shield',O.tr('You are in control','Вы управляете'),O.tr('Checkpoints snapshot the project before every prompt. Settings → System has encrypted backups, updates and diagnostics.','Чекпоинты сохраняют проект перед каждым запросом. Настройки → Система: шифрованные бэкапы, обновления, диагностика.')]
+  ];
+  let i=0;
+  const body=h('div',{style:{textAlign:'center',padding:'8px 4px'}});
+  const s=O.sheet(O.tr('Welcome to OpenCode Mobile','Добро пожаловать в OpenCode Mobile'),body,{hud:true,onClose:()=>O.store.set('tourSeen',true)});
+  const draw=()=>{
+    body.textContent='';
+    const [icon,title,text]=steps[i];
+    body.append(h('div',{style:{display:'flex',justifyContent:'center',margin:'6px 0 10px'}},O.icon(icon)),
+      h('b',{style:{fontSize:'17px',display:'block',marginBottom:'8px'}},title),
+      h('p',{class:'mut',style:{fontSize:'13.5px',lineHeight:'1.55',margin:'0 0 14px'}},text),
+      h('div',{style:{display:'flex',justifyContent:'center',gap:'6px',marginBottom:'14px'}},
+        steps.map((_,k)=>h('i',{style:{width:'7px',height:'7px',borderRadius:'50%',background:k===i?'var(--acc)':'var(--bg3)',display:'inline-block'}}))),
+      h('div',{style:{display:'flex',gap:'8px'}},
+        h('button',{class:'btn grow',onclick:()=>{O.store.set('tourSeen',true);s.close()}},O.tr('Skip','Пропустить')),
+        h('button',{class:'btn pri grow',onclick:()=>{if(i<steps.length-1){i++;draw()}else{O.store.set('tourSeen',true);s.close()}}},
+          i<steps.length-1?O.tr('Next','Далее'):O.tr('Start','Начать'))));
+  };
+  draw();
+};
+
+// ---- (63) customizable home tiles ----
+const TILE_DEFS=[
+  ['chat','chat',()=>O.tr('Chat','Чат'),()=>{O.setTab('chat')}],
+  ['files','folder',()=>O.tr('Files','Файлы'),()=>O.setTab('files')],
+  ['term','terminal',()=>O.tr('Terminal','Терминал'),()=>O.setTab('term')],
+  ['changes','branch',()=>O.tr('Changes','Изменения'),()=>O.setTab('changes')],
+  ['photo','image',()=>O.tr('Photo','Фото'),()=>O.openMedia('image')],
+  ['video','film',()=>O.tr('Video','Видео'),()=>O.openMedia('video')],
+  ['voice','wave',()=>O.tr('Voice','Голос'),()=>O.openMedia('tts')],
+  ['music','note',()=>O.tr('Music','Музыка'),()=>O.openMedia('music')],
+  ['projects','folder',()=>O.tr('Projects','Проекты'),()=>O.openProjects()],
+  ['search','search',()=>O.tr('Search','Поиск'),()=>O.openGlobalSearch()],
+  ['plan','list',()=>O.tr('Plan','План'),()=>O.openPlan()],
+  ['call','mic',()=>O.tr('Call','Звонок'),()=>O.onMicChoice()],
+  ['resources','cpu',()=>O.tr('Resources','Ресурсы'),()=>O.openResources()],
+  ['settings','sliders',()=>O.tr('Settings','Настройки'),()=>O.openSettings()]
+];
+O.homeTiles=()=>O.store.get('homeTiles',['chat','files','photo','search','projects','term']);
+O.openHomeTiles=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Home tiles','Плитки главного экрана'),body,{hud:true});
+  const draw=()=>{
+    body.textContent='';
+    body.append(h('div',{class:'note'},O.tr('Pick up to 8 tiles for the home screen shown on an empty chat. Order = tap order below.','Выберите до 8 плиток для главного экрана (показывается в пустом чате). Порядок — по нажатию.')));
+    const cur=O.homeTiles();
+    TILE_DEFS.forEach(([id,icon,label])=>{
+      const on=cur.includes(id);
+      body.append(O.toggleRow(icon,label(),'',on,v=>{
+        let l=O.homeTiles();
+        if(v){if(l.length>=8){O.toast(O.tr('Maximum 8 tiles','Максимум 8 плиток'),2000);draw();return}l.push(id)}
+        else l=l.filter(x=>x!==id);
+        O.store.set('homeTiles',l);bus.emit('homeTiles');draw();
+      }));
+    });
+  };
+  draw();
+};
+O.buildHomeTiles=container=>{
+  const wrap=h('div',{class:'home-tiles'});
+  const draw=()=>{
+    wrap.textContent='';
+    O.homeTiles().forEach(id=>{
+      const def=TILE_DEFS.find(x=>x[0]===id);
+      if(!def)return;
+      wrap.append(h('button',{class:'home-tile',onclick:def[3]},O.icon(def[1]),h('span',null,def[2]())));
+    });
+  };
+  draw();
+  const off=bus.on('homeTiles',()=>{if(wrap.isConnected)draw();else off()});
+  container.append(wrap);
+};
+
 O.on('preview', d => {
   if (d && d.path) O.openPreview(d.path);
   else O.openPreview();

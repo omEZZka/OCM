@@ -28,7 +28,7 @@ object Backup {
         File("/sdcard/Download").takeIf { it.exists() && it.canWrite() } ?: context.filesDir
 
     /** Returns the number of files skipped because of the size caps (reported to the user). */
-    fun backupZip(home: File, out: File, password: String): Int {
+    fun backupZip(home: File, out: File, password: String, extras: Map<String, ByteArray> = emptyMap()): Int {
         val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
         val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -46,6 +46,14 @@ object Backup {
                 fos.write(iv)
                 CipherOutputStream(fos, cipher).use { cos ->
                     ZipOutputStream(cos).use { zos ->
+                        // (89) extra entries: WebView settings dump, media manifest — encrypted too
+                        extras.forEach { (name, bytes) ->
+                            try {
+                                zos.putNextEntry(ZipEntry("_ocm/$name"))
+                                zos.write(bytes)
+                                zos.closeEntry()
+                            } catch (_: Exception) {}
+                        }
                         home.walkTopDown().forEach { f ->
                             if (!f.isFile) return@forEach
                             val rel = f.relativeTo(home).path
@@ -73,7 +81,9 @@ object Backup {
         return skipped
     }
 
-    fun restoreZip(src: File, home: File, password: String) {
+    /** Restores; returns the extra `_ocm/` entries (settings dump etc.) for the caller to apply. */
+    fun restoreZip(src: File, home: File, password: String): Map<String, ByteArray> {
+        val extras = HashMap<String, ByteArray>()
         // Extract into a staging directory first: AES-GCM only proves authenticity when the stream
         // reaches its end, so decrypting straight into HOME used to leave a half-restored profile
         // behind when the password was wrong or the file was truncated.
@@ -93,6 +103,10 @@ object Backup {
                         while (e != null) {
                             val name = e.name
                             if (name.startsWith("/") || name.contains("..")) {
+                                zis.closeEntry(); e = zis.nextEntry; continue
+                            }
+                            if (name.startsWith("_ocm/")) {
+                                extras[name.removePrefix("_ocm/")] = zis.readBytes()
                                 zis.closeEntry(); e = zis.nextEntry; continue
                             }
                             val dest = File(staging, name)
@@ -140,6 +154,7 @@ object Backup {
         } finally {
             try { staging.deleteRecursively() } catch (_: Exception) {}
         }
+        return extras
     }
 
     /** Creates a timestamped backup and keeps only the newest [keep] auto-backups. */

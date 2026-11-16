@@ -3,6 +3,10 @@ const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
 let atts=[],mentions=[],stick=true,revKey='',trail=[];
+// True while WE move scrollTop programmatically: the scroll handler must not interpret our own
+// intermediate positions as "user scrolled away" (that killed pinning mid-inflation and left the
+// session opened in the middle).
+let suppressScroll=false;
 let histIdx=-1;
 let pendingHead=[],loadingOlder=false;
 const RENDER_TAIL=28, RENDER_CHUNK=24;
@@ -14,14 +18,16 @@ const busy=()=>{const s=S.status[S.sid];return !!s&&s.type!=='idle'};
 O.chatInit=root=>{
   chatRoot=root;
   msgsEl=h('div',{id:'msgs',class:'sel',onscroll:()=>{
+    if(suppressScroll)return; // our own programmatic scroll, not the user's finger
     const nb=nearBottom();
-    // Leaving the bottom stops every pending "follow" behaviour at once: pin timers, scheduled
-    // renders and tool re-flows all check `stick`, which used to lag one event behind.
-    if(!nb&&stick)stick=false;
-    stick=nb;
+    if(!nb&&stick){stick=false;if(pinT){clearInterval(pinT);pinT=null}}
+    else if(nb&&!stick)stick=true;
     jumpEl.classList.toggle('hide',stick);
     maybeLoadOlder();
   }});
+  // Any real touch inside the list cancels bottom-pinning immediately: the finger wins.
+  msgsEl.addEventListener('touchstart',()=>{if(pinT){clearInterval(pinT);pinT=null}},{passive:true});
+  msgsEl.addEventListener('wheel',()=>{if(pinT){clearInterval(pinT);pinT=null}},{passive:true});
   jumpEl=h('button',{id:'jump',class:'hide',onclick:()=>scrollEnd(true)},O.icon('chevD'));
   revEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
   todoEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
@@ -71,6 +77,15 @@ O.chatInit=root=>{
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,jumpEl);
   root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,mmFloatBtn,comp);
   bus.on('open',()=>{renderAll()});
+  // Live-resync snapshot: merge into the DOM incrementally. NEVER force-scroll here — the user
+  // may be reading far above; only follow when already glued to the bottom.
+  bus.on('resync',sid=>{
+    if(sid!==S.sid)return;
+    const list=O.visibleMsgs(sid);
+    const was=stick;
+    for(const m of list.slice(-RENDER_TAIL))ensureMsg(m);
+    if(was)scrollEnd();
+  });
   let msgRaf=0;
   bus.on('msg',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);
     if(was&&!msgRaf)msgRaf=requestAnimationFrame(()=>{msgRaf=0;scrollEnd()});
@@ -83,10 +98,26 @@ O.chatInit=root=>{
   bus.on('part-removed',(sid,m,pid)=>{dropTimer(pid);const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
   bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend()}if(O.mm.run)renderMmProgress()});
   bus.on('perm',renderDock);bus.on('todo',sid=>{if(sid===S.sid)renderTodos()});
+  bus.on('queue',sid=>{if(sid===S.sid)renderQueueBar()});
   bus.on('session',()=>{const k=revisionKey();if(k!==revKey)renderAll();else renderRevert()});
   bus.on('sessions',()=>{renderRevert()});
   bus.on('mm:progress',renderMmProgress);
-  bus.on('idle',()=>{renderContinue();flushPartTimers();
+  bus.on('idle',sid=>{
+    if(sid===S.sid&&O._turnStart&&O.recordTurnTime){O.recordTurnTime(S.sid,Date.now()-O._turnStart);O._turnStart=0}
+    if(sid===S.sid&&O.dequeuePrompt){
+      const next=O.dequeuePrompt(S.sid);
+      if(next&&next.text)setTimeout(()=>{if(!busy())O.chatSendText(next.text)},400);
+    }
+    if(sid===S.sid&&O.autoCompact&&O.autoCompact()){
+      const u=O.contextUsage(S.sid);
+      const done=O.store.get('autoCompactAt.'+S.sid,0);
+      if(u&&u.pct!=null&&u.pct>=85&&Date.now()-done>120000&&S.model){
+        O.store.set('autoCompactAt.'+S.sid,Date.now());
+        O.toast(O.tr('Context '+u.pct+'% — compacting automatically','Контекст '+u.pct+'% — сжимаю автоматически'),3000);
+        doCompact();
+      }
+    }
+    renderContinue();flushPartTimers();
     // final exact pass: streaming used throttled renders, the settled message must be exact
     for(const m of (S.sid?O.msgs(S.sid).list:[])){
       const el=msgEls.get(m.info.id);if(!el)continue;
@@ -146,24 +177,38 @@ const keepAnchor=(fn)=>{
   fn();
   if(near)return;
   const after=msgsEl.scrollHeight;
-  if(after!==sh)msgsEl.scrollTop=st+(after-sh);
+  if(after!==sh){
+    suppressScroll=true;
+    msgsEl.scrollTop=st+(after-sh);
+    requestAnimationFrame(()=>{suppressScroll=false});
+  }
 };
-const scrollEnd=f=>{requestAnimationFrame(()=>{msgsEl.scrollTop=msgsEl.scrollHeight;if(f){stick=true;jumpEl.classList.add('hide')}})};
+const scrollEnd=f=>{requestAnimationFrame(()=>{
+  // Without the force flag, follow only while still glued to the bottom: a queued rAF must not
+  // yank the reader down after they already scrolled away.
+  if(!f&&!stick)return;
+  suppressScroll=true;
+  msgsEl.scrollTop=msgsEl.scrollHeight;
+  requestAnimationFrame(()=>{suppressScroll=false});
+  if(f){stick=true;jumpEl.classList.add('hide')}
+})};
 // Keep the chat pinned to the bottom for a short while after an open/render:
 // images, code blocks and markdown inflate the height asynchronously, which
 // otherwise leaves the view stranded in the middle of the conversation.
 let pinT=null;
 const pinBottom=ms=>{
   if(pinT)clearInterval(pinT);
-  const until=Date.now()+(ms||1200);
+  // Images/code/highlight inflate asynchronously for several seconds on big sessions; a 1.5 s
+  // window ended too early and the session stayed opened in the middle.
+  const until=Date.now()+(ms||4000);
   pinT=setInterval(()=>{
     if(!msgsEl.isConnected){clearInterval(pinT);pinT=null;return}
     if(Date.now()>until){clearInterval(pinT);pinT=null;return}
-    // The user scrolled away while images/code were still inflating: stop pinning immediately,
-    // otherwise the list keeps yanking itself back down under their finger.
     if(!stick){clearInterval(pinT);pinT=null;return}
+    suppressScroll=true;
     msgsEl.scrollTop=msgsEl.scrollHeight;
-  },60);
+    requestAnimationFrame(()=>{suppressScroll=false});
+  },100);
 };
 const revisionKey=()=>{const s=cur();return s&&s.revert?s.revert.messageID:''};
 
@@ -184,7 +229,7 @@ function renderAll(){
     for(let i=start;i<list.length;i++)fr.append(buildMsg(list[i]));
     msgsEl.append(fr);
   }
-  scrollEnd(true);pinBottom(1500);renderDock();renderStatus();renderContinue();renderRevert();renderTodos();updateSend();updateChips()}
+  scrollEnd(true);pinBottom(list.length>60?6000:4000);renderDock();renderStatus();renderContinue();renderRevert();renderTodos();updateSend();updateChips()}
 
 function maybeLoadOlder(){
   if(loadingOlder||!pendingHead.length)return;
@@ -198,13 +243,16 @@ function maybeLoadOlder(){
   chunk.forEach(m=>fr.append(buildMsg(m)));
   const first=msgsEl.firstChild;
   if(first)msgsEl.insertBefore(fr,first);else msgsEl.append(fr);
-  requestAnimationFrame(()=>{msgsEl.scrollTop=prevTop+(msgsEl.scrollHeight-prevH);loadingOlder=false});
+  requestAnimationFrame(()=>{suppressScroll=true;msgsEl.scrollTop=prevTop+(msgsEl.scrollHeight-prevH);requestAnimationFrame(()=>{suppressScroll=false});loadingOlder=false});
   if(pendingHead.length===0)loadingOlder=false;
 }
 function showEmpty(){
   if(chatRoot)chatRoot.classList.add('is-empty');
   const wm=h('div',{class:'watermark-box'},O.wordmark('100%','auto'));
-  msgsEl.append(h('div',{class:'empty'},wm))}
+  const empty=h('div',{class:'empty'},wm);
+  // (63) customizable home tiles on the empty chat screen
+  if(O.buildHomeTiles)O.buildHomeTiles(empty);
+  msgsEl.append(empty)}
 function flushPartTimers(){
   for(const el of partEls.values()){if(el._tt){clearTimeout(el._tt);el._tt=null;if(el._p)fillTool(el,el._p)}}
 }
@@ -706,7 +754,9 @@ function renderStatus(){
     ?O.tr('Retry #','Повтор №')+(s.attempt||1)+(s.message?': '+String(s.message).slice(0,60):'')
     :(ph?(ph.tool+(ph.detail?': '+ph.detail:'')):O.tr('Thinking','Думает'));
   const timeEl=h('span',{class:'status-time'},'0s');
-  statusEl.append(h('span',{class:'spin'}),h('span',{class:'status-label'},label),timeEl);
+  const est=O.estimateTurn?O.estimateTurn():null;
+  statusEl.append(h('span',{class:'spin'}),h('span',{class:'status-label'},label),
+    est?h('span',{class:'mut s'},'~'+est+'s'):null,timeEl);
   clearInterval(statusT);
   statusT=setInterval(()=>{
     if(!statusEl.isConnected||!statusEl.classList.contains('hide')){
@@ -916,8 +966,19 @@ function updateSend(){
   const b=busy(),has=!!ta.value.trim()||!!atts.length;
   sendBtn.className=b&&!has?'stop':(has?'ready':'');
   sendBtn.textContent='';
-  sendBtn.append(O.icon(b&&!has?'stop':'send'));
+  sendBtn.append(O.icon(b&&!has?'stop':(b&&has?'plus':'send')));
   sendBtn.disabled=!b&&!has;
+  renderQueueBar();
+}
+function renderQueueBar(){
+  let bar=comp&&comp.querySelector('.queue-bar');
+  const items=O.promptQueue?O.promptQueue(S.sid):[];
+  if(!items.length){if(bar)bar.remove();return}
+  if(!bar){bar=h('div',{class:'queue-bar'});comp.querySelector('.cbox').prepend(bar)}
+  bar.textContent='';
+  bar.append(h('span',{class:'mut s'},O.tr('Queued: ','В очереди: ')+items.length));
+  items.slice(0,3).forEach((it,i)=>bar.append(h('span',{class:'chip'},h('span',{class:'media-clip',style:{maxWidth:'140px'}},it.text),
+    h('button',{class:'chip-x',onclick:()=>O.removeQueued(S.sid,i)},O.icon('x')))));
 }
 function autosize(){
   ta.style.height='auto';
@@ -938,6 +999,12 @@ const BUILTINS=[
  {n:'undo',d:'Отменить последнее сообщение и его изменения файлов',i:'undo',run:()=>doUndo()},
  {n:'redo',d:'Вернуть отменённые изменения',i:'redo',run:()=>doRedo()},
  {n:'compact',d:'Сжать сессию, чтобы освободить контекст',i:'refresh',run:()=>doCompact()},
+ {n:'style',d:'Стиль ответа (10 пресетов)',i:'edit',run:()=>O.openAnswerStyles()},
+ {n:'search',d:'Глобальный поиск',i:'search',run:()=>O.openGlobalSearch()},
+ {n:'resources',d:'Монитор ресурсов',i:'cpu',run:()=>O.openResources()},
+ {n:'calls',d:'История звонков',i:'wave',run:()=>O.openCallHistory()},
+ {n:'tour',d:'Обучающий тур',i:'info',run:()=>O.openTour()},
+ {n:'branches',d:'Ветки диалога',i:'branch',run:()=>O.openBranchTree()},
  {n:'share',d:'Поделиться сессией',i:'share',run:()=>doShare()},
  {n:'unshare',d:'Отключить шаринг',i:'share',run:()=>doUnshare()},
  {n:'export',d:'Экспорт диалога в Markdown',i:'down',run:()=>doExport()},
@@ -1016,10 +1083,20 @@ async function onSend(){
   if(text.startsWith('!')){const cmd=text.slice(1).trim();
     if(/^opencode(\s+tui)?\s*$/i.test(cmd)){O.toast('Приложение уже является интерфейсом OpenCode. TUI — во вкладке «Терминал» → Shell, агент — во вкладке «Чат»',6000);clear();return}
     clear();try{const sid=await sess();O.maybeAutoTitle(sid,text);api('POST','/session/'+sid+'/shell',{agent:S.agent,model:S.model,command:cmd},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}
+  // (7) While the agent is busy a typed message goes to the queue instead of interrupting.
+  if(busy()&&(text||atts.length)&&O.enqueuePrompt&&S.sid){
+    O.enqueuePrompt(S.sid,text);
+    clear();
+    O.toast(O.tr('Queued — will send when the agent finishes','В очереди — отправится, когда агент закончит'),2500);
+    return;
+  }
   const parts=[];
   if(O.updateReadmeForModel && S.model && S.model.modelID){
     O.updateReadmeForModel(S.model.modelID);
   }
+  // (10) Answer style: a short instruction rides along as a synthetic part (not shown as user text).
+  const styleTxt=O.answerStyleText?O.answerStyleText():'';
+  if(styleTxt)parts.push({type:'text',text:'[Стиль ответа: '+styleTxt+']',synthetic:true});
   if(text)parts.push({type:'text',text});
   mentions.filter(m=>text.includes(m.tok)).forEach(m=>{const p=JSON.parse(JSON.stringify(m.part));if(p.source&&p.source.text){p.source.text.start=text.indexOf(m.tok);p.source.text.end=p.source.text.start+m.tok.length}parts.push(p)});
   atts.forEach(a=>parts.push(a));
@@ -1030,6 +1107,7 @@ async function onSend(){
   if(O.checkpointBeforeSend&&!O.mmActive())O.checkpointBeforeSend(text);
   clear();
   let lastErr=null,usedModel=null,sentMid=null,sentSid=null,sentTries=[];
+  const turnStart=Date.now();
   O._fallback=null;
   try{
     const sid=await sess();
@@ -1045,7 +1123,9 @@ async function onSend(){
         const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:mdl});m.local=true;
         m.parts=parts.map((p,k)=>Object.assign({id:'prt_local'+k,sessionID:sid,messageID:mid},p));bus.emit('msg',sid,m);scrollEnd(true);
         await api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:mdl,variant:S.variant||undefined,parts},{timeout:30000});
-        usedModel=mdl;lastErr=null;sentMid=mid;sentSid=sid;sentTries=chain.slice(i+1);break;
+        usedModel=mdl;lastErr=null;sentMid=mid;sentSid=sid;sentTries=chain.slice(i+1);
+        O._turnStart=turnStart;
+        break;
       }catch(e){
         lastErr=e;
         const s=O.msgs(sid);s.list=s.list.filter(x=>x.info.id!==mid);s.idx.delete(mid);const el=msgEls.get(mid);if(el){el.remove();msgEls.delete(mid)}

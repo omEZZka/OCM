@@ -157,9 +157,9 @@ O.syncSessionMessages=async(sid)=>{
         for(const pt of m.parts) O.upsertPart(pt);
       }
     }
-    // A full repaint: emitting 'msg' without a message crashed ensureMsg(undefined) and the
-    // recovered snapshot never reached the screen.
-    if(sid===S.sid)bus.emit('open',sid);
+    // Incremental merge only. Emitting 'open' here re-rendered the whole chat and force-scrolled
+    // to the bottom every 3 s while the user was reading above (the "yanked down" bug).
+    if(sid===S.sid)bus.emit('resync',sid);
     saveMsgs(sid);
   }catch(e){}
 };
@@ -620,6 +620,112 @@ O.modelInfo=(pid,mid)=>{
   return null;
 };
 O.memoryOn=()=>O.store.get('memory',true)!==false;
+
+// ---- answer styles (10 presets injected as a short system-style instruction) ----
+const STYLES=[
+  ['off',()=>O.tr('Off','Выкл'),''],
+  ['simple',()=>O.tr('Explain simply','Объясни просто'),'Ответь максимально просто, как для новичка: короткие предложения, аналогии, без жаргона.'],
+  ['senior',()=>O.tr('Senior review','Senior-ревью'),'Отвечай как строгий senior-инженер на код-ревью: укажи риски, краевые случаи, проблемы производительности и безопасности.'],
+  ['code',()=>O.tr('Code only','Только код'),'Отвечай только кодом в блоках, без пояснений. Комментарии в коде — минимальные.'],
+  ['concise',()=>O.tr('Ultra concise','Максимально кратко'),'Отвечай предельно кратко: 1-3 предложения или список. Никаких вступлений и заключений.'],
+  ['teacher',()=>O.tr('Teacher','Учитель'),'Объясняй пошагово как преподаватель: сначала идея, затем шаги, в конце мини-проверка понимания.'],
+  ['eli5',()=>O.tr('ELI5','Как для ребёнка'),'Объясни как пятилетнему: простые слова, бытовые аналогии, никакого технического жаргона.'],
+  ['debug',()=>O.tr('Debugger','Отладчик'),'Действуй как отладчик: гипотеза причины → проверка → фикс. Показывай рассуждение по шагам.'],
+  ['docs',()=>O.tr('Documentation','Документация'),'Отвечай в стиле документации: заголовки, параметры, примеры использования, ограничения.'],
+  ['security',()=>O.tr('Security audit','Аудит безопасности'),'Проверяй всё на уязвимости: инъекции, утечки секретов, права доступа. Отмечай уровень риска.'],
+  ['creative',()=>O.tr('Creative','Креатив'),'Предлагай 2-3 нестандартных варианта решения с плюсами и минусами, прежде чем выбрать лучший.']
+];
+O.answerStyles=()=>STYLES.map(([id,label])=>({id,label:label()}));
+O.answerStyle=()=>O.store.get('answerStyle','off');
+O.setAnswerStyle=id=>{O.store.set('answerStyle',id||'off');bus.emit('meta')};
+O.answerStyleText=()=>{const st=STYLES.find(x=>x[0]===O.answerStyle());return st?st[2]:''};
+O.openAnswerStyles=()=>{
+  const cur=O.answerStyle();
+  O.actions(O.tr('Answer style','Стиль ответа'),STYLES.map(([id,label])=>({
+    label:label(),icon:id===cur?'check':'edit',
+    fn:()=>{O.setAnswerStyle(id);O.toast(O.tr('Style: ','Стиль: ')+label(),1500)}
+  })));
+};
+
+// ---- prompt queue (7): write the next task while the agent works ----
+O.promptQueue=sid=>O.store.get('promptQueue.'+(sid||S.sid),[]);
+O.enqueuePrompt=(sid,text)=>{
+  if(!sid||!text)return;
+  const l=O.promptQueue(sid);l.push({text,at:Date.now()});
+  O.store.set('promptQueue.'+sid,l);bus.emit('queue',sid);
+};
+O.dequeuePrompt=sid=>{
+  const l=O.promptQueue(sid);const it=l.shift();
+  O.store.set('promptQueue.'+sid,l);bus.emit('queue',sid);return it;
+};
+O.removeQueued=(sid,i)=>{
+  const l=O.promptQueue(sid);l.splice(i,1);
+  O.store.set('promptQueue.'+sid,l);bus.emit('queue',sid);
+};
+
+// ---- task time estimate (9): rolling history of turn durations ----
+O.recordTurnTime=(sid,ms)=>{
+  if(!sid||!ms||ms<1000)return;
+  const l=O.store.get('turnTimes',[]);
+  l.push({ms,len:O.visibleMsgs(sid).filter(m=>m.info.role==='user').length,at:Date.now()});
+  O.store.set('turnTimes',l.slice(-40));
+};
+O.estimateTurn=()=>{
+  const l=O.store.get('turnTimes',[]);
+  if(l.length<3)return null;
+  const recent=l.slice(-12).map(x=>x.ms).sort((a,b)=>a-b);
+  const med=recent[Math.floor(recent.length/2)];
+  return Math.round(med/1000);
+};
+
+// ---- auto-compact (4) ----
+O.autoCompact=()=>O.store.get('autoCompact',false);
+O.setAutoCompact=v=>O.store.set('autoCompact',!!v);
+
+// ---- session branch tree (6) ----
+O.sessionBranches=rootId=>{
+  // Fork lineage is tracked locally: server fork() does not always report parentID.
+  const map=O.store.get('forkParents',{});
+  const all=(S.sessions||[]);
+  const kids=id=>all.filter(x=>map[x.id]===id);
+  const build=(id,depth)=>{
+    if(depth>6)return null;
+    const ses=all.find(x=>x.id===id);
+    if(!ses)return null;
+    return {id,title:O.sessionTitle(ses),updated:ses.time&&ses.time.updated||0,children:kids(id).map(k=>build(k.id,depth+1)).filter(Boolean)};
+  };
+  // climb to the root of this session's family
+  let root=rootId,guard=0;
+  while(map[root]&&all.some(x=>x.id===map[root])&&guard++<20)root=map[root];
+  return build(root,0);
+};
+O.noteFork=(childId,parentId)=>{
+  if(!childId||!parentId)return;
+  const m=O.store.get('forkParents',{});m[childId]=parentId;
+  O.store.set('forkParents',m);
+};
+O.openBranchTree=()=>{
+  if(!S.sid)return O.toast(O.tr('Open a session first','Сначала откройте сессию'),2000);
+  const tree=O.sessionBranches(S.sid);
+  const body=h('div');
+  const walk=(node,depth)=>{
+    if(!node)return;
+    body.append(h('button',{class:'settings-row',style:{paddingLeft:(12+depth*18)+'px'},onclick:async()=>{s.close();await O.openSession(node.id)}},
+      O.icon(node.id===S.sid?'check':'branch'),
+      h('div',{class:'settings-row-text'},h('b',null,node.title),h('span',null,O.ago(node.updated)+(node.id===S.sid?' · '+O.tr('current','текущая'):'')))));
+    node.children.forEach(c=>walk(c,depth+1));
+  };
+  if(tree)walk(tree,0);else body.append(h('div',{class:'note'},O.tr('No branches','Веток нет')));
+  body.append(h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:async()=>{
+    try{
+      const r=await O.api('POST','/session/'+S.sid+'/fork',{});
+      O.noteFork(r.id,S.sid);
+      await O.loadSessions();s.close();await O.openSession(r.id);
+      O.toast(O.tr('Branch created','Ветка создана'),1500);
+    }catch(e){O.toast(e.message,4000)}
+  }},O.icon('branch'),O.tr('New branch from here','Новая ветка отсюда')));
+  const s=O.sheet(O.tr('Conversation branches','Ветки диалога'),body,{full:true});
+};
 
 // ---- workspaces ----
 // A workspace is a saved project directory plus the preferences that belong to it. Sessions remain

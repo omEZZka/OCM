@@ -250,6 +250,7 @@ function startCall(){
 }
 function endCall(){
   if(!C.active)return;
+  saveCallHistory();
   C.active=false;C.minimised=false;C.state='idle';
   setCallFlag(false);
   clearTimeout(C.turnTimer);clearInterval(C.timer);
@@ -290,10 +291,107 @@ function interruptAgent(){
   O.toast(O.tr('Interrupted — listening','Перебил — слушаю'),1200);
 }
 
+// ---- (42) wake phrase: only phrases containing it become turns ----
+const wakePhrase=()=>String(O.store.get('call.wakePhrase','')).trim().toLowerCase();
+const wakeEnabled=()=>O.store.get('call.wakeEnabled',false)&&!!wakePhrase();
+const stripWake=text=>{
+  const w=wakePhrase();
+  const i=text.toLowerCase().indexOf(w);
+  return i<0?'':text.slice(i+w.length).replace(/^[\s,.:;-]+/,'').trim();
+};
+
+// ---- (43) voice navigation: commands executed locally, not sent to the model ----
+const NAV=[
+  [/^(открой |open )?(файлы|files)$/,()=>{O.setTab('files');return O.tr('Files','Файлы')}],
+  [/^(открой |open )?(терминал|terminal)$/,()=>{O.setTab('term');return O.tr('Terminal','Терминал')}],
+  [/^(открой |open )?(изменения|changes)$/,()=>{O.setTab('changes');return O.tr('Changes','Изменения')}],
+  [/^(открой |open )?(чат|chat)$/,()=>{O.setTab('chat');return O.tr('Chat','Чат')}],
+  [/^(открой |open )?(настройки|settings)$/,()=>{O.openSettings();return O.tr('Settings','Настройки')}],
+  [/^(открой |open )?(проекты|projects|workspaces)$/,()=>{O.openProjects();return O.tr('Projects','Проекты')}],
+  [/^(новый чат|новая сессия|new chat|new session)$/,async()=>{await O.newSession();return O.tr('New session','Новая сессия')}],
+  [/^(открой |open )?(фото|photo)( чат| chat)?$/,()=>{O.openMedia('image');return O.tr('Photo chat','Чат: Фото')}],
+  [/^(открой |open )?(видео|video)( чат| chat)?$/,()=>{O.openMedia('video');return O.tr('Video chat','Чат: Видео')}],
+  [/^(открой |open )?(музыка|music)( чат| chat)?$/,()=>{O.openMedia('music');return O.tr('Music chat','Чат: Музыка')}],
+  [/^(стоп|stop|останови)$/,async()=>{try{await O.api('POST','/session/'+S.sid+'/abort',{})}catch(_){}return O.tr('Stopped','Остановлено')}],
+  [/^(прочитай изменения|read changes|read diff|что изменилось)$/,()=>{readDiffAloud();return O.tr('Reading changes','Читаю изменения')}],
+  [/^(заверши звонок|end call|hang up)$/,()=>{setTimeout(endCall,600);return O.tr('Ending call','Завершаю звонок')}],
+];
+function tryNav(text){
+  const t=String(text||'').trim().toLowerCase().replace(/[.!?]+$/,'');
+  for(const [re,fn] of NAV){
+    if(re.test(t)){
+      Promise.resolve(fn()).then(label=>{
+        pushLog('note','⚡ '+label);
+        if(C.readReplies)try{O.native.ttsSpeak(label)}catch(_){}
+        setTimeout(()=>{if(C.active)resumeListening()},900);
+      }).catch(()=>resumeListening());
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---- (44) read the current diff aloud ----
+function readDiffAloud(){
+  const diffs=S.diffs[S.sid]||[];
+  let text;
+  if(!diffs.length)text=O.tr('No changes in this session','В этой сессии изменений нет');
+  else{
+    const parts=diffs.slice(0,8).map(f=>{
+      const name=O.basename(f.file||f.path||'?');
+      return name+': +'+(f.additions||0)+' −'+(f.deletions||0);
+    });
+    text=O.tr('Changed files: ','Изменённые файлы: ')+parts.join('. ');
+  }
+  pushLog('note',text);
+  try{O.native.ttsSpeak(text)}catch(_){}
+}
+O.readDiffAloud=readDiffAloud;
+
+// ---- (49) call history ----
+const saveCallHistory=()=>{
+  if(!C.log.length)return;
+  const l=O.store.get('callHistory',[]);
+  l.unshift({at:C.startedAt,dur:Date.now()-C.startedAt,sid:C.sid,turns:C.turns,
+    log:C.log.filter(x=>x.who!=='note').slice(-80)});
+  O.store.set('callHistory',l.slice(0,30));
+};
+O.openCallHistory=()=>{
+  const body=h('div');
+  const l=O.store.get('callHistory',[]);
+  if(!l.length)body.append(h('div',{class:'note'},O.tr('No calls yet','Звонков пока не было')));
+  l.forEach((c,i)=>{
+    const mins=Math.max(1,Math.round((c.dur||0)/60000));
+    body.append(h('button',{class:'settings-row',onclick:()=>{
+      const logBody=h('div');
+      c.log.forEach(x=>logBody.append(h('div',{class:'call-log-line '+(x.who||'')},
+        h('b',null,x.who==='user'?O.tr('You','Вы'):O.tr('Agent','Агент')),h('span',null,' '+x.text))));
+      logBody.append(h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:async()=>{
+        if(c.sid){try{await O.openSession(c.sid)}catch(_){}}
+        O.setTab('chat');
+        O.toast(O.tr('Session opened — continue by text','Сессия открыта — продолжайте текстом'),2500);
+      }},O.icon('chat'),O.tr('Continue by text','Продолжить текстом')));
+      O.sheet(new Date(c.at).toLocaleString(),logBody,{full:true});
+    }},O.icon('wave'),
+      h('div',{class:'settings-row-text'},h('b',null,new Date(c.at).toLocaleString()),
+        h('span',null,mins+' '+O.tr('min','мин')+' · '+c.turns+' '+O.tr('turns','реплик'))),
+      h('button',{class:'ibtn s',onclick:e=>{e.stopPropagation();O.store.set('callHistory',O.store.get('callHistory',[]).filter((_,j)=>j!==i));O.back();O.openCallHistory()}},O.icon('trash'))));
+  });
+  O.sheet(O.tr('Call history','История звонков'),body,{full:true});
+};
+
 // ---- one turn ----
 async function commitTurn(spoken){
-  const text=String(spoken||C.partial||'').trim();
+  let text=String(spoken||C.partial||'').trim();
   if(!text||C.state==='thinking')return;
+  // (42) wake phrase gate
+  if(wakeEnabled()){
+    const stripped=stripWake(text);
+    if(!stripped){C.partial='';clearTimeout(C.turnTimer);resumeListening();return}
+    text=stripped;
+  }
+  // (43) local navigation commands never reach the model
+  if(tryNav(text)){C.partial='';clearTimeout(C.turnTimer);C.turns++;pushLog('user',text);return}
   C.partial='';clearTimeout(C.turnTimer);
   try{O.native.sttStop()}catch(_){}
   try{O.native.ttsStop()}catch(_){}
@@ -486,6 +584,19 @@ function openCallSettings(){
     body.append(O.toggleRow('wave',O.tr('Interrupt by voice','Перебивание голосом'),O.tr('Speaking stops the agent mid-answer','Речь останавливает агента посреди ответа'),C.bargeIn,v=>{C.bargeIn=v;cfgSave();redraw()}));
     body.append(O.toggleRow('refresh',O.tr('Hands-free','Свободные руки'),O.tr('Re-open the microphone automatically after each answer','Микрофон открывается сам после каждого ответа'),C.handsFree,v=>{C.handsFree=v;cfgSave();redraw()}));
     body.append(O.toggleRow('bulb',O.tr('Read answers aloud','Озвучивать ответы'),O.tr('Speak the final answer; tool output stays silent','Проговаривать финальный ответ; вывод инструментов — молча'),C.readReplies,v=>{C.readReplies=v;cfgSave();redraw()}));
+
+    // (42) editable wake phrase
+    body.append(h('div',{class:'grp',style:{marginTop:'12px'}},O.tr('Wake phrase','Кодовая фраза')));
+    body.append(O.toggleRow('mic',O.tr('Require wake phrase','Требовать кодовую фразу'),
+      O.tr('Only phrases containing it are sent to the agent','Агенту уходят только фразы, содержащие её'),
+      O.store.get('call.wakeEnabled',false),v=>{O.store.set('call.wakeEnabled',v);redraw()}));
+    body.append(O.listRow('edit',O.tr('Wake phrase text','Текст кодовой фразы'),
+      O.store.get('call.wakePhrase','')||O.tr('not set','не задана'),O.icon('chevR'),async()=>{
+        const v=await O.ask(O.tr('Wake phrase','Кодовая фраза'),O.tr('e.g. "окей код"','например: «окей код»'),O.store.get('call.wakePhrase',''));
+        if(v!=null){O.store.set('call.wakePhrase',v.trim());redraw()}
+      }));
+    body.append(h('div',{class:'note'},O.tr('Voice commands work without the wake phrase: "open files", "new chat", "stop", "read changes", "end call".','Голосовые команды работают и без фразы: «открой файлы», «новый чат», «стоп», «прочитай изменения», «заверши звонок».')));
+    body.append(O.listRow('list',O.tr('Call history','История звонков'),O.tr('Transcripts, continue by text','Транскрипты, продолжение текстом'),O.icon('chevR'),()=>O.openCallHistory()));
 
     body.append(h('div',{class:'grp',style:{marginTop:'12px'}},O.tr('Speech output','Озвучка')));
     const vs=O.native.ttsVoices?O.native.ttsVoices():[];

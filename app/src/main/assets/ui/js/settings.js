@@ -63,6 +63,7 @@ O.openSettings=()=>{
     O.listRow('key',O.tr('Connect Providers','Подключить провайдеров'),'OpenCode Zen, OpenAI, Anthropic, Gemini, DeepSeek...',O.icon('chevR'),()=>O.openConnect()),
     O.listRow('search',O.tr('Custom API Provider','Свой API провайдер'),'OpenAI-compatible, Groq, OpenRouter...',O.icon('chevR'),()=>O.openCustomProvider(s)),
     O.listRow('refresh',O.tr('Fallback models','Резервные модели'),O.fallbackModels().length?O.fallbackModels().join(', '):O.tr('Used automatically when the main model fails','Автопереключение при ошибке основной модели'),O.icon('chevR'),()=>openFallback()),
+    O.listRow('shield',O.tr('Check all keys','Проверить все ключи'),O.tr('Validity and model count for every provider','Валидность и число моделей у каждого провайдера'),O.icon('chevR'),()=>O.checkAllKeys()),
     O.listRow('bot',O.tr('Multimodality','Мультимодальность'),O.tr('Team agents: lead model + role models','Командные агенты: главная модель + модели ролей'),O.icon('chevR'),()=>O.openMultimodal()),
     O.listRow('image',O.tr('Media factory','Медиа-фабрика'),O.tr('Photo, video, voice and music providers','Провайдеры фото, видео, голоса и музыки'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openMediaSettings&&O.openMediaSettings(),200)}),
     O.listRow('cloud',O.tr('Remote Builds','Удалённая сборка'),O.tr('GitHub, GitLab, Bitbucket, CircleCI, Azure, Codemagic, Bitrise, GCB','Удалённая сборка APK по токену'),O.icon('chevR'),()=>O.openRemoteBuilds())
@@ -111,7 +112,16 @@ O.openSettings=()=>{
   const planRow=O.toggleRow('list',O.tr('Step-by-step task plans','Пошаговые планы задач'),
     O.tr('Show a plan button in the composer. Edit steps and send them when ready.','Кнопка плана в поле ввода. Редактируйте шаги и отправляйте их, когда будете готовы.'),
     O.planMode(),v=>{O.setPlanMode(v);bus.emit('planMode')});
-  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,overlayRow,overlayLegend,onlyBusyRow);
+  const styleName=()=>{const st=O.answerStyles().find(x=>x.id===O.answerStyle());return st?st.label:O.tr('Off','Выкл')};
+  const styleRow=O.listRow('edit',O.tr('Answer style','Стиль ответа'),styleName(),O.icon('chevR'),()=>{
+    O.openAnswerStyles();setTimeout(()=>{const sp=styleRow.querySelector('.settings-row-text span');if(sp)sp.textContent=styleName()},400);
+  });
+  const autoCompactRow=O.toggleRow('refresh',O.tr('Auto-compact context','Авто-сжатие контекста'),
+    O.tr('Automatically summarize the session at 85% context usage','Автоматически сжимать сессию при заполнении контекста на 85%'),
+    O.autoCompact(),v=>O.setAutoCompact(v));
+  const tilesRow=O.listRow('sliders',O.tr('Home tiles','Плитки главного экрана'),O.tr('Choose shortcuts for the empty chat screen','Ярлыки на пустом экране чата'),O.icon('chevR'),()=>O.openHomeTiles());
+  const tourRow=O.listRow('info',O.tr('Feature tour','Обучающий тур'),O.tr('Show the welcome guide again','Показать приветственный гид ещё раз'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openTour(),200)});
+  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,autoCompactRow,tilesRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
   panes.main.append(appCard);
 
   // 4. Notifications & Sounds
@@ -165,6 +175,7 @@ O.openSettings=()=>{
     O.listRow('shield',O.tr('Permissions','Разрешения'),O.tr('Storage, notifications, background execution','Файлы, уведомления, фон'),O.icon('chevR'),()=>openPerms()),
     O.listRow('bat',O.tr('Logs & Diagnostics','Совместимость и логи'),O.tr('Safe mode, core runtime restart','Безопасный режим, перезапуск сервера'),O.icon('chevR'),()=>openCompat()),
     O.listRow('info',O.tr('About OpenCode Mobile','О приложении'),'',O.icon('chevR'),()=>openAbout()),
+    O.listRow('bot',O.tr('Telegram bot','Telegram-бот'),O.tr('Run tasks from Telegram, answers back','Задачи из Telegram, ответы обратно'),O.icon('chevR'),()=>O.openTelegramBot()),
     O.listRow('tg',O.tr('Community & Telegram','Сообщество Telegram'),'t.me/OpenCodeMob',O.icon('chevR'),()=>O.openUrl('https://t.me/OpenCodeMob'))
   );
   panes.system.append(sysCard);
@@ -231,7 +242,9 @@ function openBackup(){
           if(!pw)return;
           try{
             const r=JSON.parse(OC.restoreProfile(pw,full));
-            if(r.ok){O.toast(O.tr('Profile restored. Restarting server...','Профиль восстановлен. Перезапускаю сервер...'),3000);OC.restartServer()}
+            if(r.ok){
+              if(r.settings&&O.importSettings){try{O.importSettings(r.settings)}catch(_){}}
+              O.toast(O.tr('Profile restored. Restarting server...','Профиль восстановлен. Перезапускаю сервер...'),3000);OC.restartServer()}
             else O.toast(r.err||'failed',4000);
           }catch(e){O.toast(e.message,4000)}
         }},O.icon('down'))));
@@ -249,6 +262,17 @@ function openBackup(){
         else O.toast(r.err||'failed',4000);
       }catch(e){O.toast(e.message,4000)}
     }},O.icon('shield'),O.tr('Create encrypted backup','Создать шифрованный бэкап')),
+    // (89) full export: settings + chats + media manifest in one encrypted archive
+    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{
+      if(!pw1.value||pw1.value.length<6)return O.toast(O.tr('Password must be at least 6 characters','Пароль минимум 6 символов'),3000);
+      if(pw1.value!==pw2.value)return O.toast(O.tr('Passwords do not match','Пароли не совпадают'),3000);
+      try{
+        const dump=O.exportSettings?O.exportSettings():'';
+        const r=O.native.backupProfileFull(pw1.value,dump);
+        if(r.ok){info.textContent=O.tr('Full export: ','Полный экспорт: ')+r.path+' ('+Math.round((r.size||0)/1024)+' KB)';O.native.copy(r.path);O.toast(O.tr('Full backup created (settings + chats + media list)','Полный бэкап создан (настройки + чаты + список медиа)'),3000);drawExisting()}
+        else O.toast(r.err||'failed',4000);
+      }catch(e){O.toast(e.message,4000)}
+    }},O.icon('down'),O.tr('Full export (settings + chats + media)','Полный экспорт (настройки + чаты + медиа)')),
     existing,
     h('div',{style:{height:'18px'}}),
     h('div',{class:'note'},O.tr('The archive contains config, agents, commands, skills, plugins and session data. It does not include the Linux rootfs.','Архив содержит конфиг, агентов, команды, навыки, плагины и данные сессий. Linux rootfs не включается.')),
@@ -279,10 +303,181 @@ O.on('picked',async d=>{
   if(!pw)return;
   try{
     const r=JSON.parse(OC.restoreProfile(pw,d.path||d.file));
-    if(r.ok){O.toast(O.tr('Profile restored. Restarting server...','Профиль восстановлен. Перезапускаю сервер...'),3000);OC.restartServer()}
+    if(r.ok){
+      if(r.settings&&O.importSettings){try{O.importSettings(r.settings)}catch(_){}}
+      O.toast(O.tr('Profile restored. Restarting server...','Профиль восстановлен. Перезапускаю сервер...'),3000);OC.restartServer()}
     else O.toast(r.err||'failed',4000);
   }catch(e){O.toast(e.message,4000)}
 });
+
+// ---- (90) check all provider keys: validity + model catalogue reachability ----
+O.checkAllKeys=async()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Key check','Проверка ключей'),body,{full:true});
+  const rows=h('div');body.append(rows);
+  const cfgR=cfg.read();
+  const provs=(cfgR.obj&&cfgR.obj.provider)||{};
+  const targets=[];
+  for(const pid in provs){
+    const p=provs[pid],opts=p.options||{};
+    const url=opts.upstreamBaseURL||opts.baseURL||'';
+    if(!url||/127\.0\.0\.1|localhost/.test(url))continue;
+    const key=opts.apiKey&&opts.apiKey!=='dummy'?opts.apiKey:(O.keyRingActive?O.keyRingActive(pid):'');
+    targets.push({pid,name:p.name||pid,url,key,headers:opts.headers||{}});
+  }
+  (O.mediaProviders?O.mediaProviders():[]).forEach(mp=>{
+    if(mp.baseURL)targets.push({pid:mp.id+' ('+mp.kind+')',name:mp.name,url:mp.baseURL,key:mp.apiKey,media:true,prov:mp});
+  });
+  if(!targets.length){rows.append(h('div',{class:'note'},O.tr('No providers with keys configured','Провайдеров с ключами нет')));return}
+  rows.append(h('div',{class:'note'},O.tr('Checking providers…','Проверяю провайдеров…')));
+  let ok=0,bad=0;
+  for(const t of targets){
+    const row=h('div',{class:'settings-row'},
+      h('div',{class:'settings-row-icon'},O.icon('key')),
+      h('div',{class:'settings-row-text'},h('b',null,t.name),h('span',null,O.tr('checking…','проверка…'))),
+      h('span',{class:'spin'}));
+    rows.append(row);
+    const sub=row.querySelector('.settings-row-text span');
+    const spin=row.querySelector('.spin');
+    try{
+      const url=t.media&&O.mediaDebug?O.mediaDebug.discovery(t.prov):(t.url.replace(/\/+$/,'')+(t.url.endsWith('/models')?'':'/models'));
+      const hd=Object.assign({},t.headers);
+      if(t.key)hd['Authorization']='Bearer '+t.key;
+      const r=await O.native.netGetAsync(url,hd,15000);
+      let count=0;
+      try{const o=JSON.parse(r.body||'{}');const arr=Array.isArray(o)?o:(o.data||o.models||[]);count=Array.isArray(arr)?arr.length:0}catch(_){}
+      spin.remove();
+      row.append(O.icon('check','ok'));
+      sub.textContent=O.tr('valid · ','валиден · ')+count+' '+O.tr('models','моделей');
+      ok++;
+    }catch(e){
+      spin.remove();
+      row.append(O.icon('alert','err'));
+      const st=e.status?('HTTP '+e.status+' · '):'';
+      sub.textContent=st+(e.message||'error').slice(0,90);
+      sub.classList.add('err');
+      bad++;
+    }
+  }
+  body.prepend(h('div',{class:'note'},O.tr('Done: ','Готово: ')+ok+' '+O.tr('valid','валидных')+', '+bad+' '+O.tr('failed','с ошибкой')));
+};
+
+// ---- (91) Telegram bot: tasks from Telegram, answers back ----
+// Long polling while the app is open. Each allowed chat gets its own opencode session; the final
+// assistant answer is sent back to the same Telegram chat. Token lives in the secure store.
+const TG={timer:null,offset:0,busy:false,watching:null};
+const tgToken=()=>O.native.secureGet?O.native.secureGet('tg.botToken'):'';
+const tgEnabled=()=>O.store.get('tg.enabled',false)&&!!tgToken();
+const tgAllowed=()=>{const l=O.store.get('tg.allowedChats',[]);return Array.isArray(l)?l:[]};
+async function tgApi(method,params){
+  const dest='/sdcard/Download/OCM/tg_resp.json';
+  const r=await O.native.netPostToFileAsync('https://api.telegram.org/bot'+tgToken()+'/'+method,
+    {'Content-Type':'application/json'},JSON.stringify(params||{}),dest,65000);
+  if(r&&r.json){try{return JSON.parse(r.body||'{}')}catch(_){return{}}}
+  try{const f=O.native.readText(dest);return JSON.parse((f&&f.text)||'{}')}catch(_){return{}}
+}
+async function tgSend(chatId,text){
+  const chunks=String(text||'(empty)').match(/[\s\S]{1,3900}/g)||['(empty)'];
+  for(const c of chunks){try{await tgApi('sendMessage',{chat_id:chatId,text:c})}catch(_){}}
+}
+async function tgRunTask(chatId,text){
+  // one session per telegram chat, remembered across restarts
+  const map=O.store.get('tg.sessions',{});
+  let sid=map[chatId];
+  try{
+    if(!sid){const ses=await api('POST','/session',{title:'Telegram · '+chatId});sid=ses.id;map[chatId]=sid;O.store.set('tg.sessions',map)}
+    const mid=O.mid();
+    await api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,parts:[{type:'text',text}]},{timeout:30000});
+    await tgSend(chatId,O.tr('Task accepted, working…','Задача принята, работаю…'));
+    // poll until idle, then send the last assistant text
+    const deadline=Date.now()+600000;
+    while(Date.now()<deadline){
+      await new Promise(r=>setTimeout(r,3000));
+      const st=await api('GET','/session/status',null,{timeout:5000}).catch(()=>null);
+      const x=st&&st[sid],t=typeof x==='string'?x:(x&&x.type);
+      if(!t||t==='idle'||t==='error')break;
+    }
+    const arr=await api('GET','/session/'+sid+'/message',null,{timeout:20000});
+    let out='';
+    for(const m of arr||[])if(m.info&&m.info.role==='assistant'){
+      const t2=(m.parts||[]).filter(p=>p.type==='text'&&!p.synthetic).map(p=>p.text).join('\n');
+      if(t2.trim())out=t2;
+    }
+    await tgSend(chatId,out||O.tr('(no answer)','(нет ответа)'));
+  }catch(e){await tgSend(chatId,O.tr('Error: ','Ошибка: ')+(e.message||e))}
+}
+async function tgTick(){
+  if(TG.busy||!tgEnabled())return;
+  TG.busy=true;
+  try{
+    const r=await tgApi('getUpdates',{offset:TG.offset,timeout:20});
+    if(r&&r.ok&&Array.isArray(r.result)){
+      for(const u of r.result){
+        TG.offset=Math.max(TG.offset,u.update_id+1);
+        O.store.set('tg.offset',TG.offset);
+        const msg=u.message;
+        if(!msg||!msg.text)continue;
+        const chatId=msg.chat.id;
+        const allowed=tgAllowed();
+        if(!allowed.length){
+          // first chat to write becomes the owner
+          O.store.set('tg.allowedChats',[chatId]);
+          await tgSend(chatId,O.tr('Linked! This chat now controls the agent. Send a task.','Связано! Этот чат управляет агентом. Отправьте задачу.'));
+        }else if(!allowed.includes(chatId)){
+          await tgSend(chatId,O.tr('Access denied. Your chat id: ','Доступ запрещён. ID чата: ')+chatId);
+          continue;
+        }
+        const text=String(msg.text).trim();
+        if(text==='/start'){await tgSend(chatId,O.tr('OpenCode Mobile bot. Send any task; /status shows the server state.','Бот OpenCode Mobile. Отправьте задачу; /status — состояние сервера.'));continue}
+        if(text==='/status'){await tgSend(chatId,(S.up?O.tr('Server: online','Сервер: онлайн'):O.tr('Server: offline','Сервер: офлайн'))+' · '+(S.model?S.model.modelID:'—'));continue}
+        if(!S.model){await tgSend(chatId,O.tr('No model selected in the app','В приложении не выбрана модель'));continue}
+        tgRunTask(chatId,text); // fire and forget: several chats can queue tasks
+      }
+    }
+  }catch(_){}
+  finally{TG.busy=false}
+}
+O.tgStart=()=>{
+  if(TG.timer)return;
+  TG.offset=O.store.get('tg.offset',0);
+  TG.timer=setInterval(tgTick,2000);
+};
+O.tgStop=()=>{if(TG.timer){clearInterval(TG.timer);TG.timer=null}};
+O.openTelegramBot=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Telegram bot','Telegram-бот'),body,{full:true});
+  const draw=()=>{
+    body.textContent='';
+    body.append(h('div',{class:'note'},O.tr('Create a bot with @BotFather, paste its token here. The first chat that writes to the bot becomes the owner. Tasks run in the app while it is open; answers come back to Telegram.','Создайте бота у @BotFather и вставьте токен. Первый написавший чат становится владельцем. Задачи выполняются, пока приложение открыто; ответы приходят в Telegram.')));
+    const tok=tgToken();
+    body.append(O.listRow('key',O.tr('Bot token','Токен бота'),tok?('••••'+tok.slice(-6)):O.tr('not set','не задан'),O.icon('edit'),async()=>{
+      const v=await O.ask(O.tr('Bot token','Токен бота'),'123456:ABC…',tok);
+      if(v==null)return;
+      const t=v.trim();
+      if(t){O.native.securePut('tg.botToken',t);O.store.set('tg.offset',0);TG.offset=0}
+      else{O.native.secureRemove('tg.botToken');O.tgStop()}
+      draw();
+    }));
+    body.append(O.toggleRow('tg',O.tr('Enable bot','Включить бота'),O.tr('Polls Telegram while the app is open','Опрашивает Telegram, пока приложение открыто'),
+      O.store.get('tg.enabled',false),v=>{O.store.set('tg.enabled',v);if(v&&tgToken())O.tgStart();else O.tgStop();draw()}));
+    const allowed=tgAllowed();
+    body.append(h('div',{class:'grp',style:{marginTop:'12px'}},O.tr('Allowed chats','Разрешённые чаты')));
+    if(!allowed.length)body.append(h('div',{class:'mut s'},O.tr('None yet — the first message links the chat','Пока нет — первое сообщение свяжет чат')));
+    allowed.forEach(id=>body.append(h('div',{class:'settings-row'},
+      h('div',{class:'settings-row-icon'},O.icon('tg')),
+      h('div',{class:'settings-row-text'},h('b',{class:'mono'},String(id))),
+      h('button',{class:'ibtn s',onclick:()=>{O.store.set('tg.allowedChats',tgAllowed().filter(x=>x!==id));draw()}},O.icon('trash')))));
+    body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:async()=>{
+      if(!tgToken())return O.toast(O.tr('Set the token first','Сначала задайте токен'),2500);
+      try{const r=await tgApi('getMe',{});
+        if(r.ok)O.toast('@'+r.result.username+' — '+O.tr('token valid','токен валиден'),3000);
+        else O.toast(O.tr('Token invalid','Токен невалиден'),3000);
+      }catch(e){O.toast(e.message||'error',3000)}
+    }},O.icon('check'),O.tr('Test token','Проверить токен')));
+  };
+  draw();
+};
+if(O.store.get('tg.enabled',false))setTimeout(()=>{try{O.tgStart()}catch(_){}},4000);
 
 // ---- settings export / import ----
 function openSettingsTransfer(){

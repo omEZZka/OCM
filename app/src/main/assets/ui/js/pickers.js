@@ -55,6 +55,7 @@ O.openSessions=()=>{
   const navItem=(ic,label,fn)=>h('button',{class:'drawer-nav-item',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
   const nav=h('div',{style:{marginBottom:'12px',borderBottom:'1px solid var(--line)',paddingBottom:'8px'}},
     navItem('chat',O.tr('Chat','Чат'),()=>O.setTab('chat')),
+    navItem('search',O.tr('Global search','Глобальный поиск'),()=>O.openGlobalSearch()),
     navItem('folder',O.tr('Workspaces','Проекты'),()=>O.openProjects()),
     navItem('folder',O.tr('Files','Файлы'),()=>O.setTab('files')),
     navItem('terminal',O.tr('Terminal','Терминал'),()=>O.setTab('term')),
@@ -74,6 +75,7 @@ O.openSessions=()=>{
       ]);
     }},O.icon('image'),h('span',null,O.tr('Media','Медиа'))),
     navItem('down',O.tr('Import session','Импорт сессии'),()=>importSessionFile()),
+    navItem('cpu',O.tr('Resources','Ресурсы'),()=>O.openResources()),
     navItem('sliders',O.tr('Settings','Настройки'),()=>O.openSettings()),
     navItem('refresh',O.tr('Restart server','Перезапуск сервера'),()=>restartApp()));
   const newBtn=h('button',{class:'btn pri wide',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));

@@ -337,6 +337,37 @@ async function runJob(job){
       try{data=JSON.parse(r.body||'{}')}catch(_){}
       data=await resolveAsyncResponse(data,url,authHeaders(prov,false),timeout,job);
       if(job.cancelled)return;
+      // (36) Variations: an image request with n>1 may return several results — save them all.
+      if(job.kind==='image'&&Number(job.params.n)>1){
+        const urls=findAllMediaUrls(data),b64s=findAllBase64(data);
+        const total=urls.length+b64s.length;
+        if(total>1){
+          job.paths=[];
+          const baseDest=dest.replace(/\.[a-z0-9]+$/i,'');
+          for(let vi=0;vi<urls.length;vi++){
+            if(job.cancelled)return;
+            const vdest=baseDest+'_'+(vi+1)+'.'+EXT.image;
+            const sameHost=hostOf(urls[vi])===hostOf(url);
+            let d2;
+            if(O.native.netDownloadToFileC){const c=O.native.netDownloadToFileC(urls[vi],sameHost?headers:{},vdest,240000);job.netId=c.id;d2=await c.promise}
+            else d2=await O.native.netDownloadToFileAsync(urls[vi],sameHost?headers:{},vdest,240000);
+            if(d2&&d2.ok)job.paths.push(d2.path||vdest);
+          }
+          for(let vi=0;vi<b64s.length;vi++){
+            if(job.cancelled)return;
+            const vdest=baseDest+'_'+(urls.length+vi+1)+'.'+EXT.image;
+            const d3=await (O.native.writeDataUrlToFileAsync||O.native.writeDataUrlToFile)(b64s[vi],vdest);
+            if(d3&&d3.ok)job.paths.push(d3.path||vdest);
+          }
+          if(!job.paths.length)throw new Error(O.tr('Response has no media','В ответе нет медиа'));
+          job.path=job.paths[0];
+          job.state='done';job.finished=Date.now();job.progress=100;
+          pushHistory({id:job.id,kind:job.kind,prompt:job.prompt,model:job.model,provider:prov.id,path:job.path,paths:job.paths,at:job.finished});
+          O.native.notifyMedia(O.tr('Media ready','Медиа готово'),job.kind+' · '+job.paths.length+' '+O.tr('variants','вариантов'));
+          bus.emit('media');
+          return;
+        }
+      }
       const urlFound=findMediaUrl(data);
       const b64=findBase64(data);
       if(urlFound){
@@ -368,6 +399,30 @@ async function runJob(job){
   }catch(e){fail(e)}
 }
 
+function findAllMediaUrls(o,acc){
+  acc=acc||[];
+  if(!o||typeof o!=='object')return acc;
+  for(const k in o){
+    const v=o[k];
+    if(typeof v==='string'&&/^https?:\/\//i.test(v)&&(/\.(png|jpe?g|webp|gif|mp4|webm|mp3|wav|m4a|ogg)(\?|$)/i.test(v)||/(image|video|audio|media|file|output|url)/i.test(k)))acc.push(v);
+    else if(Array.isArray(v))v.forEach(it=>findAllMediaUrls(it,acc));
+    else if(typeof v==='object')findAllMediaUrls(v,acc);
+  }
+  return [...new Set(acc)];
+}
+function findAllBase64(o,acc){
+  acc=acc||[];
+  if(!o||typeof o!=='object')return acc;
+  for(const k in o){
+    const v=o[k];
+    if(typeof v==='string'){
+      if(v.startsWith('data:'))acc.push(v);
+      else if(/^[A-Za-z0-9+/]{200,}={0,2}$/.test(v))acc.push('data:application/octet-stream;base64,'+v);
+    }else if(Array.isArray(v))v.forEach(it=>findAllBase64(it,acc));
+    else if(typeof v==='object')findAllBase64(v,acc);
+  }
+  return acc;
+}
 // Recursively look for a media URL or a base64 payload in a provider response.
 function findMediaUrl(o){
   if(!o||typeof o!=='object')return '';
@@ -516,7 +571,15 @@ O.openMedia=kind=>{
         h('button',{class:'chip',onclick:()=>{O.mediaCancel(entry.jobId)}},O.icon('x'),O.tr('Cancel','Отмена'))));
     }else if(st==='done'&&path){
       const k=entry.kind||kind;
-      if(k==='image')box.append(h('img',{class:'media-bubble-img',src:O.mediaUrl(path),loading:'lazy',onclick:()=>O.mediaPreview({path,kind:k,prompt:entry.prompt})}));
+      const paths=(j&&j.paths&&j.paths.length>1)?j.paths:(entry.paths&&entry.paths.length>1?entry.paths:null);
+      if(k==='image'&&paths){
+        // (36) variation grid: tap a variant to open it full-size
+        const grid=h('div',{class:'media-variants'});
+        paths.forEach(vp=>grid.append(h('img',{src:O.mediaUrl(vp),loading:'lazy',onclick:()=>O.mediaPreview({path:vp,kind:k,prompt:entry.prompt})})));
+        box.append(grid);
+        box.append(h('div',{class:'mut s'},paths.length+' '+O.tr('variants — tap to open','вариантов — нажмите, чтобы открыть')));
+      }
+      else if(k==='image')box.append(h('img',{class:'media-bubble-img',src:O.mediaUrl(path),loading:'lazy',onclick:()=>O.mediaPreview({path,kind:k,prompt:entry.prompt})}));
       else if(k==='video')box.append(h('video',{class:'thumb-video',src:O.mediaUrl(path),controls:true,preload:'metadata'}));
       else box.append(h('audio',{class:'thumb-audio',src:O.mediaUrl(path),controls:true,preload:'metadata'}));
       box.append(h('div',{class:'media-bubble-actions'},
@@ -547,8 +610,9 @@ O.openMedia=kind=>{
     const j=M.queue.find(x=>x.id===jobId);
     if(j){
       rec.entry.state=j.state;rec.entry.error=j.error||'';rec.entry.path=j.path||rec.entry.path;
+      if(j.paths&&j.paths.length)rec.entry.paths=j.paths;
       const l=chatLoad(kind);const it=l.find(x=>x.jobId===jobId);
-      if(it){it.state=j.state;it.error=rec.entry.error;it.path=rec.entry.path;chatSave(kind,l)}
+      if(it){it.state=j.state;it.error=rec.entry.error;it.path=rec.entry.path;if(rec.entry.paths)it.paths=rec.entry.paths;chatSave(kind,l)}
     }
     const fresh=bubbleFor(rec.entry);
     rec.el.replaceWith(fresh);
@@ -596,10 +660,15 @@ O.openMedia=kind=>{
     if(kind==='video'||kind==='music')row(O.tr('Duration','Длит.'),'duration',[['5','5s'],['10','10s'],['15','15s'],['30','30s'],['60','60s']],kind==='music'?'30':'5');
     if(kind==='tts'){
       const v=state.params.voice||O.store.get('media.voice','alloy');
+      const cloned=O.mediaVoices();
+      const curLabel=(cloned.find(x=>x.id===v)||{}).name||v;
       chips.append(h('button',{class:'chip',onclick:()=>{
         const list=['alloy','echo','fable','onyx','nova','shimmer'];
-        O.actions(O.tr('Voice','Голос'),list.map(x=>({label:x,icon:x===v?'check':'wave',fn:()=>{state.params.voice=x;O.store.set('media.voice',x);drawChips()}})));
-      }},O.icon('wave'),v));
+        const items=list.map(x=>({label:x,icon:x===v?'check':'wave',fn:()=>{state.params.voice=x;O.store.set('media.voice',x);drawChips()}}));
+        cloned.forEach(cv=>items.push({label:'★ '+cv.name,sub:cv.id,icon:cv.id===v?'check':'user',fn:()=>{state.params.voice=cv.id;O.store.set('media.voice',cv.id);drawChips()}}));
+        items.push({label:O.tr('Clone my voice…','Клонировать мой голос…'),icon:'mic',fn:()=>O.openVoiceClone(state.provider&&state.provider.id)});
+        O.actions(O.tr('Voice','Голос'),items);
+      }},O.icon('wave'),curLabel));
     }
   };
 
@@ -710,6 +779,65 @@ O.mediaItemActions=it=>{
     {label:O.tr('Copy path','Копировать путь'),icon:'copy',fn:()=>O.native.copy(it.path)},
     {label:O.tr('Delete file','Удалить файл'),icon:'trash',danger:true,fn:()=>{O.native.fs('delete',it.path);O.store.set('mediaHistory',O.mediaHistory().filter(x=>x.path!==it.path));bus.emit('media')}}
   ]);
+};
+
+// ---- (35) voice cloning ----
+O.mediaVoices=()=>O.store.get('clonedVoices',[]);
+O.openVoiceClone=providerId=>{
+  const prov=O.mediaProvider(providerId,'tts')||O.mediaProvidersOf('tts')[0];
+  if(!prov)return O.toast(O.tr('Add a voice (TTS) provider first','Сначала добавьте провайдер озвучки'),3000);
+  const body=h('div');
+  const status=h('div',{class:'mut s',style:{margin:'10px 0',whiteSpace:'pre-wrap'}});
+  const nameInp=h('input',{placeholder:O.tr('Voice name','Название голоса')});
+  let recPath='',recording=false,startedAt=0,timer=null;
+  const recBtn=h('button',{class:'btn pri wide',onclick:()=>{
+    if(!recording){
+      const perms=(O.native.state&&O.native.state().perms)||{};
+      if(perms.mic===false){try{OC.grant('mic')}catch(_){}return O.toast(O.tr('Allow microphone access','Разрешите доступ к микрофону'),3000)}
+      recPath='/sdcard/Download/OCM/voices/sample_'+Date.now()+'.m4a';
+      const r=O.native.voiceSampleStart(recPath);
+      if(!r||!r.ok)return O.toast((r&&r.err)||O.tr('Cannot start recording','Не удалось начать запись'),3000);
+      recording=true;startedAt=Date.now();
+      recBtn.textContent='';recBtn.append(O.icon('stop'),O.tr('Stop recording','Остановить запись'));
+      timer=setInterval(()=>{status.textContent=O.tr('Recording… ','Идёт запись… ')+Math.round((Date.now()-startedAt)/1000)+'s / 60s'},500);
+    }else{
+      clearInterval(timer);recording=false;
+      const r=O.native.voiceSampleStop();
+      recBtn.textContent='';recBtn.append(O.icon('mic'),O.tr('Record sample (10–30 s)','Записать образец (10–30 с)'));
+      if(r&&r.ok){recPath=r.path||recPath;status.textContent=O.tr('Sample saved: ','Образец сохранён: ')+recPath}
+      else status.textContent=(r&&r.err)||O.tr('Recording failed','Запись не удалась');
+    }
+  }},O.icon('mic'),O.tr('Record sample (10–30 s)','Записать образец (10–30 с)'));
+  const sendBtn=h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:async()=>{
+    if(!recPath)return O.toast(O.tr('Record a sample first','Сначала запишите образец'),2500);
+    const name=String(nameInp.value||'').trim()||('voice-'+Date.now().toString(36));
+    sendBtn.disabled=true;status.textContent=O.tr('Uploading sample…','Отправляю образец…');
+    try{
+      const f=await O.native.readDataUrl(recPath);
+      const url=withAuth(joinUrl(prov.baseURL,(prov.paths&&prov.paths.voice)||'/audio/voices'),prov);
+      const bodyJson=JSON.stringify({name,samples:['data:'+f.mime+';base64,'+f.data]});
+      const r=await O.native.netPostToFileAsync(url,authHeaders(prov,true),bodyJson,recPath+'.json',60000);
+      let voiceId='';
+      try{const o=JSON.parse(r.body||'{}');voiceId=o.id||o.voice_id||o.voice||(o.data&&(o.data.id||o.data.voice_id))||''}catch(_){}
+      if(!voiceId)throw new Error(O.tr('Provider did not return a voice id','Провайдер не вернул ID голоса'));
+      const l=O.mediaVoices();l.push({id:voiceId,name,provider:prov.id,at:Date.now()});
+      O.store.set('clonedVoices',l.slice(0,20));
+      status.textContent=O.tr('Voice cloned: ','Голос создан: ')+name+' ('+voiceId+')';
+      O.toast(O.tr('Voice ready — pick it in the Voice chip','Голос готов — выберите его в чипе «Голос»'),3000);
+      setTimeout(()=>s.close(),1200);
+    }catch(e){status.textContent=(e.message||String(e))}
+    finally{sendBtn.disabled=false}
+  }},O.icon('up'),O.tr('Create voice','Создать голос'));
+  body.append(h('div',{class:'note'},O.tr('Read any text aloud for 10–30 seconds. The sample goes to your TTS provider’s voice-cloning endpoint; the returned voice id becomes available in the Voice chip.','Прочитайте вслух любой текст 10–30 секунд. Образец уйдёт на endpoint клонирования вашего TTS-провайдера; полученный ID появится в чипе «Голос».')),
+    h('div',{class:'field'},h('label',null,O.tr('Voice name','Название голоса')),nameInp),recBtn,sendBtn,status);
+  const saved=O.mediaVoices();
+  if(saved.length){
+    body.append(h('div',{class:'grp',style:{marginTop:'12px'}},O.tr('Cloned voices','Созданные голоса')));
+    saved.forEach(v=>body.append(O.listRow('wave',v.name,v.id+' · '+O.ago(v.at),
+      h('button',{class:'ibtn s',onclick:()=>{O.store.set('clonedVoices',O.mediaVoices().filter(x=>x.id!==v.id));s.close();O.openVoiceClone(providerId)}},O.icon('trash')),
+      ()=>{O.store.set('media.voice',v.id);O.toast(O.tr('Voice selected: ','Выбран голос: ')+v.name,2000);s.close()})));
+  }
+  const s=O.sheet(O.tr('Voice cloning','Клонирование голоса'),body,{full:true,onClose:()=>{if(recording){clearInterval(timer);try{O.native.voiceSampleStop()}catch(_){}}}});
 };
 
 // ---- provider editor ----
