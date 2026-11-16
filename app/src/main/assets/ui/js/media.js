@@ -57,6 +57,9 @@ const normalizeProvider=p=>{
 };
 const modelKey=p=>Array.isArray(p)?p:((p&&p.modelsByKind&&p.modelsByKind[p.kind])||[]);
 const lastModelKey=(kind,id)=>'media.lastModel.'+kind+'.'+id;
+// Keys are addressed by id AND kind: providers may share an id across kinds (one aggregator
+// configured for photo and video), and an id-only slot made deleting one kind wipe the other's key.
+const secKey=(id,kind)=>'media.provider.'+id+'.'+kind;
 
 O.mediaProviders=()=>{
   const stored=O.store.get('mediaProviders',[]);
@@ -66,7 +69,13 @@ O.mediaProviders=()=>{
   const cleanList=list.map(p=>{
     if(!p||typeof p!=='object'){dirty=true;return p}
     const rec=normalizeProvider(p);
-    if(rec.apiKey&&O.native.securePut('media.provider.'+rec.id,rec.apiKey))rec.hasKey=true;
+    if(rec.apiKey){
+      if(O.native.securePut(secKey(rec.id,rec.kind),rec.apiKey))rec.hasKey=true;
+    }else if(rec.id&&rec.hasKey&&!O.native.secureGet(secKey(rec.id,rec.kind))){
+      // migrate the legacy id-only slot once
+      const legacy=O.native.secureGet('media.provider.'+rec.id);
+      if(legacy&&O.native.securePut(secKey(rec.id,rec.kind),legacy))O.native.secureRemove('media.provider.'+rec.id);
+    }
     const clean=Object.assign({},rec);delete clean.apiKey;
     if(JSON.stringify(clean)!==JSON.stringify(p))dirty=true;
     return clean;
@@ -74,25 +83,31 @@ O.mediaProviders=()=>{
   if(dirty)O.store.set('mediaProviders',cleanList);
   for(const p of cleanList){
     const rec=normalizeProvider(p);
-    if(rec.id&&rec.hasKey)rec.apiKey=O.native.secureGet('media.provider.'+rec.id);
+    if(rec.id&&rec.hasKey)rec.apiKey=O.native.secureGet(secKey(rec.id,rec.kind));
     out.push(rec);
   }
   return out;
 };
-O.saveMediaProviders=list=>{
+O.saveMediaProviders=(list,removed)=>{
   const stored=[];
   const keep=new Set();
   for(const raw of (list||[]).slice(0,40)){
     if(!raw||!raw.id)continue;
     const p=normalizeProvider(raw);
-    keep.add(p.id);
+    keep.add(p.id+'#'+p.kind);
     if(p.apiKey)p.hasKey=true;else delete p.hasKey;
-    if(p.apiKey&&!O.native.securePut('media.provider.'+p.id,p.apiKey))throw new Error(O.tr('Could not store the API key securely','Не удалось безопасно сохранить API-ключ'));
+    if(p.apiKey&&!O.native.securePut(secKey(p.id,p.kind),p.apiKey))throw new Error(O.tr('Could not store the API key securely','Не удалось безопасно сохранить API-ключ'));
     delete p.apiKey;
     stored.push(p);
   }
-  // A deleted provider must not leave its key behind in the Keystore store.
-  try{for(const p of O.store.get('mediaProviders',[]))if(p&&p.id&&!keep.has(p.id))O.native.secureRemove('media.provider.'+p.id)}catch(_){}
+  // Removed records are passed explicitly: filtering them out of `list` before the call used to
+  // hide renames/deletions from the cleanup and orphan their secure keys.
+  const prev=O.store.get('mediaProviders',[]);
+  const gone=(Array.isArray(removed)?removed:[]).concat(prev.filter(p=>p&&p.id&&!keep.has(p.id+'#'+p.kind)));
+  try{for(const p of gone){if(!p||!p.id)continue;
+    if(!keep.has(p.id+'#'+p.kind))O.native.secureRemove(secKey(p.id,p.kind));
+    if(!stored.some(x=>x.id===p.id))O.native.secureRemove('media.provider.'+p.id);
+  }}catch(_){}
   O.store.set('mediaProviders',stored);bus.emit('media')
 };
 O.mediaProvider=(id,kind)=>O.mediaProviders().find(p=>p.id===id&&(!kind||p.kind===kind))||null;
@@ -277,11 +292,19 @@ const pump=()=>{
 };
 O.mediaCancel=id=>{
   const j=M.queue.find(x=>x.id===id);
-  if(j&&j.state==='queued'){j.state='cancelled';j.finished=Date.now();bus.emit('media')}
+  if(!j)return;
+  if(j.state==='queued'){j.state='cancelled';j.finished=Date.now();bus.emit('media');return}
+  if(j.state==='running'){
+    // Real cancellation: abort the in-flight HTTP call and mark the job so late answers are ignored.
+    j.cancelled=true;
+    if(j.netId&&O.native.mediaNetCancel)O.native.mediaNetCancel(j.netId);
+    j.state='cancelled';j.finished=Date.now();bus.emit('media');
+  }
 };
 
 async function runJob(job){
   const fail=e=>{
+    if(job.cancelled)return;
     job.state='error';
     const raw=e&&e.message||String(e);
     // Upstream errors are often JSON. Show the useful message instead of the whole payload.
@@ -291,35 +314,45 @@ async function runJob(job){
     O.native.notifyMedia(O.tr('Media failed','Медиа не создано'),msg.slice(0,180));
     bus.emit('media');
   };
-  const prov=O.mediaProvider(job.provider,job.kind);
-  if(!prov)return fail(new Error(O.tr('Provider not found','Провайдер не найден')));
-  if(!prov.apiKey&&prov.requireKey!==false)return fail(new Error(O.tr('No API key','Нет API-ключа')));
-  const path=apiPath(prov);
-  const url=withAuth(joinUrl(prov.baseURL,path),prov);
-  const body=Object.assign(modelBody(prov,Object.assign({},job.params,{prompt:job.prompt,model:job.model})),prov.extraBody||{});
-  const dest=(prov.folder||O.mediaFolder())+'/'+job.kind+'/'+stamp()+'_'+slug(job.prompt)+'.'+EXT[job.kind];
-  const headers=authHeaders(prov,true);
+  // EVERYTHING is inside the try: URL building used to throw before it (malformed Base URL),
+  // leaving the job stuck in 'running' and permanently eating a concurrency slot.
   try{
-    // Async: a blocking bridge call froze the whole WebView (queue, tabs) until the provider answered.
-    const r=await (O.native.netPostToFileAsync||O.native.netPostToFile)(url,headers,JSON.stringify(body),dest,job.kind==='video'?600000:240000);
+    const prov=O.mediaProvider(job.provider,job.kind);
+    if(!prov)throw new Error(O.tr('Provider not found','Провайдер не найден'));
+    if(!prov.apiKey&&prov.requireKey!==false)throw new Error(O.tr('No API key','Нет API-ключа'));
+    const path=apiPath(prov);
+    const url=withAuth(joinUrl(prov.baseURL,path),prov);
+    const body=Object.assign(modelBody(prov,Object.assign({},job.params,{prompt:job.prompt,model:job.model})),prov.extraBody||{});
+    const dest=(prov.folder||O.mediaFolder())+'/'+job.kind+'/'+stamp()+'_'+slug(job.prompt)+'.'+EXT[job.kind];
+    const headers=authHeaders(prov,true);
+    const timeout=job.kind==='video'?600000:240000;
+    let r;
+    if(O.native.netPostToFileC){const c=O.native.netPostToFileC(url,headers,JSON.stringify(body),dest,timeout);job.netId=c.id;r=await c.promise}
+    else r=await (O.native.netPostToFileAsync||O.native.netPostToFile)(url,headers,JSON.stringify(body),dest,timeout);
+    if(job.cancelled)return;
     if(!r||!r.ok)throw new Error((r&&r.err)||('HTTP '+(r&&r.status)));
     if(r.json){
       // JSON handshake: find a URL or inline base64
       let data=null;
       try{data=JSON.parse(r.body||'{}')}catch(_){}
-      data=await resolveAsyncResponse(data,url,authHeaders(prov,false),job.kind==='video'?600000:240000);
+      data=await resolveAsyncResponse(data,url,authHeaders(prov,false),timeout,job);
+      if(job.cancelled)return;
       const urlFound=findMediaUrl(data);
       const b64=findBase64(data);
       if(urlFound){
         // Never forward provider credentials to a third-party CDN host: the signed URL is enough,
         // and sending the key there leaked it to anyone able to answer the API call.
         const sameHost=hostOf(urlFound)===hostOf(url);
-        const dlHeaders=sameHost?headers:Object.assign({},{'Content-Type':'application/json'});
-        const d2=await (O.native.netDownloadToFileAsync||O.native.netDownloadToFile)(urlFound,dlHeaders,dest,240000);
+        const dlHeaders=sameHost?headers:{};
+        let d2;
+        if(O.native.netDownloadToFileC){const c=O.native.netDownloadToFileC(urlFound,dlHeaders,dest,240000);job.netId=c.id;d2=await c.promise}
+        else d2=await (O.native.netDownloadToFileAsync||O.native.netDownloadToFile)(urlFound,dlHeaders,dest,240000);
+        if(job.cancelled)return;
         if(!d2||!d2.ok)throw new Error(d2&&d2.err||O.tr('Download failed','Не удалось скачать файл'));
         job.path=d2.path||dest;
       }else if(b64){
-        const d3=O.native.writeDataUrlToFile(b64,dest);
+        const d3=await (O.native.writeDataUrlToFileAsync||O.native.writeDataUrlToFile)(b64,dest);
+        if(job.cancelled)return;
         if(!d3||!d3.ok)throw new Error(d3&&d3.err||O.tr('Cannot save file','Не удалось сохранить файл'));
         job.path=d3.path||dest;
       }else{
@@ -362,15 +395,21 @@ const pollTarget=(d,base)=>{
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 // Video/music APIs often return a job id instead of bytes. Poll it with the same credentials until
 // it produces media, instead of reporting "response has no media" for a valid submission.
-async function resolveAsyncResponse(data,base,headers,dest,timeout){
+async function resolveAsyncResponse(data,base,headers,timeout,job){
   let cur=data,deadline=Date.now()+Math.min(timeout||600000,900000);
   for(let i=0;i<120&&isPending(cur);i++){
+    if(job&&job.cancelled)return cur;
     if(Date.now()>deadline)throw new Error(O.tr('Generation timed out','Время генерации истекло'));
     await sleep(3000);
+    if(job&&job.cancelled)return cur;
     const target=pollTarget(cur,base);
     if(!target)break;
-    const r=await O.native.netGetAsync(target,headers,30000);
-    cur=JSON.parse(r.body||'{}');
+    let r;
+    if(O.native.netGetC){const c=O.native.netGetC(target,headers,30000);if(job)job.netId=c.id;r=await c.promise}
+    else r=await O.native.netGetAsync(target,headers,30000);
+    // A proxy error page is not JSON: an unguarded parse rejected the whole job outside the
+    // queue's error handling and wedged it in 'running' forever.
+    try{cur=JSON.parse(r.body||'{}')}catch(_){throw new Error(O.tr('Polling returned non-JSON','Ответ опроса не JSON'))}
     const st=String(cur.status||cur.state||'').toLowerCase();
     if(['failed','error','cancelled','canceled','expired'].includes(st))throw new Error(cur.error&&cur.error.message||cur.message||st);
   }
@@ -396,14 +435,27 @@ function findBase64(o){
 O.mediaSendToChat=async (item,text)=>{
   const path=item.path||item;
   const kind=item.kind||guessKind(path);
-  const mime=kind==='image'?'image/png':kind==='video'?'video/mp4':kind==='music'||kind==='tts'?'audio/mpeg':'application/octet-stream';
   const name=O.basename(path);
   try{
     if(!S.sid)await O.newSession();
     const mid=O.mid();
-    const parts=[{type:'file',mime,filename:name,url:O.mediaUrl(path),source:{type:'file',path,text:{value:'@'+name,start:0,end:0}}}];
+    // The server cannot fetch appassets URLs (they exist only inside this WebView). Send REAL
+    // bytes as a data URL when the file is small enough; large files go as a path mention so the
+    // agent can still open them with its file tools.
+    let part;
+    if(O.native.readDataUrl){
+      try{
+        const f=await O.native.readDataUrl(path);
+        part={type:'file',mime:f.mime,filename:name,url:'data:'+f.mime+';base64,'+f.data,source:{type:'file',path,text:{value:'@'+name,start:0,end:0}}};
+      }catch(_){}
+    }
+    if(!part)part={type:'file',mime:kind==='image'?'image/png':kind==='video'?'video/mp4':'audio/mpeg',filename:name,url:O.mediaUrl(path),source:{type:'file',path,text:{value:'@'+name,start:0,end:0}}};
+    const parts=[part];
     if(text)parts.unshift({type:'text',text:String(text)});
-    await O.api('POST','/session/'+S.sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,parts},{timeout:30000});
+    const m=O.upsertMsg({id:mid,sessionID:S.sid,role:'user',time:{created:Date.now()},agent:S.agent,model:S.model});
+    m.local=true;m.parts=parts.map((p,k)=>Object.assign({id:'prt_media'+k,sessionID:S.sid,messageID:mid},p));
+    bus.emit('msg',S.sid,m);
+    await O.api('POST','/session/'+S.sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,parts},{timeout:60000});
     O.toast(O.tr('Sent to chat','Отправлено в чат'),1800);
   }catch(e){O.toast(e.message||String(e),4000)}
 };
@@ -415,28 +467,171 @@ function guessKind(p){
   return 'image';
 }
 
-// ---- UI ----
-const KIND_TABS=[['image',O.tr('Photo','Фото'),'image'],['video',O.tr('Video','Видео'),'film'],['tts',O.tr('Voice','Голос'),'wave'],['music',O.tr('Music','Музыка'),'note'],['history',O.tr('History','История'),'list']];
+// ---- UI: each media kind is its own persistent chat ----
+// Photo / Video / Voice / Music are separate conversations: prompts are user bubbles, results are
+// assistant bubbles with a player, and the whole thread survives restarts. The old tabbed
+// generator form is gone; the composer at the bottom works exactly like the main chat.
+const KIND_META={
+  image:{label:()=>O.tr('Photo','Фото'),icon:'image',ph:()=>O.tr('Describe the image…','Опишите изображение…')},
+  video:{label:()=>O.tr('Video','Видео'),icon:'film',ph:()=>O.tr('Describe the video…','Опишите видео…')},
+  tts:{label:()=>O.tr('Voice','Голос'),icon:'wave',ph:()=>O.tr('Text to read aloud…','Текст для озвучки…')},
+  music:{label:()=>O.tr('Music','Музыка'),icon:'note',ph:()=>O.tr('Describe the track…','Опишите трек…')}
+};
+const chatKey=kind=>'mediaChat.'+kind;
+const chatLoad=kind=>{const l=O.store.get(chatKey(kind),[]);return Array.isArray(l)?l:[]};
+const chatSave=(kind,list)=>O.store.set(chatKey(kind),list.slice(-120));
+const chatPush=(kind,entry)=>{const l=chatLoad(kind);l.push(entry);chatSave(kind,l);return entry};
 
 O.openMedia=kind=>{
-  const body=h('div',{class:'media-body'});
-  const tabs=h('div',{class:'seg media-tabs'});
-  const pane=h('div',{class:'media-pane'});
-  const s=O.sheet(O.tr('Media','Медиа'),h('div',{class:'media-wrap'},tabs,pane),{full:true});
-  let cur=kind||'image';
+  if(kind==='history'||!KIND_META[kind||'image']){
+    if(kind==='history'){const body=h('div',{class:'media-pane'});O.sheet(O.tr('Media history','История медиа'),body,{full:true});drawHistory(body);return}
+    kind='image';
+  }
+  const meta=KIND_META[kind];
+  const feed=h('div',{class:'media-chat-feed'});
+  const chips=h('div',{class:'media-chat-chips'});
+  const ta=h('textarea',{rows:1,class:'media-chat-input',placeholder:meta.ph(),oninput:()=>{ta.style.height='auto';ta.style.height=Math.min(140,ta.scrollHeight)+'px'}});
+  const sendBtn=h('button',{class:'hud-icon-btn media-chat-send',title:O.tr('Generate','Сгенерировать')},O.icon('send'));
+  const composer=h('div',{class:'media-chat-composer'},chips,h('div',{class:'media-chat-inputrow'},ta,sendBtn));
+  const headBtns=h('span',{style:{display:'flex',gap:'2px'}},
+    h('button',{class:'ibtn',title:O.tr('History','История'),onclick:()=>O.openMedia('history')},O.icon('list')),
+    h('button',{class:'ibtn',title:O.tr('Media settings','Настройки медиа'),onclick:()=>O.openMediaSettings()},O.icon('sliders')));
+  const s=O.sheet(meta.label(),h('div',{class:'media-chat'},feed,composer),{full:true,actions:headBtns});
 
-  const drawTabs=()=>{
-    tabs.textContent='';
-    KIND_TABS.forEach(([k,label,icon])=>{
-      tabs.append(h('button',{class:cur===k?'on':'',onclick:()=>{cur=k;drawTabs();draw()}},O.icon(icon||'image'),h('span',null,label)));
-    });
+  const ps=providerSelect(kind);
+  const state={provider:ps?ps.cur:null,model:ps?pickInitialModel(ps.cur):'',params:{}};
+  const jobEls=new Map(); // jobId -> {el, entry}
+
+  const scrollEnd=()=>{feed.scrollTop=feed.scrollHeight};
+
+  const resultBody=(entry)=>{
+    const box=h('div',{class:'media-bubble-body'});
+    const j=M.queue.find(x=>x.id===entry.jobId);
+    const st=j?j.state:(entry.path?'done':(entry.state==='running'||entry.state==='queued'?'interrupted':entry.state||'error'));
+    const err=j&&j.error||entry.error||'';
+    const path=j&&j.path||entry.path||'';
+    if(st==='queued'||st==='running'){
+      box.append(h('div',{class:'media-bubble-status'},h('span',{class:'spin'}),
+        h('span',null,st==='queued'?O.tr('Queued…','В очереди…'):O.tr('Generating…','Генерация…')),
+        h('button',{class:'chip',onclick:()=>{O.mediaCancel(entry.jobId)}},O.icon('x'),O.tr('Cancel','Отмена'))));
+    }else if(st==='done'&&path){
+      const k=entry.kind||kind;
+      if(k==='image')box.append(h('img',{class:'media-bubble-img',src:O.mediaUrl(path),loading:'lazy',onclick:()=>O.mediaPreview({path,kind:k,prompt:entry.prompt})}));
+      else if(k==='video')box.append(h('video',{class:'thumb-video',src:O.mediaUrl(path),controls:true,preload:'metadata'}));
+      else box.append(h('audio',{class:'thumb-audio',src:O.mediaUrl(path),controls:true,preload:'metadata'}));
+      box.append(h('div',{class:'media-bubble-actions'},
+        h('button',{class:'chip',onclick:()=>O.mediaSendToChat({path,kind:k},entry.prompt)},O.icon('chat'),O.tr('To chat','В чат')),
+        h('button',{class:'chip',onclick:()=>O.mediaPreview({path,kind:k,prompt:entry.prompt})},O.icon('eye'),O.tr('Open','Открыть')),
+        h('button',{class:'chip',onclick:()=>O.native.copy(path)},O.icon('copy'),O.tr('Path','Путь'))));
+    }else{
+      box.append(h('div',{class:'err s'},st==='interrupted'?O.tr('Interrupted by app restart','Прервано перезапуском приложения'):(err||O.tr('Generation failed','Генерация не удалась'))));
+      box.append(h('div',{class:'media-bubble-actions'},
+        h('button',{class:'chip',onclick:()=>retry(entry)},O.icon('refresh'),O.tr('Retry','Повторить'))));
+    }
+    return box;
   };
-  const draw=()=>{
-    pane.textContent='';
-    if(cur==='history'){drawHistory(pane);return}
-    drawGenerator(pane,cur);
+
+  const bubbleFor=(entry)=>{
+    if(entry.role==='user'){
+      return h('div',{class:'media-bubble user'},h('div',{class:'media-bubble-body'},entry.prompt),
+        h('div',{class:'mut s media-bubble-meta'},(entry.model||'')+' · '+O.ago(entry.at)));
+    }
+    const el=h('div',{class:'media-bubble bot'},resultBody(entry),
+      h('div',{class:'mut s media-bubble-meta'},(entry.model||'')+' · '+O.ago(entry.at)));
+    if(entry.jobId)jobEls.set(entry.jobId,{el,entry});
+    return el;
   };
-  drawTabs();draw();
+
+  const repaintJob=(jobId)=>{
+    const rec=jobEls.get(jobId);if(!rec||!rec.el.isConnected)return;
+    const j=M.queue.find(x=>x.id===jobId);
+    if(j){
+      rec.entry.state=j.state;rec.entry.error=j.error||'';rec.entry.path=j.path||rec.entry.path;
+      const l=chatLoad(kind);const it=l.find(x=>x.jobId===jobId);
+      if(it){it.state=j.state;it.error=rec.entry.error;it.path=rec.entry.path;chatSave(kind,l)}
+    }
+    const fresh=bubbleFor(rec.entry);
+    rec.el.replaceWith(fresh);
+  };
+
+  const drawFeed=()=>{
+    jobEls.clear();feed.textContent='';
+    const list=chatLoad(kind);
+    if(!list.length){
+      feed.append(h('div',{class:'media-empty'},O.icon(meta.icon),
+        h('b',null,O.tr('New '+meta.label()+' chat','Новый чат: '+meta.label())),
+        h('span',{class:'mut s'},O.tr('Type a prompt below — results appear here as messages.','Введите запрос ниже — результаты появятся здесь сообщениями.'))));
+      return;
+    }
+    list.forEach(e=>feed.append(bubbleFor(e)));
+    scrollEnd();
+  };
+
+  const drawChips=()=>{
+    chips.textContent='';
+    if(!state.provider){
+      chips.append(h('button',{class:'chip',onclick:()=>O.openMediaProvider(null,kind)},O.icon('plus'),O.tr('Add provider','Добавить провайдера')));
+      return;
+    }
+    chips.append(h('button',{class:'chip',onclick:()=>{
+      const list=O.mediaProvidersOf(kind);
+      O.actions(O.tr('Provider','Провайдер'),list.map(p=>({label:p.name,icon:p.id===state.provider.id?'check':'cloud',fn:()=>{
+        state.provider=p;state.model=pickInitialModel(p);O.store.set('media.lastProvider.'+kind,p.id);drawChips();
+      }})).concat([{label:O.tr('Add provider…','Добавить провайдера…'),icon:'plus',fn:()=>O.openMediaProvider(null,kind)}]));
+    }},O.icon('cloud'),h('span',null,state.provider.name)));
+    chips.append(h('button',{class:'chip',onclick:()=>{
+      O.openMediaModelPicker(state.provider,state.model,id=>{state.model=id;drawChips()});
+    }},O.icon('cpu'),h('span',null,state.model||O.tr('Choose model','Выберите модель'))));
+    const row=(label,key,options,def)=>{
+      const cur=state.params[key]||def;
+      chips.append(h('button',{class:'chip',onclick:()=>{
+        const i=options.findIndex(o=>o[0]===cur);
+        state.params[key]=options[(i+1)%options.length][0];drawChips();
+      }},label+': '+((options.find(o=>o[0]===cur)||options[0])[1])));
+    };
+    if(kind==='image'||kind==='video')row(O.tr('Size','Размер'),'size',
+      kind==='image'?[['1024x1024','1024²'],['1536x1024','3:2'],['1024x1536','2:3'],['512x512','512²']]:[['1280x720','720p'],['1920x1080','1080p'],['720x1280','9:16']],
+      kind==='image'?'1024x1024':'1280x720');
+    if(kind==='image')row(O.tr('Count','Кол-во'),'n',[['1','1'],['2','2'],['4','4']],'1');
+    if(kind==='video'||kind==='music')row(O.tr('Duration','Длит.'),'duration',[['5','5s'],['10','10s'],['15','15s'],['30','30s'],['60','60s']],kind==='music'?'30':'5');
+    if(kind==='tts'){
+      const v=state.params.voice||O.store.get('media.voice','alloy');
+      chips.append(h('button',{class:'chip',onclick:()=>{
+        const list=['alloy','echo','fable','onyx','nova','shimmer'];
+        O.actions(O.tr('Voice','Голос'),list.map(x=>({label:x,icon:x===v?'check':'wave',fn:()=>{state.params.voice=x;O.store.set('media.voice',x);drawChips()}})));
+      }},O.icon('wave'),v));
+    }
+  };
+
+  const submit=(prompt,params,model,providerId)=>{
+    if(!providerId)return O.toast(O.tr('Add a provider first','Сначала добавьте провайдера'),2500);
+    if(!model)return O.toast(O.tr('Pick a model','Выберите модель'),2000);
+    chatPush(kind,{role:'user',prompt,at:Date.now(),model});
+    const jobId=O.mediaGenerate({kind,prompt,model,provider:providerId,params:Object.assign({},params)});
+    chatPush(kind,{role:'result',jobId,kind,prompt,model,providerId,params:Object.assign({},params),at:Date.now(),state:'queued',path:'',error:''});
+    drawFeed();
+  };
+  const retry=(entry)=>{
+    const prov=O.mediaProvider(entry.providerId||state.provider&&state.provider.id,kind)||state.provider;
+    if(!prov)return O.toast(O.tr('Provider not found','Провайдер не найден'),2500);
+    submit(entry.prompt,entry.params||state.params,entry.model||state.model,prov.id);
+  };
+
+  sendBtn.onclick=()=>{
+    const prompt=ta.value.trim();
+    if(!prompt)return;
+    if(!state.provider){O.toast(O.tr('Add a provider first','Сначала добавьте провайдера'),2500);O.openMediaProvider(null,kind);return}
+    ta.value='';ta.style.height='auto';
+    submit(prompt,state.params,state.model,state.provider.id);
+  };
+  ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&innerWidth>=820){e.preventDefault();sendBtn.onclick()}});
+
+  drawChips();drawFeed();
+  const offMedia=bus.on('media',()=>{
+    if(!s.root.isConnected){offMedia();return}
+    for(const id of jobEls.keys())repaintJob(id);
+  });
+  const offBus=bus.on('media',()=>{if(s.root.isConnected&&(state.provider&&!O.mediaProvider(state.provider.id,kind))){const p=providerSelect(kind);state.provider=p?p.cur:null;state.model=state.provider?pickInitialModel(state.provider):'';drawChips()}else if(!s.root.isConnected)offBus()});
 };
 
 function providerSelect(kind){
@@ -446,8 +641,7 @@ function providerSelect(kind){
   return {list,sel,cur:list.find(p=>p.id===sel)||list[0]};
 }
 
-// Searchable picker: hundreds of chat IDs used to end up in a single action sheet, with the first
-// one silently selected. Only an explicit choice is remembered and used for a paid request.
+// Searchable picker: only an explicit choice is remembered and used for a paid request.
 O.openMediaModelPicker=(provider,current,onPick)=>{
   const models=modelKey(provider);
   const list=h('div');
@@ -468,120 +662,6 @@ O.openMediaModelPicker=(provider,current,onPick)=>{
 function pickInitialModel(prov){
   const saved=O.store.get(lastModelKey(prov.kind,prov.id),'');
   return modelKey(prov).includes(saved)?saved:'';
-}
-
-function drawGenerator(pane,kind){
-  const ps=providerSelect(kind);
-  if(!ps){
-    pane.append(h('div',{class:'media-empty'},
-      O.icon('cpu'),
-      h('b',null,O.tr('No provider for this type yet','Для этого типа ещё нет провайдера')),
-      h('span',{class:'mut s'},O.tr('Add one with its base URL and API key.','Добавьте провайдера: адрес и API-ключ.')),
-      h('button',{class:'btn pri wide',style:{marginTop:'12px'},onclick:()=>O.openMediaProvider(null,kind)},O.icon('plus'),O.tr('Add provider','Добавить провайдера'))));
-    return;
-  }
-  const state={provider:ps.cur,model:pickInitialModel(ps.cur),prompt:'',params:{}};
-  const promptTa=h('textarea',{rows:4,class:'mono',placeholder:kind==='tts'
-    ?O.tr('Text to read aloud…','Текст для озвучки…')
-    :O.tr('Describe what to create…','Опишите, что создать…')});
-  const actionBar=h('div',{class:'media-actions'});
-  const info=h('div',{class:'mut s',style:{margin:'6px 2px'}});
-
-  const drawHead=()=>{
-    actionBar.textContent='';
-    // provider + model pickers
-    const provBtn=h('button',{class:'chip',onclick:()=>{
-      O.actions(O.tr('Provider','Провайдер'),ps.list.map(p=>({label:p.name,icon:p.id===state.provider.id?'check':'cloud',fn:()=>{
-        state.provider=p;state.model=pickInitialModel(p);O.store.set('media.lastProvider.'+kind,p.id);drawHead();drawParams();
-      }}))
-        .concat([{label:O.tr('Add provider…','Добавить провайдера…'),icon:'plus',fn:()=>O.openMediaProvider(null,kind)}]));
-    }},O.icon('cloud'),h('span',null,state.provider.name));
-    const modelBtn=h('button',{class:'chip',onclick:()=>{
-      O.openMediaModelPicker(state.provider,state.model,id=>{state.model=id;drawHead();drawParams()});
-    }},O.icon('cpu'),h('span',null,state.model||O.tr('Choose model','Выберите модель')));
-    actionBar.append(provBtn,modelBtn);
-    info.textContent=state.provider.baseURL||'';
-    const count=modelKey(state.provider).length;
-    info.textContent=(state.provider.baseURL||'')+(count?' · '+count+' '+O.tr('compatible models','совместимых моделей'):'');
-  };
-  drawHead();
-
-  const paramsBox=h('div',{class:'media-params'});
-  const drawParams=()=>{
-    paramsBox.textContent='';
-    const row=(label,key,options,def)=>{
-      const cur=state.params[key]||def;
-      const b=h('button',{class:'chip',onclick:()=>{
-        const i=options.findIndex(o=>o[0]===cur);
-        state.params[key]=options[(i+1)%options.length][0];
-        drawParams();
-      }},label+': '+((options.find(o=>o[0]===cur)||options[0])[1]));
-      return b;
-    };
-    if(kind==='image'||kind==='video'){
-      paramsBox.append(row(O.tr('Size','Размер'),'size',
-        kind==='image'?[['1024x1024','1024²'],['1536x1024','3:2'],['1024x1536','2:3'],['512x512','512²']]:[['1280x720','720p'],['1920x1080','1080p'],['720x1280','9:16']],
-        kind==='image'?'1024x1024':'1280x720'));
-    }
-    if(kind==='image')paramsBox.append(row(O.tr('Count','Кол-во'),'n',[['1','1'],['2','2'],['4','4']],'1'));
-    if(kind==='video'||kind==='music'){
-      paramsBox.append(row(O.tr('Duration','Длительность'),'duration',[['5','5s'],['10','10s'],['15','15s'],['30','30s'],['60','60s']],'5'));
-    }
-    if(kind==='tts'){
-      const voices=state.params.voice||O.store.get('media.voice','alloy');
-      paramsBox.append(h('button',{class:'chip',onclick:()=>{
-        const list=['alloy','echo','fable','onyx','nova','shimmer','руский-1'];
-        O.actions(O.tr('Voice','Голос'),list.map(v=>({label:v,icon:v===voices?'check':'wave',fn:()=>{state.params.voice=v;O.store.set('media.voice',v);drawParams()}})));
-      }},O.icon('wave'),O.tr('Voice','Голос')+': '+voices));
-    }
-  };
-  drawParams();
-
-  const improveBtn=h('button',{class:'chip',onclick:async()=>{
-    const cur=promptTa.value.trim();
-    if(!cur)return O.toast(O.tr('Type a prompt first','Сначала введите запрос'),2000);
-    // The old handler just re-assigned the same text and showed a toast: it never did anything.
-    // Hand the prompt to the agent in the chat and switch there, so the user can send it.
-    O.insertText(O.tr('Improve this generation prompt, keep it one paragraph, reply with the prompt only:\n\n','Улучши этот промпт для генерации, оставь один абзац, ответь только промптом:\n\n')+cur);
-    O.setTab('chat');
-    O.toast(O.tr('Prompt copied to the chat','Промпт перенесён в чат'),2000);
-  }},O.icon('bulb'),O.tr('Improve prompt','Улучшить промпт'));
-
-  const genBtn=h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:()=>{
-    const prompt=promptTa.value.trim();
-    if(!prompt)return O.toast(O.tr('Type a prompt','Введите запрос'),2000);
-    if(!state.model)return O.toast(O.tr('Pick a model','Выберите модель'),2000);
-    O.mediaGenerate({kind,prompt,model:state.model,provider:state.provider.id,params:Object.assign({},state.params)});
-    O.toast(O.tr('Queued','В очереди'),1500);
-    drawQueue(queueBox);
-  }},O.icon('zap'),O.tr('Generate','Сгенерировать'));
-
-  const queueBox=h('div',{class:'media-queue'});
-  pane.append(actionBar,info,promptTa,h('div',{class:'media-row'},improveBtn),paramsBox,genBtn,queueBox);
-  drawQueue(queueBox);
-  // Jobs change state outside this view (queue pump, notifications): repaint while it is on screen.
-  const off=bus.on('media',()=>{if(queueBox.isConnected)drawQueue(queueBox);else off()});
-}
-
-function drawQueue(box){
-  box.textContent='';
-  const jobs=M.queue.filter(j=>j.state!=='done'||Date.now()-(j.finished||0)<120000).slice(-8).reverse();
-  if(!jobs.length)return;
-  box.append(h('div',{class:'grp'},O.tr('Jobs','Задачи')));
-  jobs.forEach(j=>{
-    const pct=j.state==='done'?100:j.state==='running'?Math.min(95,(Date.now()-(j.started||Date.now()))/100):0;
-    box.append(h('div',{class:'media-job'},
-      h('div',{class:'media-job-top'},
-        h('b',null,j.kind+' · '+(j.model||'')),
-        h('span',{class:'mut s'},j.state)),
-      h('div',{class:'media-bar'},h('i',{style:{width:pct+'%'}})),
-      j.prompt?h('div',{class:'mut s media-clip'},j.prompt):null,
-      j.error?h('div',{class:'err s'},j.error):null,
-      h('div',{class:'media-job-actions'},
-        j.state==='queued'?h('button',{class:'chip',onclick:()=>{O.mediaCancel(j.id);drawQueue(box)}},O.icon('x'),O.tr('Cancel','Отмена')):null,
-        j.state==='done'?h('button',{class:'chip',onclick:()=>O.mediaSendToChat({path:j.path,kind:j.kind},j.prompt)},O.icon('chat'),O.tr('To chat','В чат')):null,
-        j.state==='done'?h('button',{class:'chip',onclick:()=>O.mediaPreview(j)},O.icon('eye'),O.tr('Open','Открыть')):null)));
-  });
 }
 
 O.mediaPreview=item=>{
@@ -759,9 +839,11 @@ O.openMediaProvider=(existing,kind)=>{
       if(!prov.extraBody||typeof prov.extraBody!=='object'||Array.isArray(prov.extraBody))return O.toast(O.tr('Extra body must be a JSON object','Доп. параметры должны быть JSON-объектом'),3000);
     }else delete prov.extraBody;
     // Same credential id may exist once per media type, never twice for the same type.
-    const list=O.mediaProviders().filter(x=>!(x.id===id&&x.kind===prov.kind)&&!(x.id===originalId&&x.kind===originalKind));
+    const all=O.mediaProviders();
+    const removed=all.filter(x=>(x.id===id&&x.kind===prov.kind)||(x.id===originalId&&x.kind===originalKind));
+    const list=all.filter(x=>!(x.id===id&&x.kind===prov.kind)&&!(x.id===originalId&&x.kind===originalKind));
     list.push(prov);
-    try{O.saveMediaProviders(list)}catch(e){return O.toast(e.message||String(e),3500)}
+    try{O.saveMediaProviders(list,removed)}catch(e){return O.toast(e.message||String(e),3500)}
     O.toast(O.tr('Saved','Сохранено'),1500);s.close();
   }},O.icon('check'),O.tr('Save','Сохранить'));
 
@@ -777,7 +859,8 @@ O.openMediaProvider=(existing,kind)=>{
     modelInfoBox,
     probe,status,save);
   if(existing)body.append(h('button',{class:'btn dng wide',style:{marginTop:'8px'},onclick:()=>{
-    O.saveMediaProviders(O.mediaProviders().filter(x=>!(x.id===originalId&&x.kind===originalKind)));s.close();
+    const all=O.mediaProviders();
+    O.saveMediaProviders(all.filter(x=>!(x.id===originalId&&x.kind===originalKind)),all.filter(x=>x.id===originalId&&x.kind===originalKind));s.close();
   }},O.icon('trash'),O.tr('Delete provider','Удалить провайдера')));
 };
 

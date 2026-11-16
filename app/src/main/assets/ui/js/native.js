@@ -13,25 +13,32 @@ O.dir='';
 // coalesced and a 1s memo absorbs bursts, which keeps the proot-side server from doing duplicate work.
 const getCache=new Map();      // key -> {t, data}
 const getInflight=new Map();   // key -> Promise
+function cacheKey(path,opt){
+  // The directory is part of the request identity: without it a workspace switch served the
+  // previous project's /file listing and /file/status from the memo.
+  const d=opt.dir===false?'':(typeof opt.dir==='string'?opt.dir:O.dir);
+  return d+'#'+path;
+}
 function cachedGet(method,path,body,opt){
   if(method!=='GET'||!opt.cache)return null;
   const ttl=opt.ttl||1000;
-  const hit=getCache.get(path);
+  const key=cacheKey(path,opt);
+  const hit=getCache.get(key);
   if(hit&&Date.now()-hit.t<ttl)return Promise.resolve(hit.data);
-  const inflight=getInflight.get(path);
+  const inflight=getInflight.get(key);
   if(inflight)return inflight;
   const pr=rawApi(method,path,body,opt).then(data=>{
-    getCache.set(path,{t:Date.now(),data});
+    getCache.set(key,{t:Date.now(),data});
     if(getCache.size>200){const now=Date.now();for(const [k,v] of getCache)if(now-v.t>30000)getCache.delete(k)}
     return data;
-  }).finally(()=>getInflight.delete(path));
-  getInflight.set(path,pr);
+  }).finally(()=>getInflight.delete(key));
+  getInflight.set(key,pr);
   return pr;
 }
 // Any mutation invalidates matching reads so a refresh after an edit is never stale.
 O.invalidateCache=prefix=>{
   if(!prefix){getCache.clear();return}
-  for(const k of getCache.keys())if(k.startsWith(prefix))getCache.delete(k);
+  for(const k of getCache.keys())if(k.includes('#'+prefix))getCache.delete(k);
 };
 // api(method, path, body, {dir, timeout, raw, cache, ttl})
 O.api=(method,path,body,opt)=>{
@@ -63,12 +70,16 @@ async function finishHttp(d){const p=pend.get(d.id);if(!p)return;pend.delete(d.i
 function finishMediaNet(d){const p=mediaPend.get(d.id);if(!p)return;mediaPend.delete(d.id);clearTimeout(p.timer);
   try{const r=JSON.parse(d.result||'{}');if(r.ok)p.res(r);else p.rej(Object.assign(new Error(r.err||('HTTP '+(r.status||0))),{status:r.status||0,data:r}))}
   catch(e){p.rej(e)}}
-function mediaRequest(method,args,timeout){return new Promise((res,rej)=>{
+function mediaRequest(method,args,timeout){return mediaRequestC(method,args,timeout).promise}
+function mediaRequestC(method,args,timeout){
   const id='m'+(++mediaSeq)+'_'+Date.now().toString(36);
-  const timer=setTimeout(()=>{if(mediaPend.delete(id))rej(Object.assign(new Error('timeout'),{net:true}))},timeout+10000);
-  mediaPend.set(id,{res,rej,timer});
-  try{OC[method](id,...args)}catch(e){clearTimeout(timer);mediaPend.delete(id);rej(e)}
-})}
+  const promise=new Promise((res,rej)=>{
+    const timer=setTimeout(()=>{if(mediaPend.delete(id))rej(Object.assign(new Error('timeout'),{net:true}))},timeout+10000);
+    mediaPend.set(id,{res,rej,timer});
+    try{OC[method](id,...args)}catch(e){clearTimeout(timer);mediaPend.delete(id);rej(e)}
+  });
+  return {promise,id};
+}
 // native helpers (sync, local)
 const j=s=>{try{return JSON.parse(s)}catch{return null}};
 O.native={
@@ -107,6 +118,13 @@ O.native={
   netPostToFileAsync:(url,headers,body,dest,timeout)=>mediaRequest('netPostToFileAsync',[url,JSON.stringify(headers||{}),body||'',dest,timeout||180000],timeout||180000),
   netDownloadToFileAsync:(url,headers,dest,timeout)=>mediaRequest('netDownloadToFileAsync',[url,JSON.stringify(headers||{}),dest,timeout||180000],timeout||180000),
   writeDataUrlToFile:(data,dest)=>{try{return j(OC.writeDataUrlToFile(data,dest))||{ok:false}}catch(e){return{ok:false,err:String(e)}}},
+  writeDataUrlToFileAsync:(data,dest)=>mediaRequest('writeDataUrlToFileAsync',[data,dest],60000),
+  readDataUrl:path=>mediaRequest('readDataUrl',[path],30000),
+  // Cancellable variants: the id lets the UI abort an in-flight generation from the queue.
+  netPostToFileC:(url,headers,body,dest,timeout)=>mediaRequestC('netPostToFileAsync',[url,JSON.stringify(headers||{}),body||'',dest,timeout||180000],timeout||180000),
+  netDownloadToFileC:(url,headers,dest,timeout)=>mediaRequestC('netDownloadToFileAsync',[url,JSON.stringify(headers||{}),dest,timeout||180000],timeout||180000),
+  netGetC:(url,headers,timeout)=>mediaRequestC('netGetAsync',[url,JSON.stringify(headers||{}),timeout||20000],timeout||20000),
+  mediaNetCancel:id=>{try{OC.mediaNetCancel(id)}catch(_){}},
   notifyMedia:(title,text)=>{try{OC.notifyMedia(title||'',text||'')}catch(_){}},
   mediaServerStart:()=>{try{OC.mediaServerStart()}catch(_){}},
   mediaServerStop:()=>{try{OC.mediaServerStop()}catch(_){}},

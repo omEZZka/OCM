@@ -17,7 +17,7 @@ MOCK = os.path.join(ROOT, 'tests/mock.js')
 kt = open(KT, encoding='utf-8').read()
 mock = open(MOCK, encoding='utf-8').read()
 
-kt_methods = set(re.findall(r'@JavascriptInterface\s+fun\s+(\w+)', kt))
+kt_methods = set(re.findall(r'@JavascriptInterface\s+(?:@JvmOverloads\s+)?fun\s+(\w+)', kt))
 mock_methods = set(re.findall(r'\b(\w+)\s*[:=]\s*(?:\([^)]*\)\s*=>|\()?|(\w+)\s*\(', mock))
 mock_methods = {a or b for a, b in mock_methods if (a or b)}
 

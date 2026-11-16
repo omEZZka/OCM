@@ -54,7 +54,7 @@ function build(){
     O.store.set('memory',memOn);
     B.memTxt.textContent=memLabel();
     B.memory.classList.toggle('active',memOn);
-    O.toast(memOn?(O.tr('Memory active: persistent project rules enabled','Память активна: правила и контекст включены')):(O.tr('Memory disabled','Память отключена')),2000);
+    O.toast(memOn?(O.tr('Memory on: project map and rules are generated','Память включена: карта проекта и правила создаются')):(O.tr('Memory off: project map generation stopped','Память выключена: карта проекта больше не создаётся')),2000);
   }},O.icon('memory'),B.memTxt);
 
   const bottomBar=h('div',{id:'bottom-bar'},B.chat,B.memory);

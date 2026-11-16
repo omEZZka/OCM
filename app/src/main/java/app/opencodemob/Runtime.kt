@@ -703,7 +703,9 @@ For example:
                 con.setRequestProperty("Authorization", basic(password))
                 val code = con.responseCode
                 con.disconnect()
-                if (code in 200..499) return true
+                // Only 2xx proves readiness. Accepting 4xx let a foreign app that grabbed the
+                // saved port masquerade as opencode: every later request failed with 404s.
+                if (code in 200..299) return true
             } catch (_: Exception) {}
             Thread.sleep(500)
         }

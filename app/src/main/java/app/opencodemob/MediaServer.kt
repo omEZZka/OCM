@@ -122,6 +122,11 @@ object MediaServer {
                 if (path != "/generate" || parts.getOrNull(0) != "POST") {
                     reply(404, JSONObject().put("ok", false).put("err", "not found").toString()); return
                 }
+                // Cap the request body: this listener is reachable by any local process, and an
+                // arbitrary Content-Length used to allow multi-gigabyte allocations.
+                if (contentLength > 4 * 1024 * 1024) {
+                    reply(413, JSONObject().put("ok", false).put("err", "body too large").toString()); return
+                }
                 val buf = CharArray(contentLength.coerceAtLeast(0))
                 var read = 0
                 while (read < buf.size) {

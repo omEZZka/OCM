@@ -245,7 +245,7 @@ function openBackup(){
       if(pw1.value!==pw2.value)return O.toast(O.tr('Passwords do not match','Пароли не совпадают'),3000);
       try{
         const r=JSON.parse(OC.backupProfile(pw1.value));
-        if(r.ok){info.textContent=O.tr('Saved: ','Сохранено: ')+r.path+' ('+Math.round((r.size||0)/1024)+' KB)';O.native.copy(r.path);O.toast(O.tr('Backup created','Бэкап создан'),2500);drawExisting()}
+        if(r.ok){info.textContent=O.tr('Saved: ','Сохранено: ')+r.path+' ('+Math.round((r.size||0)/1024)+' KB)'+(r.skipped?(' · '+O.tr('skipped large files: ','пропущено крупных файлов: ')+r.skipped):'');O.native.copy(r.path);O.toast(O.tr('Backup created','Бэкап создан'),2500);drawExisting()}
         else O.toast(r.err||'failed',4000);
       }catch(e){O.toast(e.message,4000)}
     }},O.icon('shield'),O.tr('Create encrypted backup','Создать шифрованный бэкап')),
@@ -848,6 +848,7 @@ O.ensureMediaHint = root=>{
 
 O.ensureMapHint = root=>{
   try{
+    if(O.memoryOn&&!O.memoryOn())return;
     const path=(root||S.dir)+'/AGENTS.md';
     const cur=O.native.readText(path);
     const text=(cur&&cur.ok&&cur.text)||'';

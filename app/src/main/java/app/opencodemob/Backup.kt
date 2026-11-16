@@ -27,13 +27,15 @@ object Backup {
     fun backupDir(context: Context): File =
         File("/sdcard/Download").takeIf { it.exists() && it.canWrite() } ?: context.filesDir
 
-    fun backupZip(home: File, out: File, password: String) {
+    /** Returns the number of files skipped because of the size caps (reported to the user). */
+    fun backupZip(home: File, out: File, password: String): Int {
         val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
         val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, deriveKey(password, salt), GCMParameterSpec(128, iv))
         val skip = setOf("node_modules", ".cache", "tmp", "bin", "rootfs", "proot-tmp")
         var total = 0L
+        var skipped = 0
         // Write next to the target and swap it in only on success: a crash or a full disk must not
         // leave a truncated .ocmbak that later looks like a usable backup.
         val tmp = File(out.parentFile, out.name + ".part")
@@ -48,7 +50,7 @@ object Backup {
                             if (!f.isFile) return@forEach
                             val rel = f.relativeTo(home).path
                             if (rel.split('/').any { it in skip }) return@forEach
-                            if (f.length() > 50_000_000L || total > 200_000_000L) return@forEach
+                            if (f.length() > 50_000_000L || total + f.length() > 200_000_000L) { skipped++; return@forEach }
                             total += f.length()
                             try {
                                 zos.putNextEntry(ZipEntry(rel))
@@ -68,6 +70,7 @@ object Backup {
             tmp.delete()
         }
         out.setLastModified(System.currentTimeMillis())
+        return skipped
     }
 
     fun restoreZip(src: File, home: File, password: String) {
@@ -104,13 +107,35 @@ object Backup {
                     }
                 }
             }
-            // Fully authenticated by now: merge the staged tree into the live profile.
-            staging.walkTopDown().forEach { f ->
-                if (!f.isFile) return@forEach
-                val rel = f.relativeTo(staging).path
-                val dest = File(home, rel)
-                dest.parentFile?.mkdirs()
-                f.copyTo(dest, overwrite = true)
+            // Fully authenticated by now: merge the staged tree into the live profile. Overwritten
+            // originals are parked in a rollback dir first, so a failure mid-merge (disk full,
+            // killed process is still best-effort) can put the previous profile back intact.
+            val rollback = File(home.parentFile, home.name + ".rollback-" + System.currentTimeMillis())
+            val created = ArrayList<File>()
+            try {
+                staging.walkTopDown().forEach { f ->
+                    if (!f.isFile) return@forEach
+                    val rel = f.relativeTo(staging).path
+                    val dest = File(home, rel)
+                    if (dest.exists()) {
+                        val park = File(rollback, rel)
+                        park.parentFile?.mkdirs()
+                        if (!dest.renameTo(park)) dest.copyTo(park, overwrite = true)
+                    } else created.add(dest)
+                    dest.parentFile?.mkdirs()
+                    f.copyTo(dest, overwrite = true)
+                }
+            } catch (e: Throwable) {
+                // undo: remove newly created files, put parked originals back
+                created.forEach { runCatching { it.delete() } }
+                rollback.walkTopDown().forEach { f ->
+                    if (!f.isFile) return@forEach
+                    val dest = File(home, f.relativeTo(rollback).path)
+                    runCatching { dest.parentFile?.mkdirs(); f.copyTo(dest, overwrite = true) }
+                }
+                throw e
+            } finally {
+                runCatching { rollback.deleteRecursively() }
             }
         } finally {
             try { staging.deleteRecursively() } catch (_: Exception) {}

@@ -146,7 +146,7 @@ let liveSyncTimer=null;
 O.syncSessionMessages=async(sid)=>{
   if(!sid||sid!==S.sid)return;
   try{
-    const arr=await api('GET','/session/'+sid+'/message',null,{timeout:15000});
+    const arr=await api('GET','/session/'+sid+'/message',null,{timeout:15000,dir:O.sessionDir(sid)});
     if(!Array.isArray(arr))return;
     // Periodically the UI pulls the whole message list as a safety net. That snapshot can be a
     // little behind the live deltas, so parts are merged (see mergePart) instead of replaced.
@@ -157,7 +157,9 @@ O.syncSessionMessages=async(sid)=>{
         for(const pt of m.parts) O.upsertPart(pt);
       }
     }
-    bus.emit('msg',sid);
+    // A full repaint: emitting 'msg' without a message crashed ensureMsg(undefined) and the
+    // recovered snapshot never reached the screen.
+    if(sid===S.sid)bus.emit('open',sid);
     saveMsgs(sid);
   }catch(e){}
 };
@@ -617,6 +619,8 @@ O.modelInfo=(pid,mid)=>{
   if(p&&p.models&&p.models[mid])return p.models[mid];
   return null;
 };
+O.memoryOn=()=>O.store.get('memory',true)!==false;
+
 // ---- workspaces ----
 // A workspace is a saved project directory plus the preferences that belong to it. Sessions remain
 // owned by opencode and are filtered by directory; we never copy or rewrite their message history.
@@ -714,8 +718,10 @@ O.recommendModels=(task,items)=>{
     if(!why.length)why.push(O.tr('available and reliable','доступна и надёжна'));
     return {x,score:n,why};
   };
-  return (items||O.allModels()).filter(x=>!O.isModelHidden(x.pid+'/'+x.mid)).map(score)
-    .sort((a,b)=>b.score-a.score).slice(0,3).filter(r=>r.score>0);
+  const onlyFree=O.store.get('onlyFreeModels',true);
+  let pool=(items||O.allModels()).filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
+  if(onlyFree){const free=pool.filter(x=>O.isModelFree(x));if(free.length)pool=free}
+  return pool.map(score).sort((a,b)=>b.score-a.score).slice(0,3).filter(r=>r.score>0);
 };
 
 O.allModels=()=>{
@@ -851,6 +857,9 @@ O.loadPending=async()=>{
   bus.emit('perm')};
 O.openSession=async(sid,fresh)=>{
   if(S.sid!==sid)O.stopLiveSync();
+  // A chat can live in its own folder: apply it on OPEN, not only right before sending, so
+  // regenerate/continue/todo/diff/file actions all address the right project.
+  if(sid){const sd=O.sessionDir(sid);if(sd&&sd!==O.dir)O.dir=sd}
   S.sid=sid;O.store.set('sid.'+S.dir,sid);
   trimStore();
   if(!sid){bus.emit('open',null);return}
@@ -879,7 +888,8 @@ O.openSession=async(sid,fresh)=>{
   bus.emit('open',sid);
   if(fresh)return;
   const prevCount=s.list.length,prevLast=s.list.length?s.list[s.list.length-1].info.id:'';
-  try{const arr=await api('GET','/session/'+sid+'/message',null,{timeout:120000});
+  const sdir=O.sessionDir(sid);
+  try{const arr=await api('GET','/session/'+sid+'/message',null,{timeout:120000,dir:sdir});
     if(S.sid!==sid)return; // the user switched away while the request was in flight
     s.list=[];s.idx=new Map();for(const m of arr){const x={info:m.info,parts:m.parts};s.list.push(x);s.idx.set(m.info.id,x)}
     if(!sesSaved){
@@ -894,8 +904,8 @@ O.openSession=async(sid,fresh)=>{
     const newLast=s.list.length?s.list[s.list.length-1].info.id:'';
     if(s.list.length!==prevCount||newLast!==prevLast)bus.emit('open',sid);
     saveMsgs(sid)}catch(e){S.offline=true;bus.emit('conn')}
-  api('GET','/session/'+sid+'/todo').then(t=>{S.todos[sid]=t;bus.emit('todo',sid)}).catch(()=>{});
-  api('GET','/session/'+sid+'/diff').then(d=>{S.diffs[sid]=d;bus.emit('diff',sid)}).catch(()=>{});
+  api('GET','/session/'+sid+'/todo',null,{dir:sdir}).then(t=>{S.todos[sid]=t;bus.emit('todo',sid)}).catch(()=>{});
+  api('GET','/session/'+sid+'/diff',null,{dir:sdir}).then(d=>{S.diffs[sid]=d;bus.emit('diff',sid)}).catch(()=>{});
   O.loadPending()};
 O.newSession=async()=>{const s=await api('POST','/session',{});if(!S.sessions.some(x=>x.id===s.id))S.sessions.unshift(s);bus.emit('sessions');await O.openSession(s.id,true);return s};
 O.setDir=async(dir)=>{
@@ -912,7 +922,8 @@ O.setDir=async(dir)=>{
   bus.emit('dir');
   await Promise.all([O.loadMeta(),O.loadSessions()]);
   // Fresh project: build the map once so the agent never starts by walking the tree.
-  try{if(O.writeProjectMap)setTimeout(()=>{try{O.writeProjectMap(dir,true)}catch(_){}},1500)}catch(_){}
+  // "Memory off" really disables this now (it used to be a decorative toggle).
+  try{if(O.writeProjectMap&&O.memoryOn())setTimeout(()=>{try{O.writeProjectMap(dir,true)}catch(_){}},1500)}catch(_){}
   const last=O.store.get('sid.'+dir);const pick=S.sessions.find(x=>x.id===last)||S.sessions[0];
   await O.openSession(pick?pick.id:null);bus.emit('files')};
 O.sessionTitle=s=>s?(s.title&&!/^(New session|Child session|Новая сессия) - /.test(s.title)?s.title:'Новая сессия'):'OpenCode';

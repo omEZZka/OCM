@@ -261,30 +261,35 @@ class MainActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
         }
-        val files = ArrayList<JSONObject>()
-        for (u in uris.take(8)) {
-            try {
-                val cr = contentResolver
-                val mime = cr.getType(u) ?: "application/octet-stream"
-                val bytes = cr.openInputStream(u)?.use { it.readBytes() } ?: continue
-                if (bytes.size > 8 * 1024 * 1024) continue
-                val name = queryName(u) ?: ("shared-" + System.currentTimeMillis())
-                files.add(JSONObject()
-                    .put("mime", mime)
-                    .put("filename", name)
-                    .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))
-            } catch (_: Exception) {}
-        }
-        if (text.isBlank() && files.isEmpty()) return
-        ui.postDelayed({
-            val o = JSONObject().put("text", text)
-            if (files.isNotEmpty()) {
-                val arr = org.json.JSONArray()
-                files.forEach { arr.put(it) }
-                o.put("files", arr)
+        if (text.isBlank() && uris.isEmpty()) return
+        // Reading up to 8 x 8 MB from content providers on the main thread caused ANRs when
+        // sharing a gallery selection. Do the IO on a worker, then hand the result to the UI.
+        thread {
+            val files = ArrayList<JSONObject>()
+            for (u in uris.take(8)) {
+                try {
+                    val cr = contentResolver
+                    val mime = cr.getType(u) ?: "application/octet-stream"
+                    val bytes = cr.openInputStream(u)?.use { it.readBytes() } ?: continue
+                    if (bytes.size > 8 * 1024 * 1024) continue
+                    val name = queryName(u) ?: ("shared-" + System.currentTimeMillis())
+                    files.add(JSONObject()
+                        .put("mime", mime)
+                        .put("filename", name)
+                        .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))
+                } catch (_: Exception) {}
             }
-            emit("share", o)
-        }, 500)
+            if (text.isBlank() && files.isEmpty()) return@thread
+            ui.postDelayed({
+                val o = JSONObject().put("text", text)
+                if (files.isNotEmpty()) {
+                    val arr = org.json.JSONArray()
+                    files.forEach { arr.put(it) }
+                    o.put("files", arr)
+                }
+                emit("share", o)
+            }, 300)
+        }
     }
 
     /** Original display name for a content:// uri (falls back to the last path segment). */
@@ -987,7 +992,15 @@ class MainActivity : ComponentActivity() {
             """.trimIndent())
         }
 
-        return "https://appassets.androidplatform.net/_preview/$entryName"
+        val encoded = android.net.Uri.encode(entryName)
+        return "https://appassets.androidplatform.net/_preview/$encoded"
+    }
+
+    /** Stable per-project shadow-repo path (guest path hashed to a safe directory name). */
+    private fun checkpointRepo(dir: String): String {
+        val h = MessageDigest.getInstance("SHA-256").digest(dir.toByteArray())
+            .joinToString("") { "%02x".format(it) }.take(16)
+        return "/root/.ocm/checkpoints/p-" + h
     }
 
     // ---------- JS bridge ----------
@@ -1330,7 +1343,8 @@ class MainActivity : ComponentActivity() {
          * and most providers do not send permissive headers. Doing it natively avoids the problem
          * entirely and keeps the key out of the page.
          */
-        @JavascriptInterface fun netGet(url: String, headersJson: String, timeoutMs: Int): String = try {
+        @JavascriptInterface fun netGet(url: String, headersJson: String, timeoutMs: Int): String = netGetImpl(url, headersJson, timeoutMs, null)
+        private fun netGetImpl(url: String, headersJson: String, timeoutMs: Int, callId: String?): String = try {
             val hdrs = try { JSONObject(headersJson) } catch (_: Exception) { JSONObject() }
             val client = okhttp3.OkHttpClient.Builder()
                 .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -1339,7 +1353,9 @@ class MainActivity : ComponentActivity() {
                 .build()
             val rb = okhttp3.Request.Builder().url(url).get()
             hdrs.keys().forEach { k -> try { rb.header(k, hdrs.optString(k)) } catch (_: Exception) {} }
-            client.newCall(rb.build()).execute().use { r ->
+            val call = client.newCall(rb.build())
+            if (callId != null) mediaCalls[callId] = call
+            call.execute().use { r ->
                 val body = r.body?.string() ?: ""
                 JSONObject().put("ok", r.isSuccessful).put("status", r.code).put("body", body.take(2_000_000)).toString()
             }
@@ -1353,7 +1369,8 @@ class MainActivity : ComponentActivity() {
          * which are awkward to move through the WebView; doing it natively avoids base64 bloat and
          * CORS entirely.
          */
-        @JavascriptInterface fun netPostToFile(url: String, headersJson: String, body: String, destPath: String, timeoutMs: Int): String = try {
+        @JavascriptInterface fun netPostToFile(url: String, headersJson: String, body: String, destPath: String, timeoutMs: Int): String = netPostToFileImpl(url, headersJson, body, destPath, timeoutMs, null)
+        private fun netPostToFileImpl(url: String, headersJson: String, body: String, destPath: String, timeoutMs: Int, callId: String?): String = try {
             val hdrs = try { JSONObject(headersJson) } catch (_: Exception) { JSONObject() }
             val dest = Runtime.hostPath(this@MainActivity, uid(), destPath)
             dest.parentFile?.mkdirs()
@@ -1367,7 +1384,9 @@ class MainActivity : ComponentActivity() {
             hdrs.remove("Content-Type")
             val rb = okhttp3.Request.Builder().url(url).post(body.toRequestBody(mediaType))
             hdrs.keys().forEach { k -> try { rb.header(k, hdrs.optString(k)) } catch (_: Exception) {} }
-            client.newCall(rb.build()).execute().use { r ->
+            val call = client.newCall(rb.build())
+            if (callId != null) mediaCalls[callId] = call
+            call.execute().use { r ->
                 val bytes = r.body?.bytes() ?: ByteArray(0)
                 if (!r.isSuccessful) {
                     return JSONObject().put("ok", false).put("status", r.code)
@@ -1392,7 +1411,8 @@ class MainActivity : ComponentActivity() {
         }
 
         /** Downloads a URL to a file (CDNs return the real media after a JSON handshake). */
-        @JavascriptInterface fun netDownloadToFile(url: String, headersJson: String, destPath: String, timeoutMs: Int): String = try {
+        @JavascriptInterface fun netDownloadToFile(url: String, headersJson: String, destPath: String, timeoutMs: Int): String = netDownloadToFileImpl(url, headersJson, destPath, timeoutMs, null)
+        private fun netDownloadToFileImpl(url: String, headersJson: String, destPath: String, timeoutMs: Int, callId: String?): String = try {
             val hdrs = try { JSONObject(headersJson) } catch (_: Exception) { JSONObject() }
             val dest = Runtime.hostPath(this@MainActivity, uid(), destPath)
             dest.parentFile?.mkdirs()
@@ -1403,7 +1423,9 @@ class MainActivity : ComponentActivity() {
                 .build()
             val rb = okhttp3.Request.Builder().url(url).get()
             hdrs.keys().forEach { k -> try { rb.header(k, hdrs.optString(k)) } catch (_: Exception) {} }
-            client.newCall(rb.build()).execute().use { r ->
+            val call = client.newCall(rb.build())
+            if (callId != null) mediaCalls[callId] = call
+            call.execute().use { r ->
                 if (!r.isSuccessful) {
                     val msg = try { r.body?.string()?.take(1600) ?: "" } catch (_: Exception) { "" }
                     return JSONObject().put("ok", false).put("status", r.code)
@@ -1425,23 +1447,41 @@ class MainActivity : ComponentActivity() {
          */
         @JavascriptInterface fun netGetAsync(id: String, url: String, headersJson: String, timeoutMs: Int) {
             thread {
-                val result = try { netGet(url, headersJson, timeoutMs) }
+                val result = try { netGetImpl(url, headersJson, timeoutMs, id) }
                 catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString() }
+                finally { mediaCalls.remove(id) }
                 emit("mediaNet", JSONObject().put("id", id).put("result", result))
             }
         }
 
+        private val mediaCalls = java.util.concurrent.ConcurrentHashMap<String, okhttp3.Call>()
+
+        @JavascriptInterface fun mediaNetCancel(id: String) {
+            try { mediaCalls.remove(id)?.cancel() } catch (_: Exception) {}
+        }
+
         @JavascriptInterface fun netPostToFileAsync(id: String, url: String, headersJson: String, body: String, destPath: String, timeoutMs: Int) {
             thread {
-                val result = try { netPostToFile(url, headersJson, body, destPath, timeoutMs) }
+                val result = try { netPostToFileImpl(url, headersJson, body, destPath, timeoutMs, id) }
                 catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString() }
+                finally { mediaCalls.remove(id) }
                 emit("mediaNet", JSONObject().put("id", id).put("result", result))
             }
         }
 
         @JavascriptInterface fun netDownloadToFileAsync(id: String, url: String, headersJson: String, destPath: String, timeoutMs: Int) {
             thread {
-                val result = try { netDownloadToFile(url, headersJson, destPath, timeoutMs) }
+                val result = try { netDownloadToFileImpl(url, headersJson, destPath, timeoutMs, id) }
+                catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString() }
+                finally { mediaCalls.remove(id) }
+                emit("mediaNet", JSONObject().put("id", id).put("result", result))
+            }
+        }
+
+        /** Async variant: decoding multi-megabyte base64 on the JS thread froze the UI. */
+        @JavascriptInterface fun writeDataUrlToFileAsync(id: String, dataUrl: String, destPath: String) {
+            thread {
+                val result = try { writeDataUrlToFile(dataUrl, destPath) }
                 catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString() }
                 emit("mediaNet", JSONObject().put("id", id).put("result", result))
             }
@@ -1496,6 +1536,31 @@ class MainActivity : ComponentActivity() {
         // --- files (paths as the agent sees them) ---
         @JavascriptInterface fun ls(path: String): String = Runtime.ls(this@MainActivity, uid(), path).toString()
         @JavascriptInterface fun fs(op: String, path: String, arg: String): String = Runtime.fs(this@MainActivity, uid(), op, path, arg).toString()
+
+        /** Reads a small binary file as a data URL so it can be attached to a prompt as real bytes. */
+        @JavascriptInterface fun readDataUrl(id: String, path: String) {
+            thread {
+                val result = try {
+                    val f = Runtime.hostPath(this@MainActivity, uid(), path)
+                    when {
+                        !f.isFile -> JSONObject().put("ok", false).put("err", "Not a file").toString()
+                        f.length() > 8L * 1024 * 1024 -> JSONObject().put("ok", false).put("err", "File is too large (max 8 MB)").toString()
+                        else -> {
+                            val mime = when (f.extension.lowercase()) {
+                                "png" -> "image/png"; "jpg", "jpeg" -> "image/jpeg"; "webp" -> "image/webp"; "gif" -> "image/gif"
+                                "mp4" -> "video/mp4"; "webm" -> "video/webm"; "mov" -> "video/quicktime"
+                                "mp3" -> "audio/mpeg"; "wav" -> "audio/wav"; "m4a" -> "audio/mp4"; "ogg", "opus" -> "audio/ogg"; "flac" -> "audio/flac"
+                                "pdf" -> "application/pdf"
+                                else -> "application/octet-stream"
+                            }
+                            JSONObject().put("ok", true).put("mime", mime)
+                                .put("data", Base64.encodeToString(f.readBytes(), Base64.NO_WRAP)).toString()
+                        }
+                    }
+                } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString() }
+                emit("mediaNet", JSONObject().put("id", id).put("result", result))
+            }
+        }
 
         @JavascriptInterface fun readText(path: String): String = try {
             val f = Runtime.hostPath(this@MainActivity, uid(), path)
@@ -1633,11 +1698,14 @@ class MainActivity : ComponentActivity() {
                     try {
                         val id = System.currentTimeMillis().toString()
                         val q = { a: String -> "'" + a.replace("'", "'\\''") + "'" }
+                        // One shadow repo PER PROJECT: a shared repo let a snapshot of project A
+                        // be restored into project B, and `git clean` then deleted B's files.
+                        val repo = checkpointRepo(dir.ifEmpty { "/root" })
                         val script = buildString {
-                            append("export GIT_DIR=/root/.ocm/checkpoints/repo GIT_WORK_TREE=").append(q(dir.ifEmpty { "/root" }))
+                            append("export GIT_DIR=").append(q(repo)).append(" GIT_WORK_TREE=").append(q(dir.ifEmpty { "/root" }))
                             append(" GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C; ")
-                            append("mkdir -p /root/.ocm/checkpoints/repo/info; ")
-                            append("printf 'node_modules/\n.git/\ndist/\nbuild/\n.cache/\ntmp/\n*.log\n' > /root/.ocm/checkpoints/repo/info/exclude; ")
+                            append("mkdir -p ").append(q(repo + "/info")).append("; ")
+                            append("printf 'node_modules/\n.git/\ndist/\nbuild/\n.cache/\ntmp/\n*.log\n' > ").append(q(repo + "/info/exclude")).append("; ")
                             append("git rev-parse --git-dir >/dev/null 2>&1 || git init -q; ")
                             append("git add -A >/dev/null 2>&1; ")
                             // --porcelain is empty when nothing changed: skip the commit entirely
@@ -1655,7 +1723,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             try {
                                 java.io.File(Runtime.home(this@MainActivity, u), ".ocm/checkpoints/index.tsv").appendText(
-                                    id + "\t" + sha + "\t" + dir + "\t" + label.replace('\t', ' ').replace('\n', ' ') + "\n"
+                                    id + "\t" + sha + "\t" + dir + "\t" + label.replace('\t', ' ').replace('\n', ' ') + "\t" + repo + "\n"
                                 )
                             } catch (_: Exception) {}
                             emit("checkpoint", JSONObject().put("ok", true).put("id", id).put("sha", sha))
@@ -1677,7 +1745,7 @@ class MainActivity : ComponentActivity() {
             if (meta.isFile) {
                 meta.readLines().filter { it.isNotBlank() }.takeLast(200).reversed().forEach { line ->
                     val p = line.split('\t')
-                    if (p.size >= 3) arr.put(JSONObject().put("id", p[0]).put("sha", p[1]).put("dir", p[2]).put("label", if (p.size > 3) p[3] else ""))
+                    if (p.size >= 3) arr.put(JSONObject().put("id", p[0]).put("sha", p[1]).put("dir", p[2]).put("label", if (p.size > 3) p[3] else "").put("legacy", p.size < 5))
                 }
             }
             JSONObject().put("ok", true).put("items", arr).toString()
@@ -1691,18 +1759,27 @@ class MainActivity : ComponentActivity() {
             if (!Runtime.isInstalled(this@MainActivity)) JSONObject().put("ok", false).put("err", "runtime not installed").toString()
             else {
                 val q = { a: String -> "'" + a.replace("'", "'\\''") + "'" }
+                val repo = checkpointRepo(dir.ifEmpty { "/root" })
                 val script = buildString {
-                    append("export GIT_DIR=/root/.ocm/checkpoints/repo GIT_WORK_TREE=").append(q(dir.ifEmpty { "/root" }))
+                    append("export GIT_DIR=").append(q(repo)).append(" GIT_WORK_TREE=").append(q(dir.ifEmpty { "/root" }))
                     append(" GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C; ")
                     append("git checkout -f ").append(q(sha)).append(" -- . 2>&1; ")
                     append("git clean -fdq 2>&1; ")
                     append("echo RESTORED")
                 }
-                val p = Runtime.prootCmd(this@MainActivity, u, listOf("/bin/sh", "-c", script))
-                val out = p.inputStream.bufferedReader().use { it.readText() }
-                val done = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
-                if (!done) try { p.destroyForcibly() } catch (_: Exception) {}
-                JSONObject().put("ok", done && out.contains("RESTORED")).put("out", out.takeLast(4000)).toString()
+                // Restore may take minutes on a big tree: run off the JS thread like create does.
+                thread {
+                    try {
+                        val p = Runtime.prootCmd(this@MainActivity, u, listOf("/bin/sh", "-c", script))
+                        val out = p.inputStream.bufferedReader().use { it.readText() }
+                        val done = p.waitFor(180, java.util.concurrent.TimeUnit.SECONDS)
+                        if (!done) try { p.destroyForcibly() } catch (_: Exception) {}
+                        emit("checkpointRestore", JSONObject().put("ok", done && out.contains("RESTORED")).put("dir", dir).put("out", out.takeLast(4000)))
+                    } catch (e: Exception) {
+                        emit("checkpointRestore", JSONObject().put("ok", false).put("dir", dir).put("err", e.message ?: "failed"))
+                    }
+                }
+                JSONObject().put("ok", true).put("queued", true).toString()
             }
         } catch (e: Exception) {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
@@ -1750,8 +1827,8 @@ class MainActivity : ComponentActivity() {
             val home = Runtime.home(this@MainActivity, uid())
             val dir = Backup.backupDir(this@MainActivity)
             val out = File(dir, "OCM-backup-" + System.currentTimeMillis() + ".ocmbak")
-            Backup.backupZip(home, out, password)
-            JSONObject().put("ok", true).put("path", out.absolutePath).put("size", out.length()).toString()
+            val skipped = Backup.backupZip(home, out, password)
+            JSONObject().put("ok", true).put("path", out.absolutePath).put("size", out.length()).put("skipped", skipped).toString()
         } catch (e: Exception) {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
         }

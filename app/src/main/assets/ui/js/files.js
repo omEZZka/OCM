@@ -32,14 +32,23 @@ async function rememberIdx(p){
     if(idx.length>120){const drop=idx.splice(0,idx.length-120);await O.kv.set(idxKey(),idx);for(const q of drop)await O.kv.del('files:'+S.dir+':'+q)}
   }catch(_){}
 }
-async function list(p){
+let refreshGen=0;
+async function list(p,dir){
+  const d=dir||S.dir;
   const tries=p==='.'?['.','']:[p];
-  for(const t of tries){try{const n=await api('GET','/file?path='+encodeURIComponent(t),null,{cache:true,ttl:800});cache.set(p,sortN(n));O.kv.set('files:'+S.dir+':'+p,n);rememberIdx(p);return}catch(e){}}
-  const c=await O.kv.get('files:'+S.dir+':'+p);if(c)cache.set(p,sortN(c))}
-O.refreshFiles=async force=>{titleEl.textContent=O.basename(S.dir)||'/';
+  for(const t of tries){try{const n=await api('GET','/file?path='+encodeURIComponent(t),null,{cache:true,ttl:800,dir:d});
+    if(d!==S.dir)return; // a late answer for the previous workspace must not repaint the new one
+    cache.set(p,sortN(n));O.kv.set('files:'+d+':'+p,n);rememberIdx(p);return}catch(e){}}
+  const c=await O.kv.get('files:'+d+':'+p);if(c&&d===S.dir)cache.set(p,sortN(c))}
+O.refreshFiles=async force=>{
+  const gen=++refreshGen,dir=S.dir;
+  titleEl.textContent=O.basename(dir)||'/';
   if(force)cache.clear();
-  await list('.');for(const p of exp)if(!cache.has(p)||force)await list(p);
-  try{const st=await api('GET','/file/status',null,{cache:true,ttl:700});gst={};(st||[]).forEach(f=>gst[f.path]=f.status);S.gstatus=gst}catch{}
+  await list('.',dir);if(gen!==refreshGen||dir!==S.dir)return;
+  for(const p of exp){if(!cache.has(p)||force)await list(p,dir);if(gen!==refreshGen||dir!==S.dir)return}
+  try{const st=await api('GET','/file/status',null,{cache:true,ttl:700,dir});
+    if(gen!==refreshGen||dir!==S.dir)return;
+    gst={};(st||[]).forEach(f=>gst[f.path]=f.status);S.gstatus=gst}catch{}
   draw()};
 function draw(){
   const fr=document.createDocumentFragment();
@@ -132,8 +141,9 @@ O.openFile=async n=>{const rel=typeof n==='string'?n:n.path,abs=typeof n==='stri
     if(editing){const ta=h('textarea',{class:'editor',spellcheck:'false'});ta.value=text;body.append(ta,h('div',{class:'cmdline'},h('button',{class:'btn grow',onclick:()=>{editing=false;paint()}},'Отмена'),h('button',{class:'btn pri grow',onclick:()=>{const r=O.native.writeText(abs,ta.value);if(r.ok){text=ta.value;editing=false;O.toastQuiet('Сохранено');paint();O.refreshFiles(false)}else O.toast(r.err||'Не удалось сохранить')}},'Сохранить')))}
     else body.append(O.codeView(text,abs))};
   try{const r=await api('GET','/file/content?path='+encodeURIComponent(rel));
+    if(!s.root.isConnected)return; // sheet closed/replaced while loading: never paint into a ghost
     if(r.type==='text'||typeof r.content==='string'&&r.encoding!=='base64')text=r.content;else if(r.encoding==='base64'&&(r.mimeType||'').startsWith('image/'))img='data:'+r.mimeType+';base64,'+r.content}
-  catch(e){const r=O.native.readText(abs);if(r.ok)text=r.text;else body.textContent='Не удаётся открыть файл: '+(e.message||'')}
+  catch(e){if(!s.root.isConnected)return;const r=O.native.readText(abs);if(r.ok)text=r.text;else body.textContent='Не удаётся открыть файл: '+(e.message||'')}
   paint()};
 
 // ---- "why is it broken": gather the error context and send it as one prompt ----
@@ -304,7 +314,8 @@ O.writeProjectMap=async (root,quiet)=>{
 // Debounced: the file watcher fires on every edit, but the map only needs to be a few seconds fresh.
 O.scheduleProjectMap=()=>{
   clearTimeout(mapTimer);
-  mapTimer=setTimeout(()=>{O.writeProjectMap(S.dir,true)},4000);
+  if(O.memoryOn&&!O.memoryOn())return;
+  mapTimer=setTimeout(()=>{if(!O.memoryOn||O.memoryOn())O.writeProjectMap(S.dir,true)},4000);
 };
 
 // Visual tree: columns of nodes connected to their parent, tap a folder to expand.
@@ -376,16 +387,25 @@ O.openCheckpoints=()=>{
     body.append(h('div',{class:'note'},O.tr('A snapshot is taken before every prompt. Restoring rewrites tracked files and removes files created since then — inside the current project only.','Снимок делается перед каждым запросом. Восстановление перезаписывает файлы и удаляет созданные позже — только внутри текущего проекта.')));
     if(!items.length){body.append(h('div',{class:'mut',style:{padding:'16px'}},O.tr('No snapshots yet','Снимков пока нет')));return}
     const card=h('div',{class:'group-card'});
-    items.filter(x=>!x.dir||x.dir===S.dir||true).slice(0,100).forEach(x=>{
+    // Strict per-project filter: legacy entries (shared repo) are unsafe to restore elsewhere.
+    items.filter(x=>x.dir===S.dir&&!x.legacy).slice(0,100).forEach(x=>{
       const d=new Date(Number(x.id)||Date.now());
       card.append(h('div',{class:'settings-row'},
         h('div',{class:'settings-row-icon'},O.icon('undo')),
         h('div',{class:'settings-row-text'},h('b',null,d.toLocaleString()),h('span',null,(x.label||'—')+'  ·  '+x.sha.slice(0,8))),
-        h('button',{class:'btn sm',onclick:async()=>{
+        h('button',{class:'btn sm',onclick:async e=>{
           if(!await O.confirm(O.tr('Restore this snapshot?','Восстановить этот снимок?'),O.tr('Files changed since then will be reverted.','Изменения после этого момента будут отменены.'),O.tr('Restore','Восстановить'),true))return;
-          const rr=O.native.checkpointRestore(x.dir||S.dir,x.sha);
-          if(rr&&rr.ok){O.toast(O.tr('Restored','Восстановлено'),2000);O.refreshFiles(true);O.refreshChanges(true);s.close()}
-          else O.toast((rr&&rr.err)||O.tr('Restore failed','Не удалось восстановить'),4000);
+          const btn=e.currentTarget;btn.disabled=true;btn.textContent=O.tr('Restoring…','Восстановление…');
+          const off=O.on('checkpointRestore',rr=>{
+            if(rr.dir!==x.dir)return;
+            off();btn.disabled=false;btn.textContent=O.tr('Restore','Восстановить');
+            if(rr&&rr.ok){O.toast(O.tr('Restored','Восстановлено'),2000);O.refreshFiles(true);O.refreshChanges(true);s.close()}
+            else O.toast((rr&&rr.err)||O.tr('Restore failed','Не удалось восстановить'),4000);
+          });
+          const rr=O.native.checkpointRestore(x.dir,x.sha);
+          if(rr&&!rr.queued){off();btn.disabled=false;btn.textContent=O.tr('Restore','Восстановить');
+            if(rr.ok){O.toast(O.tr('Restored','Восстановлено'),2000);O.refreshFiles(true);O.refreshChanges(true);s.close()}
+            else O.toast(rr.err||O.tr('Restore failed','Не удалось восстановить'),4000)}
         }},O.tr('Restore','Восстановить'))));
     });
     body.append(card);

@@ -31,6 +31,7 @@ O.openSessions=()=>{
     if(needle.length<2){hits.classList.add('hide');hits.textContent='';return}
     hitTimer=setTimeout(async()=>{
       const res=await O.searchMessages(needle);
+      if(!s.root.isConnected)return; // drawer closed while searching: drop the detached DOM work
       if((q.value||'').trim()!==needle)return;
       hits.textContent='';
       if(!res.length){hits.classList.add('hide');return}
@@ -64,10 +65,10 @@ O.openSessions=()=>{
       // happened (the drawer stays visible behind), and two same-titled sheets would fight.
       s.close();
       O.actions(O.tr('Media','Медиа'),[
-        {label:O.tr('Photo','Фото'),sub:O.tr('Text to image, edits, upscale','Текст в изображение, правки, апскейл'),icon:'image',fn:()=>O.openMedia&&O.openMedia('image')},
-        {label:O.tr('Video','Видео'),sub:O.tr('Text or image to video, up to 60s','Текст или фото в видео, до 60 с'),icon:'film',fn:()=>O.openMedia&&O.openMedia('video')},
-        {label:O.tr('Voice','Голос'),sub:O.tr('Text to speech and voice cloning','Озвучка текста и клонирование голоса'),icon:'wave',fn:()=>O.openMedia&&O.openMedia('tts')},
-        {label:O.tr('Music','Музыка'),sub:O.tr('Tracks up to 60 seconds','Треки до 60 секунд'),icon:'note',fn:()=>O.openMedia&&O.openMedia('music')},
+        {label:O.tr('Photo chat','Чат: Фото'),sub:O.tr('Image generation as a conversation','Генерация изображений как переписка'),icon:'image',fn:()=>O.openMedia&&O.openMedia('image')},
+        {label:O.tr('Video chat','Чат: Видео'),sub:O.tr('Video generation as a conversation','Генерация видео как переписка'),icon:'film',fn:()=>O.openMedia&&O.openMedia('video')},
+        {label:O.tr('Voice chat','Чат: Голос'),sub:O.tr('Text to speech as a conversation','Озвучка текста как переписка'),icon:'wave',fn:()=>O.openMedia&&O.openMedia('tts')},
+        {label:O.tr('Music chat','Чат: Музыка'),sub:O.tr('Track generation as a conversation','Генерация треков как переписка'),icon:'note',fn:()=>O.openMedia&&O.openMedia('music')},
         {label:O.tr('History','История'),sub:O.tr('Everything generated on this device','Всё, что создано на этом устройстве'),icon:'list',fn:()=>O.openMedia&&O.openMedia('history')},
         {label:O.tr('Media settings','Настройки медиа'),sub:O.tr('Providers, save folder, prompt language','Провайдеры, папка, язык промптов'),icon:'sliders',fn:()=>O.openMediaSettings&&O.openMediaSettings()},
       ]);
@@ -78,7 +79,7 @@ O.openSessions=()=>{
   const newBtn=h('button',{class:'btn pri wide',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));
   const offs=[];
   const s=O.sheet(O.tr('Navigation & Sessions','Навигация и сессии'),h('div',null,nav,newBtn,h('div',{style:{height:'12px'}}),q,tagBar,list,hits),{drawer:true,
-    onClose:()=>{offs.splice(0).forEach(f=>{try{f()}catch(_){}})}});
+    onClose:()=>{clearTimeout(hitTimer);offs.splice(0).forEach(f=>{try{f()}catch(_){}})}});
   function drawTags(){
     tagBar.textContent='';
     const tags=O.sessionTagList();
@@ -722,7 +723,7 @@ O.openModelFolders=(onDone)=>{
       body.append(h('div',{class:'settings-row'},
         h('button',{class:'settings-row-icon',style:{background:'transparent',border:'none',padding:0},onclick:()=>{O.toggleModelFolderPin(f.id);draw()}},O.icon(pinnedF?'pin':'folder',pinnedF?'pin-ic':'')),
         h('div',{class:'settings-row-text'},h('b',null,f.name),h('span',null,(f.keys||[]).length+' '+O.tr('models','моделей')+(pinnedF?' · '+O.tr('pinned','закреплена'):''))),
-        h('button',{class:'ibtn s',title:O.tr('Up','Вверх'),onclick:()=>{O.moveModelFolder(f.id,-1);draw()}},O.icon('chevD')),
+        h('button',{class:'ibtn s',title:O.tr('Up','Вверх'),onclick:()=>{O.moveModelFolder(f.id,-1);draw()}},O.icon('chevU')),
         h('button',{class:'ibtn s',title:O.tr('Rename','Переименовать'),onclick:async()=>{const v=await O.ask(O.tr('Rename folder','Переименование папки'),null,f.name);if(v){O.renameModelFolder(f.id,v);draw()}}},O.icon('edit')),
         h('button',{class:'ibtn s',title:O.tr('Delete','Удалить'),onclick:async()=>{if(await O.confirm(O.tr('Delete folder?','Удалить папку?'),f.name,O.tr('Delete','Удалить'),true)){O.deleteModelFolder(f.id);draw()}}},O.icon('trash'))));
     });
@@ -766,8 +767,10 @@ O.suggestModel=text=>{
     let s=0;
     const m=x.m||{};
     const ctx=(m.limit&&m.limit.context)||0;
-    if(hasImg&&(m.modalities&&m.modalities.includes('image')))s+=60;
-    if(hasImg&&!(m.modalities&&m.modalities.includes('image')))s-=40;
+    const vis=(m.modalities&&Array.isArray(m.modalities.input)&&m.modalities.input.includes('image'))||
+      (Array.isArray(m.modalities)&&m.modalities.includes('image'))||m.attachment===true;
+    if(hasImg&&vis)s+=60;
+    if(hasImg&&!vis)s-=40;
     if(wantsBig&&ctx)s+=Math.min(40,ctx/50000);
     if(wantsCheap&&O.isModelFree(x))s+=45;
     if(wantsCheap&&m.cost&&m.cost.input>0)s-=30;
