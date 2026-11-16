@@ -2844,3 +2844,20 @@ a:hover {
 input[type="range"] { width: auto; padding: 0; border: 0; background: none; accent-color: var(--acc); }
 input[type="checkbox"] { width: auto; padding: 0; border: 0; background: none; accent-color: var(--acc); }
 input[type="color"] { width: 42px; padding: 0; border: 0; background: none; }
+
+/* workspaces, editable plans and media model metadata */
+.workspace-card { display: flex; align-items: center; gap: 4px; border: 1px solid var(--line);
+  border-radius: 14px; padding: 6px 8px; margin: 8px 0; background: var(--bg2); }
+.workspace-main { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+  padding: 8px; background: none; border: 0; text-align: left; color: var(--fg); }
+.workspace-main .settings-row-text { min-width: 0; }
+.workspace-main b, .workspace-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-step { display: flex; align-items: center; gap: 6px; margin: 7px 0; }
+.plan-step input { flex: 1; min-width: 0; }
+.plan-step-check { width: 30px; height: 30px; flex: none; display: grid; place-items: center;
+  border-radius: 50%; border: 1px solid var(--line); background: var(--bg3); color: var(--mut); }
+.plan-step-check.done { background: rgba(34,197,94,.16); color: #22c55e; border-color: rgba(34,197,94,.35); }
+.media-model-info { border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; margin: 6px 0; }
+.media-model-info summary { cursor: pointer; font-weight: 600; font-size: 12.5px; }
+.media-model-info > div { margin-top: 5px; line-height: 1.45; overflow-wrap: anywhere; }
+.media-editor-models { max-height: 260px; overflow-y: auto; }

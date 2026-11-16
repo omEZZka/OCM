@@ -617,6 +617,107 @@ O.modelInfo=(pid,mid)=>{
   if(p&&p.models&&p.models[mid])return p.models[mid];
   return null;
 };
+// ---- workspaces ----
+// A workspace is a saved project directory plus the preferences that belong to it. Sessions remain
+// owned by opencode and are filtered by directory; we never copy or rewrite their message history.
+O.workspaces=()=>{
+  const list=O.store.get('workspaces',[]);
+  return Array.isArray(list)?list.filter(w=>w&&w.dir):[];
+};
+O.workspaceAt=dir=>O.workspaces().find(w=>w.dir===dir)||null;
+O.workspaceName=w=>w&&(w.name||O.basename(w.dir)||w.dir)||O.tr('Workspace','Проект');
+O.saveWorkspace=w=>{
+  if(!w||!w.dir)return null;
+  const list=O.workspaces();
+  const rec=Object.assign({},list.find(x=>x.dir===w.dir),w,{name:String(w.name||O.basename(w.dir)||w.dir),dir:w.dir,updated:Date.now()});
+  const next=list.filter(x=>x.dir!==w.dir);next.unshift(rec);
+  O.store.set('workspaces',next.slice(0,60));
+  bus.emit('workspace');
+  return rec;
+};
+O.activateWorkspace=async(dir,name)=>{
+  if(!dir)return;
+  const prev=O.workspaceAt(S.dir);
+  if(prev)O.saveWorkspace(Object.assign(prev,{model:S.model,agent:S.agent}));
+  const existing=O.workspaceAt(dir);
+  const rec=O.saveWorkspace(Object.assign({},existing||{},{dir,name:name||(existing&&existing.name)||O.basename(dir)||dir,model:existing&&existing.model||null,agent:existing&&existing.agent||''}));
+  await O.setDir(dir);
+  if(rec.model&&O.modelInfo(rec.model.providerID,rec.model.modelID))O.setModel(rec.model.providerID,rec.model.modelID);
+  if(rec.agent&&S.agents.some(a=>a.name===rec.agent))S.agent=rec.agent;
+  bus.emit('workspace');bus.emit('meta');
+  return rec;
+};
+O.deleteWorkspace=dir=>{
+  O.store.set('workspaces',O.workspaces().filter(w=>w.dir!==dir));
+  bus.emit('workspace');
+};
+// Optional two-stage prompting. No hidden extra model calls: the plan is shown in the composer and
+// the user sends it explicitly, then continues each step when they choose to.
+O.planMode=()=>O.store.get('planMode',false);
+O.setPlanMode=v=>O.store.set('planMode',!!v);
+O.planFor=sid=>O.store.get('taskPlan.'+sid,null);
+O.savePlan=(sid,plan)=>{if(sid)O.store.set('taskPlan.'+sid,plan)};
+O.clearPlan=sid=>{if(sid)O.store.remove('taskPlan.'+sid)};
+O.openPlan=()=>{
+  const sid=S.sid;
+  if(!sid)return O.toast(O.tr('Start a session first','Сначала создайте сессию'),2000);
+  const saved=O.planFor(sid)||{goal:'',steps:[{text:'',status:'pending'}]};
+  const goal=h('textarea',{rows:3,placeholder:O.tr('What should be done?','Что нужно сделать?')});goal.value=saved.goal||'';
+  const list=h('div');
+  let steps=Array.isArray(saved.steps)&&saved.steps.length?saved.steps:[{text:'',status:'pending'}];
+  const draw=()=>{
+    list.textContent='';
+    steps.forEach((st,i)=>{
+      const inp=h('input',{value:st.text||'',placeholder:O.tr('Step '+(i+1),'Шаг '+(i+1)),oninput:e=>{st.text=e.target.value;persist()}});
+      if(st.status==='done')inp.classList.add('done');
+      list.append(h('div',{class:'plan-step'},
+        h('button',{class:'plan-step-check'+(st.status==='done'?' done':''),onclick:()=>{st.status=st.status==='done'?'pending':'done';persist();draw()}},O.icon(st.status==='done'?'check':'chevR')),
+        inp,
+        h('button',{class:'ibtn s',onclick:()=>{if(steps.length>1){steps.splice(i,1);persist();draw()}}},O.icon('x'))));
+    });
+  };
+  const persist=()=>O.savePlan(sid,{goal:goal.value,steps,updated:Date.now()});
+  const body=h('div',null,h('div',{class:'field'},h('label',null,O.tr('Goal','Цель')),goal),list,
+    h('button',{class:'btn wide',onclick:()=>{steps.push({text:'',status:'pending'});persist();draw()}},O.icon('plus'),O.tr('Add step','Добавить шаг')),
+    h('div',{style:{display:'flex',gap:'8px',marginTop:'12px'}},
+      h('button',{class:'btn grow',onclick:()=>{O.clearPlan(sid);s.close()}},O.tr('Clear','Очистить')),
+      h('button',{class:'btn pri grow',onclick:()=>{
+        persist();
+        const pending=steps.filter(x=>x.text.trim()&&x.status!=='done');
+        if(!pending.length){O.toast(O.tr('Add at least one unfinished step','Добавьте хотя бы один незавершённый шаг'),2000);return}
+        const text=O.tr('Goal: ','Цель: ')+goal.value.trim()+'\n\n'+O.tr('Plan:','План:')+'\n'+steps.filter(x=>x.text.trim()).map((x,i)=>(i+1)+'. '+(x.status==='done'?'[done] ':'')+x.text.trim()).join('\n');
+        O.insertText(text);s.close();O.setTab('chat');
+      }},O.tr('Send to chat','В чат'))));
+  const s=O.sheet(O.tr('Task plan','План задачи'),body,{full:true});
+  goal.addEventListener('input',persist);draw();
+};
+
+// ---- model recommendations ----
+O.recommendModels=(task,items)=>{
+  const q=String(task||'').toLowerCase();
+  const long=/больш|длинн|проект|репозит|context|document|документ|много файлов/i.test(q);
+  const code=/код|баг|фикс|тест|функци|api|ошибк|refactor|build|debug|программ/i.test(q);
+  const fast=/быстр|коротк|перевед|суммар|summary|translate|кратко/i.test(q);
+  const reason=/почему|сложн|архитект|анализ|рассуж|plan|план|security|безопас/i.test(q);
+  const score=x=>{
+    const id=(x.mid+' '+x.name).toLowerCase(),m=x.m||{};
+    let n=0,why=[];
+    const ctx=m.limit&&m.limit.context||0;
+    if(long){n+=Math.min(35,ctx/5000);if(ctx>=100000)why.push(O.tr('large context','большой контекст'))}
+    if(code&&/(code|coder|codex|claude|gpt|deepseek|qwen|devstral)/i.test(id)){n+=25;why.push(O.tr('coding','код'))}
+    if(reason&&(m.reasoning||m.variants||/(reason|think|r1|o[134]|opus)/i.test(id))){n+=25;why.push(O.tr('reasoning','рассуждения'))}
+    if(fast&&/(mini|small|flash|lite|haiku|instant|nano)/i.test(id)){n+=25;why.push(O.tr('fast','быстрая'))}
+    if(O.isModelFree(x)){n+=8;why.push(O.tr('free','бесплатно'))}
+    if(O.isModelPinned(x.pid+'/'+x.mid))n+=6;
+    if(S.model&&S.model.providerID===x.pid&&S.model.modelID===x.mid)n+=4;
+    if(m.cost&&m.cost.input>0)n-=Math.min(8,m.cost.input/5);
+    if(!why.length)why.push(O.tr('available and reliable','доступна и надёжна'));
+    return {x,score:n,why};
+  };
+  return (items||O.allModels()).filter(x=>!O.isModelHidden(x.pid+'/'+x.mid)).map(score)
+    .sort((a,b)=>b.score-a.score).slice(0,3).filter(r=>r.score>0);
+};
+
 O.allModels=()=>{
   return S.providers.flatMap(p=>Object.values(p.models||{}).map(m=>({pid:p.id,pname:p.name,mid:m.id,name:m.name||m.id,m})));
 };
@@ -799,6 +900,8 @@ O.openSession=async(sid,fresh)=>{
 O.newSession=async()=>{const s=await api('POST','/session',{});if(!S.sessions.some(x=>x.id===s.id))S.sessions.unshift(s);bus.emit('sessions');await O.openSession(s.id,true);return s};
 O.setDir=async(dir)=>{
   S.dir=dir;O.dir=dir;O.store.set('dir',dir);
+  // Remember the directory even when the user picked it through the plain folder browser.
+  if(dir&&dir!=='/root'&&!O.workspaceAt(dir))O.saveWorkspace({dir,name:O.basename(dir)||dir});
   const rec=O.store.get('recent',[]).filter(x=>x!==dir);rec.unshift(dir);O.store.set('recent',rec.slice(0,12));
   S.sessions=[];S.sid=null;S.perms=[];S.questions=[];S.diffs={};S.todos={};
   O.stopLiveSync();

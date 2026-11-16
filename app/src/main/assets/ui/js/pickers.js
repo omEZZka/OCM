@@ -54,6 +54,7 @@ O.openSessions=()=>{
   const navItem=(ic,label,fn)=>h('button',{class:'drawer-nav-item',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
   const nav=h('div',{style:{marginBottom:'12px',borderBottom:'1px solid var(--line)',paddingBottom:'8px'}},
     navItem('chat',O.tr('Chat','Чат'),()=>O.setTab('chat')),
+    navItem('folder',O.tr('Workspaces','Проекты'),()=>O.openProjects()),
     navItem('folder',O.tr('Files','Файлы'),()=>O.setTab('files')),
     navItem('terminal',O.tr('Terminal','Терминал'),()=>O.setTab('term')),
     navItem('branch',O.tr('Changes','Изменения'),()=>O.setTab('changes')),
@@ -183,12 +184,37 @@ function sessActions(x){O.actions(O.sessionTitle(x),[
     if(x.local){O.removeLocalSession(x.id);if(S.sid===x.id)O.openSession(S.sessions[0]&&S.sessions[0].id||null);return}
     try{await api('DELETE','/session/'+x.id);S.sessions=S.sessions.filter(y=>y.id!==x.id);if(S.sid===x.id)O.openSession(S.sessions[0]&&S.sessions[0].id||null);bus.emit('sessions')}catch(e){O.toast(e.message)}}}])}
 
-// ---- projects + folder browser ----
+// ---- workspaces + folder browser ----
 O.openProjects=()=>{
-  const recent=O.store.get('recent',[]),seen=new Set(),rows=[];
-  const add=(p,sub)=>{if(!p||seen.has(p))return;seen.add(p);rows.push(O.listRow(O.fileIcon(O.basename(p)||'/',true),O.basename(p)||'/',p,p===S.dir?O.icon('check','ok'):null,()=>{s.close();O.setDir(p)}))};
-  add(S.dir);recent.forEach(p=>add(p));(S.projects||[]).forEach(x=>add(x.worktree));add('/root');
-  const s=O.sheet(O.tr('Projects','Проекты'),h('div',null,h('button',{class:'btn pri wide',onclick:()=>{s.close();O.browseDir(S.dir,p=>O.setDir(p))}},O.icon('folder'),O.tr('Open folder','Открыть папку')),h('div',{style:{height:'10px'}}),h('div',{class:'group-card'},rows)),{hud:true})};
+  const body=h('div');
+  const s=O.sheet(O.tr('Workspaces','Рабочие пространства'),body,{full:true});
+  const off=bus.on('workspace',()=>{if(s.root&&s.root.isConnected)draw();else off()});
+  const draw=()=>{
+    body.textContent='';
+    body.append(h('div',{class:'note'},O.tr('Projects keep their folder, model and agent. Chats stay attached to the project folder.','У каждого проекта своя папка, модель и агент. Чаты остаются привязаны к папке проекта.')));
+    body.append(h('button',{class:'btn pri wide',onclick:()=>{s.close();O.browseDir(S.dir,dir=>O.activateWorkspace(dir))}},O.icon('plus'),O.tr('Add project folder','Добавить папку проекта')));
+    const list=O.workspaces();
+    const seen=new Set();
+    const add=w=>{
+      if(!w||!w.dir||seen.has(w.dir))return;seen.add(w.dir);
+      body.append(h('div',{class:'workspace-card'},
+        h('button',{class:'workspace-main',onclick:async()=>{s.close();await O.activateWorkspace(w.dir,w.name);O.toast(O.workspaceName(w),1200)}},
+          O.icon('folder'),
+          h('div',{class:'settings-row-text'},h('b',null,O.workspaceName(w)),h('span',null,w.dir))),
+        h('button',{class:'ibtn s',onclick:()=>O.actions(O.workspaceName(w),[
+          {label:O.tr('Rename','Переименовать'),icon:'edit',fn:async()=>{const n=await O.ask(O.tr('Workspace name','Название проекта'),null,O.workspaceName(w));if(n){O.saveWorkspace(Object.assign({},w,{name:n}));draw()}}},
+          {label:O.tr('Remove from list','Убрать из списка'),icon:'trash',danger:true,fn:()=>{O.deleteWorkspace(w.dir);draw()}}
+        ])},O.icon('dots'))));
+    };
+    list.forEach(add);
+    // Discover projects reported by the server as well; selecting one saves it as a workspace.
+    (S.projects||[]).forEach(x=>add({dir:x.worktree,name:O.basename(x.worktree)||x.worktree}));
+    (O.store.get('recent',[])||[]).forEach(dir=>add({dir}));
+    add({dir:S.dir});add({dir:'/root',name:'Home'});
+    if(!seen.size)body.append(h('div',{class:'mut',style:{padding:'16px'}},O.tr('No workspaces yet','Проектов пока нет')));
+  };
+  draw();
+};
 O.browseDir=(start,cb)=>{let path=start||'/root';
   const crumbs=h('div',{class:'mono s mut',style:{wordBreak:'break-all',margin:'6px 2px'}}),list=h('div');
   const short=(l,p)=>h('button',{class:'chip',onclick:()=>{path=p;load()}},O.icon('folder'),h('span',null,l));
@@ -294,7 +320,18 @@ O.openModels=()=>{
   }
   const folderBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelFolders(()=>draw())},O.icon('folder'),O.tr('Folders & profiles','Папки и профили'));
   const compareBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelCompare()},O.icon('branch'),O.tr('Compare models on one prompt','Сравнить модели на одном запросе'));
-  const container=h('div',null,effortCard,selectBar,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
+  const taskInp=h('input',{placeholder:O.tr('Task for recommendations (optional)','Задача для рекомендаций (необязательно)'),style:{marginBottom:'8px'},onkeydown:e=>{if(e.key==='Enter'){e.preventDefault();recBtn.click()}}});
+  const recBox=h('div');
+  const recBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>{
+    recBox.textContent='';
+    const rec=O.recommendModels(taskInp.value,O.allModels());
+    if(!rec.length){recBox.append(h('div',{class:'note'},O.tr('No recommendations yet','Рекомендаций пока нет')));return}
+    recBox.append(h('div',{class:'grp'},O.tr('Recommended for this task','Подходят для этой задачи')));
+    const card=h('div',{class:'group-card'});
+    rec.forEach(r=>card.append(O.listRow('star',r.x.name||r.x.mid,(r.why||[]).join(' · '),O.icon('chevR'),()=>{O.setModel(r.x.pid,r.x.mid);s.close()})));
+    recBox.append(card);
+  }},O.icon('star'),O.tr('Recommend a model','Подобрать модель'));
+  const container=h('div',null,effortCard,selectBar,taskInp,recBtn,recBox,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
   // Folder edits from the action sheet / folder manager must repaint the list live.
   const offFolders=bus.on('folders',()=>{if(s.root&&s.root.isConnected)draw()});

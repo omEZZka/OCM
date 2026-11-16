@@ -633,6 +633,38 @@ O.mediaItemActions=it=>{
 };
 
 // ---- provider editor ----
+function drawModelInfo(prov,box){
+  if(!box)return;
+  box.textContent='';
+  const items=(prov.catalogueInfo&&prov.catalogueInfo[prov.kind])||[];
+  if(!items.length){
+    const last=O.mediaHistory().find(x=>x.provider===prov.id&&x.kind===prov.kind);
+    if(last)box.append(h('div',{class:'note'},O.tr('Last success: ','Последний успех: ')+last.model+' · '+O.ago(last.at)));
+    return;
+  }
+  box.append(h('div',{class:'grp'},O.tr('Model capabilities','Возможности моделей')));
+  items.slice(0,30).forEach(it=>{
+    const m=it.raw||{},arch=m.architecture||{};
+    const outs=outModalities(m),eps=endpointList(m);
+    const pricing=m.pricing||m.cost||{};
+    const cost=pricing.prompt||pricing.input||pricing.image||'';
+    const last=O.mediaHistory().find(x=>x.provider===prov.id&&x.kind===prov.kind&&x.model===it.id);
+    const lines=[];
+    if(outs.length)lines.push(O.tr('Output: ','Результат: ')+outs.join(', '));
+    if(eps.length)lines.push(O.tr('Endpoints: ','Методы: ')+eps.slice(0,3).join(', '));
+    if(m.supported_voices)lines.push(O.tr('Voices: ','Голоса: ')+(Array.isArray(m.supported_voices)?m.supported_voices.slice(0,8).join(', '):m.supported_voices));
+    if(m.supported_parameters)lines.push(O.tr('Parameters: ','Параметры: ')+(Array.isArray(m.supported_parameters)?m.supported_parameters.join(', '):Object.keys(m.supported_parameters).join(', ')));
+    if(m.max_duration||m.duration)lines.push(O.tr('Duration: ','Длительность: ')+(m.max_duration||m.duration)+'s');
+    if(m.size||m.resolution||m.supported_sizes)lines.push(O.tr('Size: ','Размер: ')+JSON.stringify(m.supported_sizes||m.resolution||m.size));
+    if(cost!=='')lines.push(O.tr('Price: ','Цена: ')+cost);
+    if(last)lines.push(O.tr('Last success: ','Последний успех: ')+O.ago(last.at));
+    box.append(h('details',{class:'media-model-info'},
+      h('summary',null,it.label||it.id),
+      h('div',{class:'mono s mut'},it.id),
+      lines.length?lines.map(x=>h('div',{class:'s'},x)):h('div',{class:'mut s'},O.tr('No extra metadata supplied','Дополнительных метаданных нет'))));
+  });
+}
+
 O.openMediaProvider=(existing,kind)=>{
   const p=normalizeProvider(existing||Object.assign(defaultProvider(),{kind:kind||'image'}));
   const originalId=p.id,originalKind=p.kind;
@@ -647,7 +679,7 @@ O.openMediaProvider=(existing,kind)=>{
       if(custom){p.paths=Object.assign({},p.paths||{});p.paths[p.kind]=custom}
       p.kind=k;[...kindSel.children].forEach(b=>b.classList.remove('on'));e.currentTarget.classList.add('on');
       pathInp.value=(p.paths&&p.paths[k])||'';
-      drawModels();
+      drawModels();drawModelInfo(p,modelInfoBox);
     }},l)));
   const urlInp=h('input',{class:'mono',value:p.baseURL,placeholder:'https://api.example.com/v1'});
   const authSel=h('div',{class:'seg'},[['bearer','Bearer'],['x-api-key','x-api-key'],['query','Query key']].map(([k,l])=>
@@ -658,11 +690,14 @@ O.openMediaProvider=(existing,kind)=>{
   const keyInp=h('input',{type:'password',class:'mono',value:'',placeholder:existing&&p.apiKey?O.tr('Key saved — leave empty to keep','Ключ сохранён — оставьте пустым, чтобы не менять'):'API key'});
   const keylessRow=O.toggleRow('key',O.tr('No API key required','Работает без API-ключа'),O.tr('For a local or open endpoint','Для локального или открытого API'),p.requireKey===false,v=>{p.requireKey=!v});
   const modelsBox=h('div',{class:'media-editor-models'});
+  const modelInfoBox=h('div');
   const status=h('div',{class:'mut s',style:{margin:'8px 0',whiteSpace:'pre-wrap'}});
   const drawModels=()=>{
     modelsBox.textContent='';
     const models=modelKey(p);
     modelsBox.append(h('div',{class:'mut s'},models.length+' '+O.tr('models for this type','моделей для этого типа')));
+    const last=O.mediaHistory().find(x=>x.provider===p.id&&x.kind===p.kind);
+    if(last)modelsBox.append(h('div',{class:'note'},O.tr('Last success: ','Последний успех: ')+last.model+' · '+O.ago(last.at)));
     models.slice(0,80).forEach(m=>modelsBox.append(h('span',{class:'chip keep'},m,
       h('button',{class:'chip-x',onclick:()=>{p.modelsByKind[p.kind]=modelKey(p).filter(x=>x!==m);drawModels()}},O.icon('x')))));
     if(models.length>80)modelsBox.append(h('div',{class:'mut s'},'+'+(models.length-80)));
@@ -673,6 +708,7 @@ O.openMediaProvider=(existing,kind)=>{
     }},O.icon('plus'),O.tr('Add ID manually','Добавить ID вручную')));
   };
   drawModels();
+  drawModelInfo(p,modelInfoBox);
 
   const workingProv=()=>{
     const prov=normalizeProvider(Object.assign({},p,{
@@ -697,9 +733,12 @@ O.openMediaProvider=(existing,kind)=>{
       const found=O.mediaModelSupport(raw,prov.kind,prov);
       // Only compatible models are imported. Unknown IDs can be added manually; merging the whole
       // catalogue here was exactly what produced "model not found" for every media request.
+      p.catalogueInfo=p.catalogueInfo||{};
+      p.catalogueInfo[prov.kind]=found.compatible.concat(found.unknown);
       const ids=found.compatible.map(x=>x.id);
       p.modelsByKind[p.kind]=[...new Set(modelKey(p).concat(ids))];
       p.catalogueVerified=true;
+      drawModelInfo(p,modelInfoBox);
       drawModels();
       status.textContent=O.tr('Catalogue: ','Каталог: ')+found.total+'\n'+
         O.tr('Compatible: ','Подходят: ')+ids.length+(found.unknown.length?('\n'+O.tr('Without capability metadata (not imported): ','Без метаданных (не добавлены): ')+found.unknown.length):'')+
@@ -735,6 +774,7 @@ O.openMediaProvider=(existing,kind)=>{
     h('div',{class:'field'},h('label',null,O.tr('API key','API-ключ')),keyInp),keylessRow,
     h('div',{class:'field'},h('label',null,O.tr('Extra JSON body','Доп. JSON в запросе')),extraInp),
     h('div',{class:'field'},h('label',null,O.tr('Models for the selected type','Модели выбранного типа')),modelsBox),
+    modelInfoBox,
     probe,status,save);
   if(existing)body.append(h('button',{class:'btn dng wide',style:{marginTop:'8px'},onclick:()=>{
     O.saveMediaProviders(O.mediaProviders().filter(x=>!(x.id===originalId&&x.kind===originalKind)));s.close();

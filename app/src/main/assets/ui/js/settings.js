@@ -108,7 +108,10 @@ O.openSettings=()=>{
       try{if(window.OC&&OC.setFlag)OC.setFlag('overlay_only_busy',v)}catch(_){}
     });
   const detailRow=O.toggleRow('code',O.tr('Expand Tool Details','Детали инструментов'),O.tr('Show commands, output and file diffs','Команды, вывод терминала и правки'),S.opts.details,v=>{S.opts.details=v;O.saveOpts();O.chat.renderAll()});
-  appCard.append(langRow,themeRow,thinkRow,detailRow,overlayRow,overlayLegend,onlyBusyRow);
+  const planRow=O.toggleRow('list',O.tr('Step-by-step task plans','Пошаговые планы задач'),
+    O.tr('Show a plan button in the composer. Edit steps and send them when ready.','Кнопка плана в поле ввода. Редактируйте шаги и отправляйте их, когда будете готовы.'),
+    O.planMode(),v=>{O.setPlanMode(v);bus.emit('planMode')});
+  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,overlayRow,overlayLegend,onlyBusyRow);
   panes.main.append(appCard);
 
   // 4. Notifications & Sounds

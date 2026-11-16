@@ -49,6 +49,9 @@ O.chatInit=root=>{
   ta.addEventListener('keydown',e=>{if(e.key!=='ArrowDown')return;if(!ta.value.trim()){e.preventDefault();histIdx=Math.max(-1,histIdx-1);ta.value=histIdx<0?'':(O.promptHistory()[histIdx]||'');onInput()}});
   fileIn=h('input',{type:'file',multiple:true,class:'hide',accept:'image/*,application/pdf,text/*',onchange:onFiles});
   const plusBtn=h('button',{class:'attach-btn',onclick:()=>fileIn.click()},O.icon('plus'));
+  const planBtn=h('button',{class:'hud-icon-btn plan-btn',title:O.tr('Step-by-step plan','Пошаговый план'),onclick:()=>O.openPlan()},O.icon('list'));
+  const syncPlanBtn=()=>{planBtn.classList.toggle('hide',!O.planMode())};
+  bus.on('planMode',syncPlanBtn);syncPlanBtn();
   agentChip=h('button',{class:'hud-pill agent-pill',onclick:()=>O.openAgents()},h('span',null,'Build'),O.icon('chevD'));
   if(agentChip._mmWatch===undefined){agentChip._mmWatch=1;bus.on('mm',updateChips)}
   modelChip=h('button',{class:'hud-pill model-pill',onclick:()=>O.openModels()},h('span',null,O.tr('Select model','Выбрать модель')),O.icon('chevD'));
@@ -61,7 +64,7 @@ O.chatInit=root=>{
   O.longPress(micBtn,()=>{if(O.voiceDictate)O.voiceDictate();else onMic();},450);
   bus.on('call',()=>micBtn.classList.toggle('on-call',!!(O.callActive&&O.callActive())));
   sendBtn=h('button',{id:'send',onclick:onSend},O.icon('send'));
-  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentChip,modelChip);
+  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,planBtn,agentChip,modelChip);
   const cbarRight=h('div',{class:'cbar-right'},micBtn,sendBtn);
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
@@ -924,6 +927,8 @@ const BUILTINS=[
  {n:'new',d:'Начать новую сессию',i:'plus',run:()=>O.newSession()},
  {n:'sessions',d:'Переключить сессию',i:'list',run:()=>O.openSessions()},
  {n:'models',d:'Выбрать модель',i:'cpu',run:()=>O.openModels()},
+  {n:'plan',d:'Пошаговый план задачи',i:'list',run:()=>O.openPlan()},
+  {n:'projects',d:'Рабочие пространства',i:'folder',run:()=>O.openProjects()},
  {n:'agents',d:'Выбрать агента',i:'bot',run:()=>O.openAgents()},
  {n:'widgets',d:'Интерактивные виджеты HUD',i:'sliders',run:()=>O.openWidgetsModal()},
  {n:'preview',d:'Веб-предпросмотр проекта',i:'globe',run:arg=>O.openPreview(arg)},
