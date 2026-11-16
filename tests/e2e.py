@@ -25,6 +25,34 @@ try:
     chk('empty state shown',pg.query_selector('#msgs .empty')!=None)
     chk('model chip default',pg.inner_text('#composer .chip:nth-of-type(2)').strip()=='Big Pickle' or 'Big Pickle' in pg.inner_text('#composer'))
     pg.screenshot(path=os.environ.get('SHOTS','/tmp')+'/s1_empty.png')
+    # Media factory: the catalogue contains mostly chat models; only actual output modalities and
+    # generation endpoints may reach the picker. No provider request is made for these checks.
+    media=pg.evaluate("""() => {
+      const raw={data:[
+        {id:'gpt-4o',architecture:{input_modalities:['text','image'],output_modalities:['text']},endpoints:['/chat/completions']},
+        {id:'vendor/image',name:'Pretty Image',architecture:{output_modalities:['image']},endpoints:['/images/generations']},
+        {id:'gpt-image-1'},
+        {id:'vendor/video',architecture:{output_modalities:['video']},endpoints:['/videos']},
+        {id:'tts-1'},
+        {id:'unknown-chat-model'}
+      ]};
+      const image=OCM.mediaDebug.support(raw,'image',{kind:'image',baseURL:'https://example.test/v1'});
+      const video=OCM.mediaDebug.support(raw,'video',{kind:'video',baseURL:'https://example.test/v1'});
+      return {image:image.compatible.map(x=>x.id),video:video.compatible.map(x=>x.id),
+        unknown:image.unknown.map(x=>x.id),
+        url:OCM.mediaDebug.url('https://example.test/v1/','images/generations'),
+        models:OCM.mediaDebug.discovery({baseURL:'https://example.test/v1/models',kind:'image'}),
+        orImage:OCM.mediaDebug.endpoint({baseURL:'https://openrouter.ai/api/v1',kind:'image'}),
+        body:OCM.mediaDebug.body({kind:'image'},{model:'vendor/image',prompt:'fox',n:'2',size:'1024x1024'})};
+    }""")
+    chk('media filters chat-only and vision-input models',media['image']==['vendor/image','gpt-image-1'])
+    chk('media filters per output kind',media['video']==['vendor/video'])
+    chk('media keeps unknown models out of automatic import','unknown-chat-model' in media['unknown'])
+    chk('media joins base URL without double slashes',media['url']=='https://example.test/v1/images/generations')
+    chk('media accepts a pasted models URL',media['models']=='https://example.test/v1/models')
+    chk('OpenRouter image endpoint',media['orImage']=='https://openrouter.ai/api/v1/images')
+    chk('media payload has real id and numeric count',media['body']['model']=='vendor/image' and media['body']['n']==2 and 'response_format' not in media['body'])
+
     # send a prompt
     pg.fill('#composer textarea','refactor main.py')
     pg.click('#send')

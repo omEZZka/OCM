@@ -1371,13 +1371,17 @@ class MainActivity : ComponentActivity() {
                 val bytes = r.body?.bytes() ?: ByteArray(0)
                 if (!r.isSuccessful) {
                     return JSONObject().put("ok", false).put("status", r.code)
-                        .put("err", String(bytes, Charsets.UTF_8).take(400)).toString()
+                        .put("err", String(bytes, Charsets.UTF_8).take(1600)).toString()
                 }
                 val ct = r.header("Content-Type") ?: ""
-                if (ct.startsWith("application/json") || (bytes.isNotEmpty() && bytes[0] == '{'.code.toByte())) {
-                    // The API returned JSON instead of the file itself (usually a URL to fetch).
+                val trimmed = String(bytes, Charsets.UTF_8).trimStart()
+                val looksJson = ct.startsWith("application/json") || ct.contains("+json") ||
+                    trimmed.startsWith("{") || trimmed.startsWith("[")
+                if (looksJson) {
+                    // JSON may carry a multi-megabyte base64 image. Truncating it produced the
+                    // misleading "response has no media" error and silently lost valid results.
                     return JSONObject().put("ok", true).put("json", true).put("status", r.code)
-                        .put("body", String(bytes, Charsets.UTF_8).take(2_000_000)).toString()
+                        .put("body", String(bytes, Charsets.UTF_8)).toString()
                 }
                 dest.writeBytes(bytes)
                 JSONObject().put("ok", true).put("status", r.code).put("path", destPath)
@@ -1400,7 +1404,11 @@ class MainActivity : ComponentActivity() {
             val rb = okhttp3.Request.Builder().url(url).get()
             hdrs.keys().forEach { k -> try { rb.header(k, hdrs.optString(k)) } catch (_: Exception) {} }
             client.newCall(rb.build()).execute().use { r ->
-                if (!r.isSuccessful) return JSONObject().put("ok", false).put("status", r.code).toString()
+                if (!r.isSuccessful) {
+                    val msg = try { r.body?.string()?.take(1600) ?: "" } catch (_: Exception) { "" }
+                    return JSONObject().put("ok", false).put("status", r.code)
+                        .put("err", if (msg.isEmpty()) "HTTP ${r.code}" else msg).toString()
+                }
                 r.body?.byteStream()?.use { inp -> dest.outputStream().use { out -> inp.copyTo(out, 1 shl 16) } }
                 JSONObject().put("ok", true).put("path", destPath).put("size", dest.length())
                     .put("mime", r.header("Content-Type") ?: "").toString()
