@@ -22,18 +22,70 @@ const watchPicked=(sheet,fn)=>pickWatchers.push({sheet,fn});
 // ---- main ----
 O.openSettings=()=>{
   const st=O.native.state(),fl=st.flags||{};
-  // Three tabs instead of one 40-item wall: what the user changes often, agent internals, and system.
-  const tabs=h('div',{class:'seg settings-tabs',style:{margin:'0 0 12px'}});
+  // Ergonomic layout: search across ALL tabs, quick-access chips for the most-used screens,
+  // sticky tab bar, collapsible sections. Voice settings sit near the top, not buried at the end.
+  const tabs=h('div',{class:'seg settings-tabs'});
   const panes={main:h('div'),agent:h('div'),system:h('div')};
-  const body=h('div',null,tabs,panes.main,panes.agent,panes.system);
+  const sq=h('input',{class:'settings-search',placeholder:O.tr('Search settings…','Поиск по настройкам…'),
+    oninput:()=>filterSettings(sq.value)});
+  const quick=h('div',{class:'settings-quick'});
+  const body=h('div',null,sq,quick,tabs,panes.main,panes.agent,panes.system);
   const s=O.sheet(O.tr('Settings','Настройки'),body,{hud:true});
   const show=pane=>{
     ['main','agent','system'].forEach(k=>{panes[k].classList.toggle('hide',k!==pane)});
     tabs.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.pane===pane));
   };
   [['main',O.tr('Main','Основное')],['agent',O.tr('Agent','Агент')],['system',O.tr('System','Система')]]
-    .forEach(([k,label])=>tabs.append(h('button',{'data-pane':k,onclick:()=>show(k)},label)));
+    .forEach(([k,label])=>tabs.append(h('button',{'data-pane':k,onclick:()=>{sq.value='';filterSettings('');show(k)}},label)));
   show('main');
+  // Quick access: the five screens people open most, one tap from anywhere in settings.
+  const quickDef=[
+    ['cpu',O.tr('Model','Модель'),()=>O.openModels()],
+    ['mic',O.tr('Voice','Голос'),()=>{s.close();setTimeout(()=>O.openCallSettings&&O.openCallSettings(),200)}],
+    ['key',O.tr('Providers','Провайдеры'),()=>O.openConnect()],
+    ['image',O.tr('Media','Медиа'),()=>{s.close();setTimeout(()=>O.openMediaSettings&&O.openMediaSettings(),200)}],
+    ['shield',O.tr('Backup','Бэкап'),()=>openBackup()]
+  ];
+  quickDef.forEach(([ic,label,fn])=>quick.append(h('button',{class:'settings-quick-chip',onclick:fn},O.icon(ic),h('span',null,label))));
+  // Search: matches row titles/subtitles across every tab; empty query restores tabs.
+  function filterSettings(raw){
+    const needle=String(raw||'').trim().toLowerCase();
+    const all=[panes.main,panes.agent,panes.system];
+    if(!needle){
+      quick.classList.remove('hide');tabs.classList.remove('hide');
+      all.forEach(p=>{[...p.children].forEach(c=>c.classList.remove('hide'));
+        p.querySelectorAll('.settings-row').forEach(r=>r.classList.remove('hide'));
+        p.querySelectorAll('.settings-card').forEach(c=>c.classList.remove('hide'))});
+      const on=tabs.querySelector('button.on');
+      show(on?on.dataset.pane:'main');
+      return;
+    }
+    quick.classList.add('hide');tabs.classList.add('hide');
+    let any=false;
+    all.forEach(p=>{
+      p.classList.remove('hide');
+      let paneHas=false;
+      [...p.children].forEach(block=>{
+        if(block.classList.contains('settings-card')){
+          let cardHas=false;
+          block.querySelectorAll('.settings-row').forEach(r=>{
+            const txt=(r.textContent||'').toLowerCase();
+            const hit=txt.includes(needle);
+            r.classList.toggle('hide',!hit);
+            if(hit)cardHas=true;
+          });
+          block.classList.toggle('hide',!cardHas);
+          if(cardHas)paneHas=true;
+        }else if(block.classList.contains('settings-section-title')){
+          block.classList.add('hide'); // titles hidden during search; cards speak for themselves
+        }else block.classList.add('hide');
+      });
+      if(paneHas)any=true;else p.classList.add('hide');
+    });
+    let none=body.querySelector('.settings-none');
+    if(!any){if(!none){none=h('div',{class:'note settings-none'},O.tr('Nothing found','Ничего не найдено'));body.append(none)}}
+    else if(none)none.remove();
+  }
   
   // 1. Profile & Account
   panes.main.append(h('div',{class:'settings-section-title'},O.tr('Profile & Account','Профиль и аккаунт')));
@@ -54,6 +106,16 @@ O.openSettings=()=>{
   accSub();O.checkAccount().then(accSub);
   profCard.append(profRow,accRow);
   panes.main.append(profCard);
+
+  // 1b. Voice & Calls — high-traffic controls live near the top, not buried after appearance.
+  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Voice & Calls','Голос и звонки')));
+  panes.main.append(h('div',{class:'settings-card'},
+    O.listRow('sliders',O.tr('Voice control settings','Настройки голосового управления'),O.tr('Wake phrase, engine, language, voice, call history','Кодовая фраза, движок, язык, голос, история звонков'),
+      O.icon('chevR'),()=>{s.close();setTimeout(()=>{O.openCallSettings&&O.openCallSettings()},200)}),
+    O.listRow('mic',O.tr('Voice input & calls','Голосовой ввод и звонки'),O.tr('Dictation or a live call — choose on the microphone button','Диктовка или живой звонок — выбор на кнопке микрофона'),
+      O.icon(O.callActive&&O.callActive()?'wave':'chevR'),()=>{s.close();setTimeout(()=>{O.onMicChoice&&O.onMicChoice()},200)}),
+    O.listRow('list',O.tr('Call history','История звонков'),O.tr('Transcripts, continue by text','Транскрипты, продолжение текстом'),
+      O.icon('chevR'),()=>{s.close();setTimeout(()=>{O.openCallHistory&&O.openCallHistory()},200)})));
 
   // 2. Models & Providers
   panes.main.append(h('div',{class:'settings-section-title'},O.tr('Models & Providers','Модели и провайдеры')));
@@ -130,19 +192,11 @@ O.openSettings=()=>{
   [['snd_done',O.tr('Task Completed','Задача завершена'),O.tr('Sound when agent finishes task','Агент закончил работу'),'done'],
    ['snd_action',O.tr('Action Required','Требуется действие'),O.tr('Sound on questions and permissions','Ожидается разрешение или вопрос'),'action'],
    ['snd_quota',O.tr('Quota Limit Reached','Квота исчерпана'),O.tr('Sound when model rate limit hit','Превышен лимит запросов'),'quota']].forEach(([k,t,d,kind])=>{
-    sndCard.append(h('div',{style:{display:'flex',alignItems:'center'}},
+    sndCard.append(h('div',{class:'settings-row',style:{display:'flex',alignItems:'center',padding:'0'}},
       h('div',{class:'grow'},O.toggleRow('bell',t,d,fl[k]!==false,v=>OC.setFlag(k,v))),
       h('button',{class:'ibtn',style:{marginRight:'12px'},onclick:()=>OC.testSound(kind)},O.icon('play'))));
   });
   panes.system.append(sndCard);
-
-  // 4b. Voice call
-  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Voice & Calls','Голос и звонки')));
-  panes.main.append(h('div',{class:'settings-card'},
-    O.listRow('mic',O.tr('Voice input & calls','Голосовой ввод и звонки'),O.tr('Dictation or a live call — choose on the microphone button','Диктовка или живой звонок — выбор на кнопке микрофона'),
-      O.icon(O.callActive&&O.callActive()?'wave':'chevR'),()=>{s.close();setTimeout(()=>{O.onMicChoice&&O.onMicChoice()},200)}),
-    O.listRow('sliders',O.tr('Recognition engine & voice','Движок распознавания и голос'),O.tr('System / on-device / cloud, language, speech rate','Системный / на устройстве / облако, язык, скорость речи'),
-      O.icon('chevR'),()=>{s.close();setTimeout(()=>{O.openCallSettings&&O.openCallSettings()},200)})));
 
   // 5. Agents, MCP & Plugins
   panes.agent.append(h('div',{class:'settings-section-title'},O.tr('Agents, MCP & Rules','Агенты, MCP и правила')));

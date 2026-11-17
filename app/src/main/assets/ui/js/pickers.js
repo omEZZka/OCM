@@ -52,35 +52,35 @@ O.openSessions=()=>{
     },260);
   };
   let activeTag=O.sessionTagFilter();
+  // Compact grid nav: primary destinations are icon tiles (one glance, one tap), secondary
+  // actions collapse into a "More" row so the session list gets the vertical space it deserves.
+  const tile=(ic,label,fn)=>h('button',{class:'drawer-tile',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
+  const navGrid=h('div',{class:'drawer-grid'},
+    tile('chat',O.tr('Chat','Чат'),()=>O.setTab('chat')),
+    tile('folder',O.tr('Files','Файлы'),()=>O.setTab('files')),
+    tile('terminal',O.tr('Terminal','Терминал'),()=>O.setTab('term')),
+    tile('branch',O.tr('Changes','Правки'),()=>O.setTab('changes')),
+    tile('folder',O.tr('Projects','Проекты'),()=>O.openProjects()),
+    tile('search',O.tr('Search','Поиск'),()=>O.openGlobalSearch()),
+    tile('image',O.tr('Photo','Фото'),()=>O.openMedia&&O.openMedia('image')),
+    tile('sliders',O.tr('Settings','Настройки'),()=>O.openSettings()));
+  const moreBox=h('div',{class:'drawer-more hide'});
   const navItem=(ic,label,fn)=>h('button',{class:'drawer-nav-item',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
-  const nav=h('div',{style:{marginBottom:'12px',borderBottom:'1px solid var(--line)',paddingBottom:'8px'}},
-    navItem('chat',O.tr('Chat','Чат'),()=>O.setTab('chat')),
-    navItem('search',O.tr('Global search','Глобальный поиск'),()=>O.openGlobalSearch()),
-    navItem('folder',O.tr('Workspaces','Проекты'),()=>O.openProjects()),
-    navItem('folder',O.tr('Files','Файлы'),()=>O.setTab('files')),
-    navItem('terminal',O.tr('Terminal','Терминал'),()=>O.setTab('term')),
-    navItem('branch',O.tr('Changes','Изменения'),()=>O.setTab('changes')),
-    // Media opens a small chooser first: it is a factory with four different tools.
-    h('button',{class:'drawer-nav-item',onclick:()=>{
-      // Close the drawer first: stacking a chooser on top of it makes the tap feel like nothing
-      // happened (the drawer stays visible behind), and two same-titled sheets would fight.
-      s.close();
-      O.actions(O.tr('Media','Медиа'),[
-        {label:O.tr('Photo chat','Чат: Фото'),sub:O.tr('Image generation as a conversation','Генерация изображений как переписка'),icon:'image',fn:()=>O.openMedia&&O.openMedia('image')},
-        {label:O.tr('Video chat','Чат: Видео'),sub:O.tr('Video generation as a conversation','Генерация видео как переписка'),icon:'film',fn:()=>O.openMedia&&O.openMedia('video')},
-        {label:O.tr('Voice chat','Чат: Голос'),sub:O.tr('Text to speech as a conversation','Озвучка текста как переписка'),icon:'wave',fn:()=>O.openMedia&&O.openMedia('tts')},
-        {label:O.tr('Music chat','Чат: Музыка'),sub:O.tr('Track generation as a conversation','Генерация треков как переписка'),icon:'note',fn:()=>O.openMedia&&O.openMedia('music')},
-        {label:O.tr('History','История'),sub:O.tr('Everything generated on this device','Всё, что создано на этом устройстве'),icon:'list',fn:()=>O.openMedia&&O.openMedia('history')},
-        {label:O.tr('Media settings','Настройки медиа'),sub:O.tr('Providers, save folder, prompt language','Провайдеры, папка, язык промптов'),icon:'sliders',fn:()=>O.openMediaSettings&&O.openMediaSettings()},
-      ]);
-    }},O.icon('image'),h('span',null,O.tr('Media','Медиа'))),
+  moreBox.append(
+    navItem('film',O.tr('Video chat','Чат: Видео'),()=>O.openMedia&&O.openMedia('video')),
+    navItem('wave',O.tr('Voice chat','Чат: Голос'),()=>O.openMedia&&O.openMedia('tts')),
+    navItem('note',O.tr('Music chat','Чат: Музыка'),()=>O.openMedia&&O.openMedia('music')),
+    navItem('list',O.tr('Media history','История медиа'),()=>O.openMedia&&O.openMedia('history')),
+    navItem('mic',O.tr('Voice settings','Настройки голоса'),()=>O.openCallSettings&&O.openCallSettings()),
     navItem('down',O.tr('Import session','Импорт сессии'),()=>importSessionFile()),
     navItem('cpu',O.tr('Resources','Ресурсы'),()=>O.openResources()),
-    navItem('sliders',O.tr('Settings','Настройки'),()=>O.openSettings()),
     navItem('refresh',O.tr('Restart server','Перезапуск сервера'),()=>restartApp()));
-  const newBtn=h('button',{class:'btn pri wide',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));
+  let moreOpen=false;
+  const moreBtn=h('button',{class:'drawer-more-btn',onclick:()=>{moreOpen=!moreOpen;moreBox.classList.toggle('hide',!moreOpen);moreBtn.classList.toggle('on',moreOpen)}},
+    O.icon('dots'),h('span',null,O.tr('More','Ещё')),O.icon('chevD','drawer-more-chev'));
+  const newBtn=h('button',{class:'btn pri wide drawer-new',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));
   const offs=[];
-  const s=O.sheet(O.tr('Navigation & Sessions','Навигация и сессии'),h('div',null,nav,newBtn,h('div',{style:{height:'12px'}}),q,tagBar,list,hits),{drawer:true,
+  const s=O.sheet(O.tr('Sessions','Сессии'),h('div',{class:'drawer-v2'},newBtn,q,tagBar,navGrid,moreBtn,moreBox,h('div',{class:'drawer-sess-head'},O.icon('chat'),h('b',null,O.tr('Recent sessions','Недавние сессии'))),list,hits),{drawer:true,
     onClose:()=>{clearTimeout(hitTimer);offs.splice(0).forEach(f=>{try{f()}catch(_){}})}});
   function drawTags(){
     tagBar.textContent='';

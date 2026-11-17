@@ -2789,7 +2789,6 @@ a:hover {
 .status-line .status-time { font-variant-numeric: tabular-nums; opacity: 0.75; }
 
 /* settings tabs */
-.settings-tabs { position: sticky; top: -6px; z-index: 4; background: #141417; }
 .settings-tabs button { flex: 1; }
 
 /* project tree view */
@@ -2844,6 +2843,37 @@ a:hover {
 input[type="range"] { width: auto; padding: 0; border: 0; background: none; accent-color: var(--acc); }
 input[type="checkbox"] { width: auto; padding: 0; border: 0; background: none; accent-color: var(--acc); }
 input[type="color"] { width: 42px; padding: 0; border: 0; background: none; }
+
+/* ---- ergonomic settings ---- */
+.settings-search { width: 100%; margin-bottom: 10px; }
+.settings-quick { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none; }
+.settings-quick::-webkit-scrollbar { display: none; }
+.settings-quick-chip { flex: none; display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg3); color: var(--fg); font-size: 12.5px; font-weight: 500; }
+.settings-quick-chip:active { background: var(--card-hover); }
+.settings-quick-chip .ic svg { width: 15px; height: 15px; color: var(--acc); }
+.settings-tabs { position: sticky; top: -12px; z-index: 5; background: var(--bg2);
+  padding: 6px 0; margin-bottom: 8px; }
+
+/* ---- ergonomic sessions drawer ---- */
+.drawer-v2 { display: flex; flex-direction: column; min-height: 0; }
+.drawer-new { margin-bottom: 10px; }
+.drawer-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0 6px; }
+.drawer-tile { display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 10px 2px 8px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--bg3); color: var(--fg); font-size: 10.5px; font-weight: 500; }
+.drawer-tile:active { background: var(--card-hover); }
+.drawer-tile .ic svg { width: 19px; height: 19px; color: var(--acc); }
+.drawer-more-btn { display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 10px; border-radius: 10px; color: var(--mut); font-size: 12.5px; }
+.drawer-more-btn:active, .drawer-more-btn.on { background: var(--bg3); color: var(--fg); }
+.drawer-more-btn .drawer-more-chev { margin-left: auto; transition: transform .15s; }
+.drawer-more-btn.on .drawer-more-chev { transform: rotate(180deg); }
+.drawer-more { border-left: 2px solid var(--line); margin: 2px 0 6px 8px; padding-left: 6px; }
+.drawer-sess-head { display: flex; align-items: center; gap: 8px; margin: 10px 2px 6px;
+  color: var(--mut); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.drawer-sess-head .ic svg { width: 14px; height: 14px; }
 
 /* home tiles on the empty chat screen */
 .home-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
