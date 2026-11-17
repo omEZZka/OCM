@@ -619,7 +619,7 @@ a:hover {
 }
 .cbox:focus-within {
   border-color: var(--line2);
-  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-1, 0 2px 10px rgba(0,0,0,.22));
 }
 
 .cbox textarea {
@@ -2818,8 +2818,8 @@ a:hover {
 .boot-steps i.on { background: var(--acc); }
 
 /* toast levels */
-#toast.toast-hint { background: rgba(24,24,27,0.92); color: var(--fg); }
-#toast.toast-error { background: rgba(127,29,29,0.96); color: #fee2e2; }
+#toast.toast-hint { background: color-mix(in srgb, var(--card) 94%, transparent); color: var(--fg); }
+#toast.toast-error { background: color-mix(in srgb, var(--err) 88%, #000); color: #fff; }
 
 /* status line: phase + elapsed */
 .status-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--mut); }
@@ -3062,8 +3062,7 @@ input, textarea, select { font-size: 16px; } /* prevents iOS-style zoom-on-focus
 #composer { padding: 0 12px calc(8px + env(safe-area-inset-bottom, 0px)); }
 .cbox { border-radius: var(--r-xl); padding: 12px 14px 10px; box-shadow: var(--shadow-1);
   border-color: var(--line); transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out); }
-.cbox:focus-within { border-color: color-mix(in srgb, var(--acc2) 55%, var(--line));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc2) 14%, transparent), var(--shadow-1); }
+.cbox:focus-within { border-color: var(--line2); box-shadow: var(--shadow-1); }
 .cbox textarea::placeholder { color: var(--mut); opacity: .8; }
 
 /* --- messages: clearer hierarchy, comfier reading --- */
@@ -3111,7 +3110,13 @@ input, textarea, select { font-size: 16px; } /* prevents iOS-style zoom-on-focus
 *::-webkit-scrollbar-track { background: transparent; }
 
 /* --- focus visibility for keyboard/switch users --- */
-:focus-visible { outline: 2px solid var(--acc2); outline-offset: 2px; border-radius: 6px; }
+/* Keyboard focus ring only for buttons/links — never for text fields: an outer outline around
+   the composer textarea overflowed the card and looked like a giant purple frame. */
+button:focus-visible, a:focus-visible, [role="button"]:focus-visible, .chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--acc2) 70%, transparent); outline-offset: 2px; border-radius: 8px;
+}
+input:focus, textarea:focus, input:focus-visible, textarea:focus-visible,
+select:focus, select:focus-visible, [contenteditable]:focus-visible { outline: none !important; }
 button:focus:not(:focus-visible), input:focus:not(:focus-visible) { outline: none; }
 
 /* --- selection color --- */
@@ -3147,4 +3152,104 @@ button:focus:not(:focus-visible), input:focus:not(:focus-visible) { outline: non
 /* --- wide screens: center the conversation column --- */
 @media (min-width: 820px) {
   #msgs { padding-left: max(16px, calc((100% - 760px) / 2)); padding-right: max(16px, calc((100% - 760px) / 2)); }
+}
+
+/* ==========================================================================
+   2.11.2 CALM DESIGN & BUTTON ERGONOMICS
+   ========================================================================== */
+
+/* No blue tap flash anywhere; presses are shown by scale/background only */
+* { -webkit-tap-highlight-color: transparent; }
+
+/* --- composer: tighter, aligned, no overflow --- */
+#composer { padding: 0 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+.cbox { padding: 10px 12px 8px; border-radius: 22px; overflow: hidden; }
+.cbox textarea { min-height: 34px; padding: 2px 2px 8px; line-height: 1.4; }
+.cbar-row { gap: 6px; }
+.cbar-left { gap: 5px; }
+.cbar-right { gap: 5px; }
+.attach-btn { width: 36px; height: 36px; border-radius: 50%; }
+.hud-pill { height: 34px; max-height: 34px; padding: 0 12px; font-size: 12.5px; }
+.hud-pill .ic svg { width: 14px; height: 14px; }
+#send { width: 42px; height: 42px; border-radius: 50%; }
+#send.ready { box-shadow: none; }
+.plan-btn, .mic-btn { width: 36px; height: 36px; border-radius: 50%; }
+.queue-bar { padding: 4px 8px 0; gap: 5px; }
+.queue-bar .chip { min-height: 28px; font-size: 12px; padding: 3px 9px; }
+
+/* --- top bar: balanced, quiet --- */
+#top { padding: 6px 10px; min-height: 52px; gap: 6px; }
+.top-menu-btn, .top-status-btn, .top-mm-btn { width: 42px; height: 42px; border-radius: 12px; }
+.top-title { min-width: 0; }
+.top-title-txt { font-size: 15px; }
+.top-tokens-btn { height: 32px; padding: 0 10px; font-size: 12px; }
+
+/* --- bottom bar: equal, centered, compact --- */
+#bottom-bar { padding: 5px 14px calc(8px + env(safe-area-inset-bottom, 0px)); gap: 8px; }
+.bottom-pill { min-height: 38px; padding: 7px 16px; font-size: 13px; }
+
+/* --- buttons: consistent press feel, no layout shift --- */
+.btn { transition: background .14s, transform .1s; }
+.btn:active { transform: scale(.98); }
+.btn.pri { box-shadow: none; }
+.ibtn:active { transform: scale(.94); }
+.chip:active { transform: scale(.97); }
+
+/* --- sheets: airier headers, aligned rows --- */
+.sh-h { padding: 13px 14px 11px; gap: 8px; }
+.sh-b { padding: 10px 12px calc(20px + env(safe-area-inset-bottom, 0px)); }
+.settings-row { padding: 12px 14px; gap: 12px; }
+.settings-row-icon { width: 36px; height: 36px; border-radius: 10px; flex: none; }
+.settings-row-text b { font-size: 14px; }
+.settings-row-text span { font-size: 12.5px; line-height: 1.35; }
+.settings-section-title { margin: 16px 6px 6px; font-size: 11.5px; }
+.settings-card { margin-bottom: 12px; }
+.settings-quick { padding-bottom: 8px; gap: 5px; }
+.settings-quick-chip { padding: 7px 11px; font-size: 12px; min-height: 34px; }
+.settings-search { margin-bottom: 8px; }
+
+/* --- drawer: tidy grid, aligned tiles --- */
+.drawer-grid { gap: 5px; margin: 8px 0 4px; }
+.drawer-tile { min-height: 58px; padding: 9px 2px 7px; font-size: 10px; border-radius: 12px; }
+.drawer-tile .ic svg { width: 18px; height: 18px; }
+.drawer-new { min-height: 42px; margin-bottom: 8px; }
+.drawer-more-btn { min-height: 38px; }
+.drawer-sess-head { margin: 8px 2px 4px; }
+
+/* --- messages: tighter meta, aligned actions --- */
+.m-meta { gap: 6px; }
+.msg-actions { gap: 0; }
+.msg-actions .ibtn.s { width: 30px; height: 30px; }
+.msg-actions .ibtn.s::after { inset: -7px; }
+
+/* --- media chat composer aligned with main composer --- */
+.media-chat-composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+.media-chat-chips { gap: 5px; padding-bottom: 6px; }
+.media-chat-chips .chip { min-height: 30px; font-size: 12px; padding: 4px 10px; }
+.media-chat-input { border-radius: 16px; padding: 9px 12px; font-size: 15px; }
+.media-chat-send { width: 42px; height: 42px; }
+
+/* --- inputs inside sheets: consistent height & radius --- */
+.sh-b input:not([type=checkbox]):not([type=range]):not([type=color]),
+.sh-b textarea, .sh-b select { border-radius: 12px; }
+.field label { font-size: 12.5px; margin-bottom: 5px; }
+
+/* --- seg controls: even, rounded --- */
+.seg { border-radius: 12px; }
+.seg button { border-radius: 10px; font-size: 13px; }
+
+/* --- toast: bottom-centered above composer, never covers send --- */
+#toast { left: 50%; transform: translateX(-50%); bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  top: auto; right: auto; text-align: center; font-size: 13px; padding: 10px 16px; }
+
+/* --- long lists: comfortable row rhythm --- */
+.model-row { min-height: 50px; }
+.grp { padding: 10px 8px 4px; }
+
+/* --- keep the conversation readable on small phones --- */
+@media (max-width: 360px) {
+  .hud-pill { padding: 0 9px; font-size: 12px; }
+  .cbox { padding: 8px 10px 7px; }
+  #send { width: 40px; height: 40px; }
+  .bottom-pill { padding: 6px 12px; font-size: 12.5px; }
 }

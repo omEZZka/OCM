@@ -314,6 +314,18 @@ try:
     # second opinion + regenerate helpers exist
     chk('regenerate helper',pg.evaluate("typeof OCM.regenerateFrom")=='function')
     chk('second opinion helper',pg.evaluate("typeof OCM.secondOpinion")=='function')
+    # ---- focus ring must not overflow the composer ----
+    pg.click('#composer textarea')
+    pg.wait_for_timeout(200)
+    fr=pg.evaluate("""() => {
+      const ta=document.querySelector('#composer textarea');
+      const cs=getComputedStyle(ta);
+      const box=document.querySelector('#composer .cbox').getBoundingClientRect();
+      const r=ta.getBoundingClientRect();
+      return {outline:cs.outlineStyle+' '+cs.outlineWidth, inside:r.left>=box.left-1&&r.right<=box.right+1};
+    }""")
+    chk('textarea has no outline',fr['outline'].startswith('none') or fr['outline']==' 0px' or 'none' in fr['outline'])
+    chk('textarea stays inside composer card',fr['inside'])
     # ---- haptics + skeleton ----
     pg.fill('#composer textarea','haptic test')
     pg.click('#send')
