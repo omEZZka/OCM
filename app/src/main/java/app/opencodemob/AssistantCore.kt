@@ -151,61 +151,113 @@ object AssistantCore {
     }
 
     private fun parseOne(c: Context, t: String): JSONArray? {
-        val orig = t.trim().trimEnd('.', '!', '?').replace(Regex("^в\\s+н[её]м\\s+", RegexOption.IGNORE_CASE), "")
-        val s = orig.lowercase()
+        // normalize: strip polite/filler words, punctuation, leading "в нём"
+        var orig = t.trim().trimEnd('.', '!', '?', ',')
+            .replace(Regex("^в\\s+н[её]м\\s+", RegexOption.IGNORE_CASE), "")
+        orig = orig.replace(Regex("^(пожалуйста|плиз|please|ну|давай|ка|будь добр[аы]?|сделай мне|мне)\\s+", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\s+(пожалуйста|плиз|please)$", RegexOption.IGNORE_CASE), "")
+            .trim()
+        val s = orig.lowercase().replace('ё', 'е')
         if (s.isEmpty()) return null
         fun step(cmd: String, vararg args: String, label: String = cmd): JSONArray {
             val a = JSONArray(); args.forEach { a.put(it) }
             return JSONArray().put(JSONObject().put("cmd", cmd).put("args", a).put("label", label))
         }
-        // macro words
-        if (Regex("(режим|макрос)").containsMatchIn(s)) {
-            val name = s.replace(Regex("^(включи |запусти |активируй )?(режим |макрос )?"), "")
+        fun has(vararg words: String) = words.any { s.contains(it) }
+        fun starts(vararg words: String) = words.any { s.startsWith(it) }
+
+        // ---- macros ----
+        if (has("режим", "макрос", "macro", "mode")) {
+            val name = s.replace(Regex("^(включи|запусти|активируй|вруби|поставь|activate|enable|turn on)?\\s*(режим|макрос|macro|mode)?\\s*"), "").trim()
             macroByName(c, name)?.let { return step("macro", it.optString("id"), label = it.optString("name")) }
+            macroByName(c, s)?.let { return step("macro", it.optString("id"), label = it.optString("name")) }
         }
-        if (Regex("^(сделай |сними )?(скриншот|скрин|screenshot)$").matches(s)) return step("shot", label = "Скриншот")
-        if (Regex("^(включи |выключи )?(фонарик|фонарь|flashlight|torch)( включи| выключи)?$").matches(s)) {
-            val off = Regex("выключи|off").containsMatchIn(s)
+
+        // ---- screenshot ----
+        if (has("скриншот", "скрин", "screenshot", "снимок экрана", "screen shot", "сфоткай экран", "захвати экран"))
+            return step("shot", label = "Скриншот")
+
+        // ---- flashlight (on/off anywhere in the phrase) ----
+        if (has("фонарик", "фонарь", "flashlight", "torch", "вспышк")) {
+            val off = has("выключи", "выкл", "off", "потуши", "убери", "отключи", "disable", "turn off")
             return step("torch", if (off) "off" else "on", label = if (off) "Фонарик выкл" else "Фонарик вкл")
         }
-        if (Regex("^(включи |выключи |поставь )?(не беспокоить|днд|dnd|без звука|тихий режим|режим тишины)( выключи| выкл)?$").matches(s)) {
-            val off = Regex("выключи|выкл|off").containsMatchIn(s)
+
+        // ---- DND / silence ----
+        if (has("не беспокоить", "днд", "dnd", "без звука", "тихий режим", "режим тишины", "тишину", "do not disturb", "беззвучн", "mute all", "не тревожить")) {
+            val off = has("выключи", "выкл", "off", "отключи", "сними", "disable", "turn off", "верни звук")
             return step("dnd", if (off) "off" else "silent", label = if (off) "DND выкл" else "DND вкл")
         }
-        Regex("^(?:поставь |установи )?громкость(?: медиа| музыки)?\\s*(?:на\\s*)?(\\d+)").find(s)?.let {
+
+        // ---- volume ----
+        Regex("(?:громкость|звук|volume)(?:\\s+медиа|\\s+музыки|\\s+media)?\\s*(?:на|до|=)?\\s*(\\d+)").find(s)?.let {
             return step("volume", "media", it.groupValues[1], label = "Громкость " + it.groupValues[1])
         }
-        if (Regex("^(выключи звук|mute)$").matches(s)) return step("volume", "media", "0", label = "Звук выкл")
-        Regex("^(?:поставь |установи )?яркость\\s*(?:на\\s*)?(\\d+)").find(s)?.let {
+        if (has("выключи звук", "убери звук", "без звука полностью", "mute", "заглуши", "тише полностью", "звук на ноль", "громкость 0"))
+            return step("volume", "media", "0", label = "Звук выкл")
+        if (has("прибавь звук", "погромче", "громче", "volume up", "увеличь громкость"))
+            return step("volume", "media", "12", label = "Громче")
+        if (has("убавь звук", "потише", "тише", "volume down", "уменьши громкость"))
+            return step("volume", "media", "4", label = "Тише")
+
+        // ---- brightness ----
+        Regex("(?:яркость|brightness)(?:\\s+экрана)?\\s*(?:на|до|=)?\\s*(\\d+)").find(s)?.let {
             return step("brightness", it.groupValues[1], label = "Яркость " + it.groupValues[1])
         }
-        if (Regex("^(назад|back)$").matches(s)) return step("back", label = "Назад")
-        if (Regex("^(домой|на главную|home)$").matches(s)) return step("home", label = "Домой")
-        if (Regex("^(недавние|recents|последние приложения)$").matches(s)) return step("recents", label = "Недавние")
-        if (Regex("^(шторка|уведомления|notifications)$").matches(s)) return step("notifications", label = "Уведомления")
-        if (Regex("^(быстрые настройки|quick settings)$").matches(s)) return step("quicksettings", label = "Быстрые настройки")
-        if (Regex("^(открой |включи )?(вайфай|wifi|вай-фай)").containsMatchIn(s)) return step("settings", "wifi", label = "WiFi")
-        if (Regex("^(открой |включи )?(блютуз|bluetooth)").containsMatchIn(s)) return step("settings", "bluetooth", label = "Bluetooth")
-        if (Regex("^(открой )?(экономию энергии|battery saver|энергосбережение)").containsMatchIn(s)) return step("settings", "battery_saver", label = "Экономия энергии")
-        // chat/contact before generic open
-        Regex("^(?:открой|найди|перейди в)\\s+(?:чат|диалог|контакт)\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
-            return step("text", it.groupValues[1], label = "Чат «" + it.groupValues[1] + "»")
+        if (has("ярче", "яркость выше", "прибавь яркость", "brighter")) return step("brightness", "220", label = "Ярче")
+        if (has("темнее", "яркость ниже", "убавь яркость", "dimmer", "потусклее")) return step("brightness", "40", label = "Темнее")
+
+        // ---- navigation ----
+        if (has("назад", "back") && !has("вернись назад в")) return step("back", label = "Назад")
+        if (has("домой", "на главную", "home", "главный экран", "рабочий стол")) return step("home", label = "Домой")
+        if (has("недавние", "recents", "последние приложения", "открытые приложения", "recent apps")) return step("recents", label = "Недавние")
+        if (has("шторка", "уведомления", "notifications", "шторку", "панель уведомлений")) return step("notifications", label = "Уведомления")
+        if (has("быстрые настройки", "quick settings", "быстрые переключатели")) return step("quicksettings", label = "Быстрые настройки")
+        if (has("заблокируй", "lock", "блокировка экрана", "заблокировать экран")) return step("lock", label = "Блокировка")
+
+        // ---- settings pages ----
+        if (has("вайфай", "wifi", "вай-фай", "wi-fi", "вифи")) return step("settings", "wifi", label = "WiFi")
+        if (has("блютуз", "bluetooth", "блютус")) return step("settings", "bluetooth", label = "Bluetooth")
+        if (has("экономию энергии", "battery saver", "энергосбережение", "энергосберегающий", "режим энергосбережения")) return step("settings", "battery_saver", label = "Экономия энергии")
+        if (has("настройки экрана", "display settings", "экран настройки")) return step("settings", "display", label = "Настройки экрана")
+        if (has("настройки звука", "sound settings")) return step("settings", "sound", label = "Настройки звука")
+        if (has("геолокация", "location", "местоположение", "gps")) return step("settings", "location", label = "Геолокация")
+        if (has("авиарежим", "airplane", "режим полета", "в самолете")) return step("settings", "airplane", label = "Авиарежим")
+        if (s == "настройки" || s == "открой настройки" || s == "settings") return step("settings", "", label = "Настройки")
+
+        // ---- chat / contact (before generic open) ----
+        Regex("^(?:открой|найди|перейди в|зайди в|напиши в|открыть|open)?\\s*(?:чат|диалог|контакт|переписку с|чат с)\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
+            val name = it.groupValues[1].trim()
+            if (name.isNotEmpty()) return step("text", name, label = "Чат «$name»")
         }
         Regex("^чат\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             return step("text", it.groupValues[1], label = "Чат «" + it.groupValues[1] + "»")
         }
-        Regex("^(?:нажми|тапни|кликни)\\s+(?:на\\s+)?(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
+
+        // ---- tap visible text ----
+        Regex("^(?:нажми|тапни|кликни|нажать|tap|click|press)\\s+(?:на\\s+)?(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             return step("text", it.groupValues[1], label = "Нажать «" + it.groupValues[1] + "»")
         }
-        Regex("^(?:напиши|введи|напечатай)\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
+
+        // ---- type text ----
+        Regex("^(?:напиши|введи|напечатай|ввести|type|набрать)\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             return step("type", it.groupValues[1], label = "Ввести текст")
         }
-        Regex("^(?:открой|запусти|включи)\\s+(?:приложение\\s+)?(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
-            val name = it.groupValues[1].trim()
-            return step("open", name, label = "Открыть " + name)
+
+        // ---- open app: flexible verb + optional "приложение" ----
+        Regex("^(?:открой|запусти|включи|вруби|открыть|запустить|open|launch|start|запусти мне|открой мне)\\s+(?:приложение\\s+|app\\s+)?(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
+            val name = it.groupValues[1].trim().removeSuffix(" приложение").removePrefix("приложение ").trim()
+            if (name.isNotEmpty()) return step("open", name, label = "Открыть $name")
         }
-        // bare app name ("телеграм") — try to open
-        if (ALIASES.containsKey(s)) return step("open", s, label = "Открыть " + orig)
+
+        // ---- bare known app name ("телеграм", "youtube") ----
+        val bare = s.removeSuffix(" приложение").trim()
+        if (ALIASES.containsKey(bare)) return step("open", bare, label = "Открыть " + orig)
+
+        // ---- swipe gestures ----
+        if (has("свайп вверх", "swipe up", "листай вверх", "прокрути вверх")) return step("swipe", "540", "1800", "540", "600", label = "Свайп вверх")
+        if (has("свайп вниз", "swipe down", "листай вниз", "прокрути вниз")) return step("swipe", "540", "600", "540", "1800", label = "Свайп вниз")
+
         return null
     }
 

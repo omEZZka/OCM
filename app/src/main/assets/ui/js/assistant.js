@@ -89,50 +89,56 @@ const APP_ALIASES={
   'калькулятор':'calculator','музыка':'music','телефон':'phone','звонки':'phone','сообщения':'messages'
 };
 function parseOne(t){
-  const orig=String(t||'').trim().replace(/[.!?]+$/,'').replace(/^в\s+н[её]м\s+/i,'');
-  const s=orig.toLowerCase();
+  let orig=String(t||'').trim().replace(/[.!?]+$/,'').replace(/^в\s+н[её]м\s+/i,'');
+  orig=orig.replace(/^(пожалуйста|плиз|please|ну|давай|ка|будь добр[аы]?|сделай мне|мне)\s+/i,'').replace(/\s+(пожалуйста|плиз|please)$/i,'').trim();
+  const s=orig.toLowerCase().replace(/ё/g,'е');
   if(!s)return null;
-  // capture groups from the ORIGINAL string so names keep their case ("Миша", not "миша")
   const om=r=>{const mm=orig.match(r);return mm?mm[1]:null};
-  let m;
-  // macro: "игровой режим" / "включи режим X" / "макрос X"
-  if((m=s.match(/^(?:включи |запусти |активируй )?(?:режим |макрос )?(.+)$/))){
-    const mac=O.macroByName(m[1]);
-    if(mac&&/(режим|макрос)/.test(s))return [{cmd:'macro',args:[mac.id],label:mac.name}];
-    if(mac&&!/^(открой|включи|выключи|сделай|поставь|напиши|найди|позвони|отправь)/.test(s))return [{cmd:'macro',args:[mac.id],label:mac.name}];
+  const has=(...w)=>w.some(x=>s.includes(x));
+  const step=(cmd,args,label)=>[{cmd,args:args||[],label:label||cmd}];
+  // macros
+  if(has('режим','макрос','macro','mode')){
+    const name=s.replace(/^(включи|запусти|активируй|вруби|поставь|activate|enable|turn on)?\s*(режим|макрос|macro|mode)?\s*/,'').trim();
+    const mac=O.macroByName(name)||O.macroByName(s);
+    if(mac)return step('macro',[mac.id],mac.name);
   }
-  if(/^(сделай |сними )?(скриншот|скрин|screenshot)$/.test(s))return [{cmd:'shot',args:[],label:'Скриншот'}];
-  if(/^(включи |выключи )?(фонарик|фонарь|flashlight|torch)( включи| выключи)?$/.test(s)){
-    const off=/выключи|off/.test(s);
-    return [{cmd:'torch',args:[off?'off':'on'],label:off?'Фонарик выкл':'Фонарик вкл'}];
+  if(has('скриншот','скрин','screenshot','снимок экрана','screen shot','сфоткай экран','захвати экран'))return step('shot',[],'Скриншот');
+  if(has('фонарик','фонарь','flashlight','torch','вспышк')){const off=has('выключи','выкл','off','потуши','убери','отключи','disable','turn off');return step('torch',[off?'off':'on'],off?'Фонарик выкл':'Фонарик вкл')}
+  if(has('не беспокоить','днд','dnd','без звука','тихий режим','режим тишины','тишину','do not disturb','беззвучн','не тревожить')){const off=has('выключи','выкл','off','отключи','сними','disable','turn off','верни звук');return step('dnd',[off?'off':'silent'],off?'DND выкл':'DND вкл')}
+  let m=s.match(/(?:громкость|звук|volume)(?:\s+медиа|\s+музыки|\s+media)?\s*(?:на|до|=)?\s*(\d+)/);
+  if(m)return step('volume',['media',m[1]],'Громкость '+m[1]);
+  if(has('выключи звук','убери звук','mute','заглуши','звук на ноль','громкость 0'))return step('volume',['media','0'],'Звук выкл');
+  if(has('прибавь звук','погромче','громче','volume up','увеличь громкость'))return step('volume',['media','12'],'Громче');
+  if(has('убавь звук','потише','тише','volume down','уменьши громкость'))return step('volume',['media','4'],'Тише');
+  m=s.match(/(?:яркость|brightness)(?:\s+экрана)?\s*(?:на|до|=)?\s*(\d+)/);
+  if(m)return step('brightness',[m[1]],'Яркость '+m[1]);
+  if(has('ярче','яркость выше','прибавь яркость','brighter'))return step('brightness',['220'],'Ярче');
+  if(has('темнее','яркость ниже','убавь яркость','dimmer','потусклее'))return step('brightness',['40'],'Темнее');
+  if(has('назад','back'))return step('back',[],'Назад');
+  if(has('домой','на главную','home','главный экран','рабочий стол'))return step('home',[],'Домой');
+  if(has('недавние','recents','последние приложения','открытые приложения'))return step('recents',[],'Недавние');
+  if(has('шторка','уведомления','notifications','шторку','панель уведомлений'))return step('notifications',[],'Уведомления');
+  if(has('быстрые настройки','quick settings'))return step('quicksettings',[],'Быстрые настройки');
+  if(has('заблокируй','lock','блокировка экрана'))return step('lock',[],'Блокировка');
+  if(has('вайфай','wifi','вай-фай','wi-fi','вифи'))return step('settings',['wifi'],'WiFi');
+  if(has('блютуз','bluetooth','блютус'))return step('settings',['bluetooth'],'Bluetooth');
+  if(has('экономию энергии','battery saver','энергосбережение','энергосберегающий'))return step('settings',['battery_saver'],'Экономия энергии');
+  if(has('геолокация','location','местоположение','gps'))return step('settings',['location'],'Геолокация');
+  if(has('авиарежим','airplane','режим полета'))return step('settings',['airplane'],'Авиарежим');
+  if(s==='настройки'||s==='открой настройки'||s==='settings')return step('settings',[''],'Настройки');
+  // chat/contact before open
+  if((m=orig.match(/^(?:открой|найди|перейди в|зайди в|напиши в|открыть|open)?\s*(?:чат|диалог|контакт|переписку с|чат с)\s+(.+)$/i))&&m[1].trim())return step('text',[m[1].trim()],'Чат «'+m[1].trim()+'»');
+  if((m=orig.match(/^чат\s+(.+)$/i)))return step('text',[m[1]],'Чат «'+m[1]+'»');
+  if((m=orig.match(/^(?:нажми|тапни|кликни|нажать|tap|click|press)\s+(?:на\s+)?(.+)$/i)))return step('text',[m[1]],'Нажать «'+m[1]+'»');
+  if((m=orig.match(/^(?:напиши|введи|напечатай|ввести|type|набрать)\s+(.+)$/i)))return step('type',[m[1]],'Ввести текст');
+  if((m=orig.match(/^(?:открой|запусти|включи|вруби|открыть|запустить|open|launch|start|запусти мне|открой мне)\s+(?:приложение\s+|app\s+)?(.+)$/i))){
+    const name=m[1].trim().replace(/\s+приложение$/,'').replace(/^приложение\s+/,'').trim();
+    if(name)return step('open',[APP_ALIASES[name.toLowerCase()]||name],'Открыть '+name);
   }
-  if(/^(включи |выключи |поставь )?(не беспокоить|днд|dnd|без звука|тихий режим|режим тишины)( выключи| выкл)?$/.test(s)){
-    const off=/выключи|выкл|off/.test(s);
-    return [{cmd:'dnd',args:[off?'off':'silent'],label:off?'DND выкл':'DND вкл'}];
-  }
-  if((m=s.match(/^(?:поставь |установи )?громкость(?: медиа| музыки)?\s*(?:на\s*)?(\d+)/)))return [{cmd:'volume',args:['media',m[1]],label:'Громкость '+m[1]}];
-  if(/^(выключи звук|без звука полностью|mute)$/.test(s))return [{cmd:'volume',args:['media','0'],label:'Звук выкл'}];
-  if((m=s.match(/^(?:поставь |установи )?яркость\s*(?:на\s*)?(\d+)/)))return [{cmd:'brightness',args:[m[1]],label:'Яркость '+m[1]}];
-  if(/^(назад|back)$/.test(s))return [{cmd:'back',args:[],label:'Назад'}];
-  if(/^(домой|на главную|home)$/.test(s))return [{cmd:'home',args:[],label:'Домой'}];
-  if(/^(недавние|recents|последние приложения)$/.test(s))return [{cmd:'recents',args:[],label:'Недавние'}];
-  if(/^(шторка|уведомления|notifications)$/.test(s))return [{cmd:'notifications',args:[],label:'Уведомления'}];
-  if(/^(быстрые настройки|quick settings)$/.test(s))return [{cmd:'quicksettings',args:[],label:'Быстрые настройки'}];
-  if(/^(открой |включи )?(вайфай|wifi|вай-фай)/.test(s))return [{cmd:'settings',args:['wifi'],label:'Настройки WiFi'}];
-  if(/^(открой |включи )?(блютуз|bluetooth)/.test(s))return [{cmd:'settings',args:['bluetooth'],label:'Настройки Bluetooth'}];
-  if(/^(открой )?(экономию энергии|battery saver|энергосбережение)/.test(s))return [{cmd:'settings',args:['battery_saver'],label:'Экономия энергии'}];
-  // chat/contact lookup BEFORE generic app-open: "открой чат Миша" taps the visible name
-  if(s.match(/^(?:открой|найди|перейди в)\s+(?:чат|диалог|контакт)\s+(.+)$/)){const v=om(/^(?:открой|найди|перейди в)\s+(?:чат|диалог|контакт)\s+(.+)$/i);return [{cmd:'text',args:[v],label:'Чат «'+v+'»'}]}
-  if(s.match(/^чат\s+(.+)$/)){const v=om(/^чат\s+(.+)$/i);return [{cmd:'text',args:[v],label:'Чат «'+v+'»'}]}
-  // tap visible text: "нажми X" / "напиши X" (type)
-  if(s.match(/^(?:нажми|тапни|кликни)\s+(?:на\s+)?(.+)$/)){const v=om(/^(?:нажми|тапни|кликни)\s+(?:на\s+)?(.+)$/i);return [{cmd:'text',args:[v],label:'Нажать «'+v+'»'}]}
-  if(s.match(/^(?:напиши|введи|напечатай)\s+(.+)$/)){const v=om(/^(?:напиши|введи|напечатай)\s+(.+)$/i);return [{cmd:'type',args:[v],label:'Ввести текст'}]}
-  // open app
-  if((m=s.match(/^(?:открой|запусти|включи)\s+(?:приложение\s+)?(.+)$/))){
-    const name=m[1].trim();
-    const alias=APP_ALIASES[name]||name;
-    return [{cmd:'open',args:[alias],label:'Открыть '+name}];
-  }
+  const bare=s.replace(/\s+приложение$/,'').trim();
+  if(APP_ALIASES[bare])return step('open',[APP_ALIASES[bare]],'Открыть '+orig);
+  if(has('свайп вверх','swipe up','листай вверх','прокрути вверх'))return step('swipe',['540','1800','540','600'],'Свайп вверх');
+  if(has('свайп вниз','swipe down','листай вниз','прокрути вниз'))return step('swipe',['540','600','540','1800'],'Свайп вниз');
   return null;
 }
 // Split "открой телеграм и в нем открой чат Миша" into steps.

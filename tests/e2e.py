@@ -368,6 +368,19 @@ try:
     chk('assistant torch off',asres['torch']=='off')
     chk('assistant macro by name',asres['macro']=='macro')
     chk('assistant unknown goes to agent',asres['unknown'] is None)
+    tol=pg.evaluate("""() => {
+      const c=t=>(OCM.parseAssistant(t)||[]).map(s=>s.cmd);
+      return {shot:c('сделай скриншот пожалуйста'),torch:c('вруби фонарик'),
+        home:c('на главный экран'),yt:c('открой ютуб'),bare:c('телеграм'),
+        macro:c('включи ночной режим'),chain:c('открой телеграм и в нем открой чат Миша')};
+    }""")
+    chk('tolerant: screenshot+please',tol['shot']==['shot'])
+    chk('tolerant: вруби фонарик',tol['torch']==['torch'])
+    chk('tolerant: главный экран',tol['home']==['home'])
+    chk('tolerant: ютуб',tol['yt']==['open'])
+    chk('tolerant: bare app name',tol['bare']==['open'])
+    chk('tolerant: macro verb',tol['macro']==['macro'])
+    chk('tolerant: chain',tol['chain']==['open','text'])
     chk('macro mirror bridge',pg.evaluate("typeof window.OC.setPref")=='function')
     pg.evaluate("OCM.saveMacros([{id:'t',name:'Тест',steps:[{cmd:'home',args:[]}]}])")
     chk('macros mirrored to native',pg.evaluate("(window.__prefs||{})['assistant_macros']||''").find('Тест')>=0)
