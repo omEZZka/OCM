@@ -22,7 +22,9 @@ import java.util.concurrent.TimeUnit
  */
 object Net {
     private val http = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS).readTimeout(15, TimeUnit.MINUTES).writeTimeout(60, TimeUnit.SECONDS).build()
+        .connectTimeout(5, TimeUnit.SECONDS).readTimeout(15, TimeUnit.MINUTES).writeTimeout(60, TimeUnit.SECONDS)
+        .connectionPool(okhttp3.ConnectionPool(8, 10, TimeUnit.MINUTES))
+        .retryOnConnectionFailure(true).build()
     private val stream = http.newBuilder().readTimeout(0, TimeUnit.SECONDS).pingInterval(20, TimeUnit.SECONDS).build()
     private val pool = Executors.newCachedThreadPool()
     private val sockets = ConcurrentHashMap<String, WebSocket>()

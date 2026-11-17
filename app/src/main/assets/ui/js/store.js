@@ -692,6 +692,44 @@ O.estimateTurn=()=>{
 // ---- auto-compact (4) ----
 O.autoCompact=()=>O.store.get('autoCompact',false);
 O.setAutoCompact=v=>O.store.set('autoCompact',!!v);
+O.compactThreshold=()=>O.fastMode()?70:85;
+
+// ---- fast mode: fastest model + minimal effort + snappier rendering ----
+O.fastMode=()=>O.store.get('fastMode',false);
+O.fastestModel=()=>{
+  const all=O.allModels().filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
+  const score=x=>{
+    const id=(x.mid+' '+x.name).toLowerCase();let n=0;
+    if(/(flash|mini|nano|lite|small|haiku|instant|turbo|fast|8b|7b|3b|1b)/.test(id))n+=10;
+    if(/(opus|ultra|max|pro|70b|405b|large)/.test(id))n-=6;
+    if(O.isModelFree(x))n+=3;
+    const ctx=x.m&&x.m.limit&&x.m.limit.context||0;
+    if(ctx&&ctx<200000)n+=1;
+    return n;
+  };
+  return all.slice().sort((a,b)=>score(b)-score(a))[0]||null;
+};
+O.setFastMode=v=>{
+  const on=!!v;
+  const was=O.fastMode();
+  O.store.set('fastMode',on);
+  if(on&&!was){
+    // remember current model/effort to restore later
+    O.store.set('fastMode.prev',{model:S.model,variant:S.variant});
+    const fm=O.fastestModel();
+    if(fm)O.setModel(fm.pid,fm.mid);
+    const levels=O.effortLevels();
+    const low=levels.find(l=>/minimal|low/.test(l))||levels[0];
+    if(low)O.setEffort(low);
+    O.toast(O.tr('Fast mode: '+((fm&&fm.name)||'current model')+' · minimal reasoning','Быстрый режим: '+((fm&&fm.name)||'текущая модель')+' · минимум рассуждений'),3000);
+  }else if(!on&&was){
+    const prev=O.store.get('fastMode.prev',null);
+    if(prev&&prev.model&&O.modelInfo(prev.model.providerID,prev.model.modelID))O.setModel(prev.model.providerID,prev.model.modelID);
+    if(prev&&prev.variant)O.setEffort(prev.variant);
+    O.toast(O.tr('Fast mode off','Быстрый режим выключен'),2000);
+  }
+  bus.emit('meta');bus.emit('fastMode');
+};
 
 // ---- session branch tree (6) ----
 O.sessionBranches=rootId=>{

@@ -353,6 +353,18 @@ try:
     chk('skeleton renders',pg.locator('.chat-skeleton .skeleton').count()>=4)
     pg.evaluate("OCM.chatSkeletonOff()")
     chk('skeleton removed',pg.locator('.chat-skeleton').count()==0)
+    # ---- fast mode ----
+    chk('fast mode helper',pg.evaluate("typeof OCM.setFastMode==='function'&&typeof OCM.fastestModel==='function'"))
+    fm=pg.evaluate("OCM.fastestModel()")
+    chk('fastest model picked',fm is not None)
+    pg.evaluate("OCM.setFastMode(true)")
+    pg.wait_for_timeout(200)
+    chk('fast mode on',pg.evaluate("OCM.fastMode()")==True)
+    chk('fast badge on chip',pg.locator('#composer .model-pill.fast-on').count()==1)
+    chk('compact threshold 70',pg.evaluate("OCM.compactThreshold()")==70)
+    pg.evaluate("OCM.setFastMode(false)")
+    pg.wait_for_timeout(200)
+    chk('fast mode off restores',pg.evaluate("OCM.fastMode()")==False)
     # ---- phone assistant ----
     asres=pg.evaluate("""() => {
       const chain=OCM.parseAssistant('открой телеграм и в нем открой чат Миша');
@@ -414,6 +426,7 @@ try:
     chk('settings: auto-compact row','Авто-сжатие контекста' in st)
     chk('settings: home tiles row','Плитки главного экрана' in st)
     chk('settings: haptics row','Тактильный отклик' in st)
+    chk('settings: fast mode row','Быстрый режим' in st)
     chk('settings: key check row','Проверить все ключи' in st)
     chk('settings: quick chips',pg.locator('.settings-quick-chip').count()>=5)
     chk('settings: voice control near top','Настройки голосового управления' in st)

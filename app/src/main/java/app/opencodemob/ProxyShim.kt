@@ -33,9 +33,13 @@ object ProxyShim {
     private const val PREF_PORT = "shimPort"
     private val jsonType = "application/json; charset=utf-8".toMediaType()
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.MINUTES)
         .writeTimeout(60, TimeUnit.SECONDS)
+        // Keep warm connections to providers: a fresh TLS handshake per request added
+        // hundreds of ms to every turn; the pool reuses them across prompts.
+        .connectionPool(okhttp3.ConnectionPool(8, 10, TimeUnit.MINUTES))
+        .retryOnConnectionFailure(true)
         .build()
     private val streamClient = client.newBuilder()
         .readTimeout(0, TimeUnit.SECONDS)

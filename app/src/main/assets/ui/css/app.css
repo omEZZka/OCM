@@ -2882,6 +2882,10 @@ input[type="range"] { width: auto; padding: 0; border: 0; background: none; acce
 input[type="checkbox"] { width: auto; padding: 0; border: 0; background: none; accent-color: var(--acc); }
 input[type="color"] { width: 42px; padding: 0; border: 0; background: none; }
 
+/* fast mode badge on the model chip */
+.hud-pill.fast-on { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.hud-pill.fast-on::before { content: '⚡'; font-size: 11px; margin-right: 2px; }
+
 /* focus mode: hide everything but the conversation and composer */
 html.focus-mode #top, html.focus-mode #bottom-bar, html.focus-mode #banner { display: none !important; }
 html.focus-mode #pane-chat { padding-top: env(safe-area-inset-top); }

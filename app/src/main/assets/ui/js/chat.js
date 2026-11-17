@@ -113,7 +113,7 @@ O.chatInit=root=>{
     if(sid===S.sid&&O.autoCompact&&O.autoCompact()){
       const u=O.contextUsage(S.sid);
       const done=O.store.get('autoCompactAt.'+S.sid,0);
-      if(u&&u.pct!=null&&u.pct>=85&&Date.now()-done>120000&&S.model){
+      if(u&&u.pct!=null&&u.pct>=(O.compactThreshold?O.compactThreshold():85)&&Date.now()-done>120000&&S.model){
         O.store.set('autoCompactAt.'+S.sid,Date.now());
         O.toast(O.tr('Context '+u.pct+'% — compacting automatically','Контекст '+u.pct+'% — сжимаю автоматически'),3000);
         doCompact();
@@ -355,7 +355,7 @@ function fillPart(el,p,m,fresh){
       el._tt=null;
       if(stick){fillTool(el,el._p);scrollEnd()}
       else keepAnchor(()=>fillTool(el,el._p));
-    },140)}
+    },O.fastMode&&O.fastMode()?70:140)}
     else fillTool(el,p);
     break}
   case'file':{
@@ -447,7 +447,7 @@ function sched(id,fn){if(timers.has(id))return;timers.set(id,setTimeout(()=>{
   timers.delete(id);
   if(stick){fn();scrollEnd()}
   else keepAnchor(fn);   // reading above: re-render without moving the viewport
-},100))}
+},O.fastMode&&O.fastMode()?45:100))}
 function dropTimer(id){const t=timers.get(id);if(t){clearTimeout(t);timers.delete(id)}}
 
 function msgActions(m){
@@ -1013,7 +1013,8 @@ function updateChips(){
       const p=O.modelProfile(k);return p&&m&&p.main===(m.providerID+'/'+m.modelID);
     });
     modelChip.classList.toggle('has-profile',!!prof);
-    modelChip.title=prof?(O.tr('Profile: ','Профиль: ')+prof):'';
+    modelChip.classList.toggle('fast-on',!!(O.fastMode&&O.fastMode()));
+    modelChip.title=O.fastMode&&O.fastMode()?O.tr('Fast mode','Быстрый режим'):(prof?(O.tr('Profile: ','Профиль: ')+prof):'');
   }
   // Swipe the model chip left/right to cycle models: no need to open the full list.
   if(modelChip&&!modelChip._swipe){
@@ -1098,6 +1099,7 @@ const BUILTINS=[
  {n:'calls',d:'История звонков',i:'wave',run:()=>O.openCallHistory()},
  {n:'tour',d:'Обучающий тур',i:'info',run:()=>O.openTour()},
  {n:'focus',d:'Фокус-режим: только чат',i:'eye',run:()=>O.setFocusMode(!O.focusMode())},
+ {n:'fast',d:'Быстрый режим: mini-модель + минимум рассуждений',i:'zap',run:()=>O.setFastMode(!O.fastMode())},
  {n:'snippets',d:'Сниппеты промптов',i:'doc',run:()=>O.openSnippets()},
  {n:'health',d:'Проверка здоровья проекта',i:'shield',run:()=>O.projectHealth()},
  {n:'audit',d:'Аудит действий агента',i:'list',run:()=>O.openAgentAudit()},
