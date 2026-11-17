@@ -313,6 +313,384 @@ O.initCustomWidgets=function(root){
 };
 
 // Listen to native preview events (e.g. from openpreview CLI script or bridge)
+// ---- snippets: reusable prompt templates with {variables} ----
+const SNIP_DEFAULTS=[
+  {id:'fix',name:'Исправить ошибку',text:'Исправь эту ошибку и объясни причину в одном абзаце:\n\n{error}'},
+  {id:'tests',name:'Покрыть тестами',text:'Напиши тесты для {file}. Покрой краевые случаи, используй принятый в проекте фреймворк.'},
+  {id:'review',name:'Код-ревью',text:'Сделай строгое ревью {file}: баги, безопасность, производительность. Формат: список проблем с серьёзностью.'},
+  {id:'refactor',name:'Рефакторинг',text:'Отрефактори {file}: уменьши связанность, выдели функции, сохрани поведение. Покажи diff.'},
+  {id:'explain',name:'Объяснить код',text:'Объясни, что делает {file}, по блокам. Уровень: junior-разработчик.'},
+  {id:'commit',name:'Сообщение коммита',text:'Напиши commit message по текущим изменениям (conventional commits, одна строка + тело при необходимости).'},
+  {id:'readme',name:'README',text:'Напиши README для проекта: описание, установка, использование, примеры. Кратко, без воды.'},
+  {id:'optimize',name:'Оптимизировать',text:'Найди узкие места в {file} и предложи оптимизации с оценкой эффекта.'}
+];
+O.snippets=()=>{
+  const custom=O.store.get('snippets',null);
+  return Array.isArray(custom)?custom:SNIP_DEFAULTS;
+};
+O.openSnippets=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Prompt snippets','Сниппеты промптов'),body,{full:true});
+  const q=h('input',{placeholder:O.tr('Search snippets…','Поиск сниппетов…'),oninput:()=>draw()});
+  const list=h('div');
+  const draw=()=>{
+    list.textContent='';
+    const f=String(q.value||'').toLowerCase();
+    O.snippets().filter(x=>(x.name+' '+x.text).toLowerCase().includes(f)).forEach(sn=>{
+      list.append(h('div',{class:'settings-row'},
+        h('button',{class:'settings-row-text',onclick:async()=>{
+          // fill {variables} one by one
+          let text=sn.text;
+          const vars=[...new Set((text.match(/\{(\w+)\}/g)||[]).map(x=>x.slice(1,-1)))];
+          for(const v of vars){
+            const val=await O.ask(O.tr('Variable: ','Переменная: ')+v,'');
+            if(val==null)return;
+            text=text.split('{'+v+'}').join(val);
+          }
+          s.close();O.insertText(text);O.setTab('chat');
+        }},h('b',null,sn.name),h('span',{class:'media-clip'},sn.text.slice(0,90))),
+        h('button',{class:'ibtn s',onclick:()=>O.actions(sn.name,[
+          {label:O.tr('Edit','Изменить'),icon:'edit',fn:async()=>{
+            const name=await O.ask(O.tr('Name','Название'),null,sn.name);if(!name)return;
+            const text=await O.ask(O.tr('Template ({var} = variable)','Шаблон ({var} = переменная)'),null,sn.text,true);if(text==null)return;
+            O.store.set('snippets',O.snippets().map(x=>x.id===sn.id?{id:sn.id,name,text}:x));draw();
+          }},
+          {label:O.tr('Delete','Удалить'),icon:'trash',danger:true,fn:()=>{O.store.set('snippets',O.snippets().filter(x=>x.id!==sn.id));draw()}}
+        ])},O.icon('dots'))));
+    });
+  };
+  body.append(q,list,h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:async()=>{
+    const name=await O.ask(O.tr('Snippet name','Название сниппета'),'');if(!name)return;
+    const text=await O.ask(O.tr('Template ({var} = variable)','Шаблон ({var} = переменная'),'{file}',true);if(!text)return;
+    O.store.set('snippets',O.snippets().concat([{id:'sn_'+Date.now().toString(36),name,text}]));draw();
+  }},O.icon('plus'),O.tr('New snippet','Новый сниппет')));
+  draw();
+};
+
+// ---- project health check ----
+O.projectHealth=async()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Project health','Здоровье проекта'),body,{full:true});
+  const add=(icon,ok,title,sub,fn)=>body.append(h('div',{class:'settings-row'},
+    h('div',{class:'settings-row-icon '+(ok?'green':'amber')},O.icon(icon)),
+    h('div',{class:'settings-row-text'},h('b',null,title),h('span',null,sub)),
+    fn?h('button',{class:'btn sm',onclick:fn},O.tr('Fix','Исправить')):(ok?O.icon('check','ok'):O.icon('alert','warn'))));
+  body.append(h('div',{class:'note'},O.tr('Checking…','Проверяю…')));
+  const results=[];
+  // git status
+  let dirty=0;
+  try{const r=O.native.gitRun(S.dir,'status --porcelain');dirty=(r.out||'').trim()?r.out.trim().split('\n').length:0}catch(_){}
+  results.push(['branch',dirty===0,O.tr('Uncommitted changes','Незакоммиченные изменения'),dirty?dirty+' '+O.tr('files','файлов'):O.tr('working tree clean','дерево чистое'),dirty?()=>O.setTab('changes'):null]);
+  // secrets scan in loaded tree (cheap heuristic on names)
+  let envFiles=0;
+  try{const r=O.native.ls(S.dir);(r.items||[]).forEach(x=>{if(/^\.env($|\.)/.test(x.name))envFiles++})}catch(_){}
+  results.push(['key',envFiles===0,'.env '+O.tr('files in root','файлы в корне'),envFiles?envFiles+' '+O.tr('found — check .gitignore','найдено — проверьте .gitignore'):O.tr('none','нет'),envFiles?()=>O.openEnvManager():null]);
+  // gitignore
+  let hasIgnore=false;
+  try{const r=O.native.readText(S.dir+'/.gitignore');hasIgnore=!!(r&&r.ok)}catch(_){}
+  results.push(['doc',hasIgnore,'.gitignore',hasIgnore?O.tr('present','есть'):O.tr('missing','отсутствует'),hasIgnore?null:async()=>{
+    const r=O.native.writeText(S.dir+'/.gitignore','node_modules/\n.env\n.env.*\ndist/\nbuild/\n.cache/\n*.log\n__pycache__/\n.venv/\ntarget/\n');
+    O.toast(r.ok?O.tr('.gitignore created','.gitignore создан'):O.tr('Failed','Не удалось'),2500);s.close();O.projectHealth();
+  }]);
+  // disk space
+  const st=O.native.resourceStats?O.native.resourceStats():{};
+  const freeGb=(st.diskFree||0)/1e9;
+  results.push(['down',freeGb>2,O.tr('Free storage','Свободное место'),freeGb.toFixed(1)+' GB',null]);
+  // server
+  results.push(['server',!!st.serverReady,O.tr('Local server','Локальный сервер'),st.serverReady?O.tr('running','работает'):O.tr('stopped','остановлен'),st.serverReady?null:()=>{try{OC.restartServer()}catch(_){}}]);
+  // big files in tree
+  let big=0;
+  try{const r=O.native.ls(S.dir);(r.items||[]).forEach(x=>{if(!x.dir&&(x.size||0)>50e6)big++})}catch(_){}
+  results.push(['folder',big===0,O.tr('Files >50 MB in root','Файлы >50 МБ в корне'),big?big+' '+O.tr('found','найдено'):O.tr('none','нет'),null]);
+  // model configured
+  results.push(['cpu',!!S.model,O.tr('Model selected','Модель выбрана'),S.model?S.model.modelID:O.tr('none','нет'),S.model?null:()=>O.openModels()]);
+  body.textContent='';
+  const bad=results.filter(r=>!r[1]).length;
+  body.append(h('div',{class:'note'},bad?O.tr(bad+' issues found','Найдено проблем: '+bad):O.tr('All checks passed','Все проверки пройдены')));
+  results.forEach(r=>add(...r));
+};
+
+// ---- media gallery: favorites + search over history ----
+O.mediaFavs=()=>O.store.get('mediaFavs',[]);
+O.toggleMediaFav=path=>{
+  const l=O.mediaFavs();const i=l.indexOf(path);
+  if(i>=0)l.splice(i,1);else l.push(path);
+  O.store.set('mediaFavs',l);
+};
+O.openMediaGallery=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Media gallery','Галерея медиа'),body,{full:true});
+  const q=h('input',{placeholder:O.tr('Search by prompt or model…','Поиск по промпту или модели…'),oninput:()=>draw()});
+  const seg=h('div',{class:'seg',style:{margin:'8px 0'}});
+  let filter='all';
+  [['all',O.tr('All','Все')],['fav',O.tr('Favorites','Избранное')],['image',O.tr('Photo','Фото')],['video',O.tr('Video','Видео')],['tts',O.tr('Voice','Голос')],['music',O.tr('Music','Музыка')]]
+    .forEach(([k,l])=>seg.append(h('button',{class:k===filter?'on':'',onclick:e=>{filter=k;[...seg.children].forEach(b=>b.classList.remove('on'));e.currentTarget.classList.add('on');draw()}},l)));
+  const grid=h('div',{class:'media-grid',style:{marginTop:'8px'}});
+  const draw=()=>{
+    grid.textContent='';
+    const f=String(q.value||'').toLowerCase();
+    const favs=O.mediaFavs();
+    let items=O.mediaHistory();
+    if(filter==='fav')items=items.filter(x=>favs.includes(x.path));
+    else if(filter!=='all')items=items.filter(x=>x.kind===filter);
+    if(f)items=items.filter(x=>((x.prompt||'')+' '+(x.model||'')).toLowerCase().includes(f));
+    if(!items.length){grid.append(h('div',{class:'note'},O.tr('Nothing here yet','Пока пусто')));return}
+    items.slice(0,120).forEach(it=>{
+      const fav=favs.includes(it.path);
+      const thumb=it.kind==='image'
+        ?h('img',{src:O.mediaUrl(it.path),loading:'lazy'})
+        :h('div',{class:'media-thumb-icon'},O.icon(it.kind==='video'?'film':it.kind==='music'?'note':'wave'));
+      grid.append(h('div',{class:'media-cell',style:{position:'relative'},onclick:()=>O.mediaPreview(it),oncontextmenu:e=>{e.preventDefault();O.mediaItemActions(it)}},
+        thumb,
+        h('button',{class:'media-fav-btn'+(fav?' on':''),onclick:e=>{e.stopPropagation();O.toggleMediaFav(it.path);draw()}},O.icon('star')),
+        h('span',{class:'media-cell-tag'},it.kind)));
+    });
+  };
+  body.append(q,seg,grid);
+  draw();
+};
+
+// ---- explain file: one tap from the viewer ----
+O.explainFile=path=>{
+  const name=O.basename(path);
+  O.insertText(O.tr('Explain what this file does, block by block, for a junior developer: ','Объясни, что делает этот файл, по блокам, для junior-разработчика: ')+'@'+O.rel(path));
+  O.setTab('chat');
+  O.toast(O.tr('Prompt prepared — send it','Запрос готов — отправьте'),2000);
+};
+
+// ---- agent action audit: what the agent actually did ----
+O.openAgentAudit=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Agent audit','Аудит действий агента'),body,{full:true});
+  const q=h('input',{placeholder:O.tr('Filter by tool or file…','Фильтр по инструменту или файлу…'),oninput:()=>draw()});
+  const list=h('div');
+  const draw=()=>{
+    list.textContent='';
+    const f=String(q.value||'').toLowerCase();
+    const rows=[];
+    for(const m of O.visibleMsgs(S.sid)){
+      if(m.info.role!=='assistant')continue;
+      for(const p of m.parts){
+        if(p.type!=='tool')continue;
+        const st=p.state||{},i=st.input||{};
+        const target=i.filePath||i.path||i.command||i.url||'';
+        const line=(p.tool||'')+' '+target;
+        if(f&&!line.toLowerCase().includes(f))continue;
+        rows.push({at:(st.time&&st.time.start)||m.info.time.created,tool:p.tool,target,status:st.status||'?',mid:m.info.id});
+      }
+    }
+    rows.reverse();
+    if(!rows.length){list.append(h('div',{class:'note'},O.tr('No tool calls in this session','В этой сессии нет вызовов инструментов')));return}
+    list.append(h('div',{class:'mut s',style:{margin:'4px 2px'}},rows.length+' '+O.tr('actions','действий')));
+    rows.slice(0,300).forEach(r=>{
+      const ic=r.tool==='bash'?'terminal':r.tool==='edit'||r.tool==='write'?'edit':r.tool==='read'?'doc':'zap';
+      list.append(h('div',{class:'settings-row'},
+        h('div',{class:'settings-row-icon'},O.icon(ic)),
+        h('div',{class:'settings-row-text'},h('b',null,r.tool),h('span',{class:'media-clip'},String(r.target).slice(0,120))),
+        h('span',{class:'mut s'},new Date(r.at).toTimeString().slice(0,8)),
+        r.status==='error'?O.icon('alert','err'):O.icon('check','ok')));
+    });
+  };
+  body.append(q,list);
+  draw();
+};
+
+// ---- .env manager: masked values, never sent to the model ----
+O.openEnvManager=()=>{
+  const path=S.dir+'/.env';
+  const body=h('div');
+  const s=O.sheet('.env — '+O.basename(S.dir),body,{full:true});
+  let entries=[];
+  const load=()=>{
+    entries=[];
+    try{
+      const r=O.native.readText(path);
+      if(r&&r.ok&&r.text){
+        r.text.split('\n').forEach(line=>{
+          const t=line.trim();
+          if(!t||t.startsWith('#'))return;
+          const i=t.indexOf('=');
+          if(i>0)entries.push({key:t.slice(0,i).trim(),val:t.slice(i+1).trim()});
+        });
+      }
+    }catch(_){}
+  };
+  const save=()=>{
+    const text=entries.map(e=>e.key+'='+e.val).join('\n')+'\n';
+    const r=O.native.writeText(path,text);
+    O.toast(r.ok?O.tr('.env saved','.env сохранён'):(r.err||'error'),2500);
+  };
+  const draw=()=>{
+    body.textContent='';
+    body.append(h('div',{class:'note'},O.tr('Values are masked and never inserted into prompts. The agent can read the file only if you explicitly ask.','Значения замаскированы и не вставляются в промпты. Агент прочитает файл только по вашей явной просьбе.')));
+    entries.forEach((e,i)=>{
+      let shown=false;
+      const valEl=h('span',{class:'mono'},'••••••••');
+      body.append(h('div',{class:'settings-row'},
+        h('div',{class:'settings-row-text'},h('b',{class:'mono'},e.key),valEl),
+        h('button',{class:'ibtn s',onclick:()=>{shown=!shown;valEl.textContent=shown?e.val:'••••••••'}},O.icon('eye')),
+        h('button',{class:'ibtn s',onclick:async()=>{
+          const v=await O.ask(e.key,null,e.val);
+          if(v!=null){e.val=v;save();draw()}
+        }},O.icon('edit')),
+        h('button',{class:'ibtn s',onclick:()=>{entries.splice(i,1);save();draw()}},O.icon('trash'))));
+    });
+    body.append(h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:async()=>{
+      const k=await O.ask(O.tr('Variable name','Имя переменной'),'API_KEY');if(!k)return;
+      const v=await O.ask(k,'');if(v==null)return;
+      entries.push({key:k.trim(),val:v});save();draw();
+    }},O.icon('plus'),O.tr('Add variable','Добавить переменную')));
+    body.append(h('div',{class:'note',style:{marginTop:'10px'}},O.tr('Tip: add .env to .gitignore (Project health can create it).','Совет: добавьте .env в .gitignore («Здоровье проекта» может создать его).')));
+  };
+  load();draw();
+};
+
+// ---- dry-run mode: agent proposes commands without executing ----
+O.dryRun=()=>O.store.get('dryRun',false);
+O.setDryRun=v=>{O.store.set('dryRun',!!v);bus.emit('meta')};
+
+// ---- crash report (local, opt-in share) ----
+window.addEventListener('error',e=>{
+  try{
+    const l=O.store.get('crashLog',[]);
+    l.unshift({at:Date.now(),msg:String(e.message||'').slice(0,300),src:String(e.filename||'').slice(-60)+':'+e.lineno});
+    O.store.set('crashLog',l.slice(0,20));
+  }catch(_){}
+});
+window.addEventListener('unhandledrejection',e=>{
+  try{
+    const l=O.store.get('crashLog',[]);
+    l.unshift({at:Date.now(),msg:String(e.reason&&e.reason.message||e.reason||'').slice(0,300),src:'promise'});
+    O.store.set('crashLog',l.slice(0,20));
+  }catch(_){}
+});
+O.openCrashLog=()=>{
+  const l=O.store.get('crashLog',[]);
+  const body=h('div');
+  if(!l.length)body.append(h('div',{class:'note'},O.tr('No errors recorded','Ошибок не записано')));
+  l.forEach(c=>body.append(h('div',{class:'settings-row'},
+    h('div',{class:'settings-row-icon amber'},O.icon('bug')),
+    h('div',{class:'settings-row-text'},h('b',null,c.msg),h('span',null,c.src+' · '+O.ago(c.at))))));
+  if(l.length)body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{
+    O.native.share('OpenCode Mobile crash report\n'+l.map(c=>new Date(c.at).toISOString()+' '+c.src+' '+c.msg).join('\n'));
+  }},O.icon('share'),O.tr('Share report','Поделиться отчётом')));
+  O.sheet(O.tr('Error log (local)','Журнал ошибок (локально)'),body,{full:true});
+};
+
+// ---- app lock: biometric gate on launch and after background timeout ----
+O.appLock=()=>O.store.get('appLock',false);
+O.lockMinutes=()=>O.store.get('lockMinutes',5);
+let lockOverlay=null,hiddenAt=0;
+function showLock(){
+  if(lockOverlay)return;
+  lockOverlay=h('div',{class:'app-lock'},
+    h('div',{class:'app-lock-box'},
+      O.logo?O.logo(40):O.icon('shield'),
+      h('b',null,'OpenCode Mobile'),
+      h('p',{class:'mut'},O.tr('Locked','Заблокировано')),
+      h('button',{class:'btn pri wide',onclick:unlock},O.icon('shield'),O.tr('Unlock','Разблокировать'))));
+  document.body.append(lockOverlay);
+  unlock();
+}
+function unlock(){
+  const id='u'+Date.now();
+  const off=O.on('appUnlock',d=>{
+    if(!d||d.id!==id)return;
+    if(d.ok){off();if(lockOverlay){lockOverlay.remove();lockOverlay=null}}
+    else if(!d.retry){off();O.toast(d.err||O.tr('Unlock failed','Не удалось разблокировать'),3000)}
+  });
+  O.native.biometricUnlock(id,'OpenCode Mobile');
+}
+O.initAppLock=()=>{
+  if(O.appLock()&&O.native.biometricAvailable())showLock();
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden){hiddenAt=Date.now();return}
+    if(!O.appLock()||!hiddenAt)return;
+    const mins=(Date.now()-hiddenAt)/60000;
+    hiddenAt=0;
+    if(mins>=O.lockMinutes())showLock();
+  });
+};
+O.openAppLockSettings=()=>{
+  const avail=O.native.biometricAvailable();
+  const body=h('div',null,
+    h('div',{class:'note'},avail?O.tr('Uses fingerprint/face or device PIN.','Используется отпечаток/лицо или PIN устройства.'):O.tr('Biometrics unavailable on this device','Биометрия недоступна на этом устройстве')),
+    O.toggleRow('shield',O.tr('Lock the app','Блокировать приложение'),O.tr('Require unlock on launch and after background','Требовать разблокировку при запуске и после фона'),
+      O.appLock(),v=>{
+        if(v&&!avail)return O.toast(O.tr('Set up a screen lock in Android first','Сначала настройте блокировку экрана в Android'),3000);
+        O.store.set('appLock',v);
+      }),
+    h('div',{class:'grp'},O.tr('Lock after background','Блокировать после фона')),
+    h('div',{class:'seg'},[0,1,5,15,60].map(m=>h('button',{class:O.lockMinutes()===m?'on':'',onclick:e=>{
+      O.store.set('lockMinutes',m);
+      [...e.currentTarget.parentNode.children].forEach(b=>b.classList.remove('on'));
+      e.currentTarget.classList.add('on');
+    }},m===0?O.tr('immediately','сразу'):m+' '+O.tr('min','мин')))));
+  O.sheet(O.tr('App lock','Блокировка приложения'),body,{hud:true});
+};
+
+// ---- git timeline + blame ----
+O.openGitTimeline=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Git timeline','История Git'),body,{full:true});
+  body.append(h('div',{class:'note'},O.tr('Loading…','Загрузка…')));
+  setTimeout(()=>{
+    const r=O.native.gitRun(S.dir,'log --pretty=format:%h%x09%an%x09%ad%x09%s --date=short -60');
+    body.textContent='';
+    if(!r||!r.ok||!(r.out||'').trim()){body.append(h('div',{class:'note'},O.tr('No commits or not a git repo','Нет коммитов или это не git-репозиторий')));return}
+    r.out.trim().split('\n').forEach(line=>{
+      const [sha,author,date,...subj]=line.split('\t');
+      body.append(h('button',{class:'settings-row',onclick:()=>{
+        const d=O.native.gitRun(S.dir,'show --stat --patch '+sha);
+        const db=h('div');
+        db.append(O.unifiedEl?O.unifiedEl((d.out||'').slice(0,60000)):h('pre',{class:'term-pre'},(d.out||'').slice(0,60000)));
+        O.sheet(sha+' · '+subj.join(' '),db,{full:true});
+      }},
+        h('div',{class:'settings-row-icon'},O.icon('branch')),
+        h('div',{class:'settings-row-text'},h('b',null,subj.join(' ')),h('span',null,sha+' · '+author+' · '+date))));
+    });
+  },30);
+};
+O.gitBlame=path=>{
+  const rel=O.rel(path);
+  const r=O.native.gitRun(S.dir,'blame --line-porcelain '+JSON.stringify(rel));
+  const body=h('div');
+  if(!r||!r.ok){body.append(h('div',{class:'errbox'},(r&&(r.err||r.out))||'blame failed'))}
+  else{
+    // compact: line no, author, summary
+    const lines=(r.out||'').split('\n');
+    let cur={};let n=0;
+    const pre=[];
+    lines.forEach(l=>{
+      if(/^[0-9a-f]{40} /.test(l)){n++;cur={sha:l.slice(0,8)}}
+      else if(l.startsWith('author '))cur.author=l.slice(7);
+      else if(l.startsWith('summary '))cur.summary=l.slice(8);
+      else if(l.startsWith('\t'))pre.push(String(n).padStart(4)+'  '+(cur.author||'').slice(0,14).padEnd(14)+'  '+l.slice(1));
+    });
+    body.append(h('pre',{class:'term-pre',style:{whiteSpace:'pre',fontSize:'11.5px'}},pre.join('\n')));
+  }
+  O.sheet(O.tr('Blame: ','Blame: ')+O.basename(path),body,{full:true});
+};
+
+// ---- terminal favorites ----
+O.termFavs=()=>O.store.get('termFavs',['git status','ls -la','npm test','python3 --version']);
+O.openTermFavs=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Favorite commands','Избранные команды'),body,{hud:true});
+  const draw=()=>{
+    body.textContent='';
+    O.termFavs().forEach((c,i)=>body.append(h('div',{class:'settings-row'},
+      h('button',{class:'settings-row-text',onclick:()=>{s.close();O.setTab('term');setTimeout(()=>O.termRun&&O.termRun(c),250)}},
+        h('b',{class:'mono'},c)),
+      h('button',{class:'ibtn s',onclick:()=>{O.store.set('termFavs',O.termFavs().filter((_,j)=>j!==i));draw()}},O.icon('trash')))));
+    body.append(h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:async()=>{
+      const c=await O.ask(O.tr('Command','Команда'),'');
+      if(c&&c.trim()){O.store.set('termFavs',O.termFavs().concat([c.trim()]));draw()}
+    }},O.icon('plus'),O.tr('Add command','Добавить команду')));
+  };
+  draw();
+};
+
 // ---- (59) resource monitor ----
 O.openResources=()=>{
   const body=h('div');

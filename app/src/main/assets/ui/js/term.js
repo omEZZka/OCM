@@ -21,6 +21,7 @@ O.termInit=root=>{
   // Lets other modules push a command straight into the shell tab (e.g. a local llama.cpp server).
   O.termRun=cmd=>{setSub('shell');const go=()=>{if(!wsid)return setTimeout(go,300);OC.wsSend(wsid,String(cmd)+'\r')};setTimeout(go,150)};
   const tabs=h('div',{class:'tsub'},subBtns.agent=h('button',{class:'on',onclick:()=>setSub('agent')},'Агент'),subBtns.shell=h('button',{onclick:()=>setSub('shell')},'Shell'),h('span',{class:'grow'}),
+    h('button',{class:'ibtn s',title:O.tr('Favorite commands','Избранные команды'),onclick:()=>O.openTermFavs&&O.openTermFavs()},O.icon('star')),
     h('button',{class:'ibtn s',onclick:restart},O.icon('refresh')));
   root.append(tabs,aPane,sPane);
   bus.on('open',rebuildLog);bus.on('part',(sid,m,p)=>{if(sid===S.sid&&p&&p.type==='tool'&&p.tool==='bash')upsertEntry(p)});

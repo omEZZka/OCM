@@ -63,6 +63,7 @@ window.OC={
  securePut(){return true},secureGet(){return ''},secureRemove(){return true},secureImportLegacy(){return true},
  autoBackupState(){return JSON.stringify({enabled:false,intervalHours:'24',hasPassword:false})},autoBackupConfigure(){return JSON.stringify({ok:true})},autoBackupNow(){return JSON.stringify({ok:true,path:'/sdcard/Download/x.ocmbak',size:1})},
  diagnostic:0,diagnose(){return JSON.stringify({ready:true,port:4096,tcp:true,healthCode:200})},
+ biometricAvailable(){return true},biometricUnlock(id,t){setTimeout(()=>OCEvent('appUnlock',{id,ok:true}),5)},
  resourceStats(){return JSON.stringify({ramTotal:8e9,ramAvail:3e9,jvmUsed:1e8,jvmMax:5e8,appPssKb:120000,cpuPct:17,rootfsBytes:2.1e9,profileBytes:5e7,diskFree:20e9,diskTotal:64e9,serverReady:true})},gitRun(){return JSON.stringify({ok:true,out:''})},
  checkpointCreate(){return JSON.stringify({ok:true,queued:true})},checkpointList(){return JSON.stringify({ok:true,items:[]})},checkpointRestore(){return JSON.stringify({ok:true})},
  startOverlay(){},stopOverlay(){},overlayState(){return JSON.stringify({allowed:false,running:false})},setOverlayState(){},

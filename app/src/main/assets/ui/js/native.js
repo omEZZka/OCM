@@ -139,6 +139,8 @@ O.native={
   ttsVoices:()=>{try{return j(OC.ttsVoices())||[]}catch(_){return[]}},
   diagnose:()=>{try{return j(OC.diagnose())||{}}catch(e){return{error:String(e)}}},
   resourceStats:()=>{try{return j(OC.resourceStats())||{}}catch(e){return{err:String(e)}}},
+  biometricAvailable:()=>{try{return !!OC.biometricAvailable()}catch(_){return false}},
+  biometricUnlock:(id,title)=>{try{OC.biometricUnlock(id,title||'')}catch(_){}},
   // Encrypted key-value store (Keystore-backed). Falls back to localStorage if unavailable.
   securePut:(k,v)=>{try{return !!OC.securePut(k,v)}catch(_){return false}},
   secureGet:k=>{try{return OC.secureGet(k)||''}catch(_){return''}},

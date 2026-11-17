@@ -7,6 +7,17 @@ const S=O.S={dir:'',sessions:[],sid:null,status:{},perms:[],questions:[],todos:{
   providers:[],agents:[],commands:[],cfg:{},agent:'build',model:null,variant:null,mcp:{},lsp:[],branch:'',
   offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false},O.store.get('opts',{}))};
 O.saveOpts=()=>{O.store.set('opts',S.opts);document.documentElement.dataset.theme=S.opts.theme;document.documentElement.style.setProperty('--fs',S.opts.fs+'px')};
+// Auto theme: follow the Android/system dark-mode preference when enabled.
+O.applyAutoTheme=()=>{
+  if(!O.store.get('themeAuto',false))return;
+  try{
+    const dark=matchMedia('(prefers-color-scheme: dark)').matches;
+    const want=dark?(S.opts.theme==='light'?'opencode':S.opts.theme):(S.opts.theme==='light'?'light':'light');
+    document.documentElement.dataset.theme=want;
+  }catch(_){}
+};
+try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>O.applyAutoTheme())}catch(_){}
+setTimeout(()=>{try{O.applyAutoTheme()}catch(_){}},300);
 
 // ---- IndexedDB key/value cache (offline reading) ----
 let dbp;

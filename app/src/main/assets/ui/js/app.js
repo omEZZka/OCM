@@ -61,6 +61,9 @@ function build(){
   const bottomBar=h('div',{id:'bottom-bar'},B.chat,B.memory);
 
   app.append(top,T.banner,main,bottomBar);
+  // focus mode exit affordance (visible only in focus mode)
+  const fx=h('button',{class:'focus-exit',title:O.tr('Exit focus mode','Выйти из фокуса'),onclick:()=>O.setFocusMode(false)},O.icon('x'));
+  document.body.append(fx);
 
   O.filesInit(P.files);
   O.chatInit(P.chat);
@@ -104,6 +107,14 @@ function layout(){
   if(B.chat)B.chat.classList.toggle('active',tab==='chat');
   if(O.termShown)O.termShown();
 }
+
+O.setFocusMode=on=>{
+  document.documentElement.classList.toggle('focus-mode',!!on);
+  O.store.set('focusMode',!!on);
+  if(on)O.toast(O.tr('Focus mode — tap ✕ to exit','Фокус-режим — нажмите ✕ для выхода'),2500);
+};
+O.focusMode=()=>O.store.get('focusMode',false);
+if(O.store.get('focusMode',false))document.documentElement.classList.add('focus-mode');
 
 O.setTab=t=>{
   tab=t;
@@ -250,6 +261,7 @@ O.enter=async opt=>{
   O.iconsReady.then(()=>{O.refreshFiles(false)});
   // (61) first-run tour, once
   if(!O.store.get('tourSeen',false)&&O.openTour)setTimeout(()=>{try{O.openTour()}catch(_){}},1200);
+  if(O.initAppLock)try{O.initAppLock()}catch(_){}
 };
 
 O.reconnect=async()=>{

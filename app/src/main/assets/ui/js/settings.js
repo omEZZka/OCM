@@ -182,8 +182,10 @@ O.openSettings=()=>{
     O.tr('Automatically summarize the session at 85% context usage','Автоматически сжимать сессию при заполнении контекста на 85%'),
     O.autoCompact(),v=>O.setAutoCompact(v));
   const tilesRow=O.listRow('sliders',O.tr('Home tiles','Плитки главного экрана'),O.tr('Choose shortcuts for the empty chat screen','Ярлыки на пустом экране чата'),O.icon('chevR'),()=>O.openHomeTiles());
+  const focusRow=O.toggleRow('eye',O.tr('Focus mode','Фокус-режим'),O.tr('Hide panels — only the conversation','Скрыть панели — только переписка'),O.focusMode(),v=>O.setFocusMode(v));
+  const dryRow=O.toggleRow('shield',O.tr('Dry-run mode','Режим Dry-run'),O.tr('Agent proposes commands and diffs without executing','Агент предлагает команды и diff без выполнения'),O.dryRun(),v=>O.setDryRun(v));
   const tourRow=O.listRow('info',O.tr('Feature tour','Обучающий тур'),O.tr('Show the welcome guide again','Показать приветственный гид ещё раз'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openTour(),200)});
-  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,autoCompactRow,tilesRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
+  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,autoCompactRow,focusRow,dryRow,tilesRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
   panes.main.append(appCard);
 
   // 4. Notifications & Sounds
@@ -223,6 +225,14 @@ O.openSettings=()=>{
   panes.system.append(h('div',{class:'settings-section-title'},O.tr('System & Application','Система и приложение')));
   const sysCard=h('div',{class:'settings-card'});
   sysCard.append(
+    O.listRow('image',O.tr('Media gallery','Галерея медиа'),O.tr('Favorites and search over everything generated','Избранное и поиск по всему созданному'),O.icon('chevR'),()=>O.openMediaGallery()),
+    O.listRow('doc',O.tr('Prompt snippets','Сниппеты промптов'),O.tr('Templates with variables','Шаблоны с переменными'),O.icon('chevR'),()=>O.openSnippets()),
+    O.listRow('shield',O.tr('Project health','Здоровье проекта'),O.tr('Git, secrets, storage, server checks','Проверки git, секретов, места, сервера'),O.icon('chevR'),()=>O.projectHealth()),
+    O.listRow('list',O.tr('Agent audit','Аудит действий агента'),O.tr('Every tool call in this session','Все вызовы инструментов в сессии'),O.icon('chevR'),()=>O.openAgentAudit()),
+    O.listRow('key','.env',O.tr('Masked project secrets','Замаскированные секреты проекта'),O.icon('chevR'),()=>O.openEnvManager()),
+    O.listRow('bug',O.tr('Error log','Журнал ошибок'),O.tr('Local crash reports, share manually','Локальные отчёты, отправка вручную'),O.icon('chevR'),()=>O.openCrashLog()),
+    O.listRow('shield',O.tr('App lock','Блокировка приложения'),O.tr('Biometric unlock on launch and after background','Биометрия при запуске и после фона'),O.icon('chevR'),()=>O.openAppLockSettings()),
+    O.listRow('branch',O.tr('Git timeline','История Git'),O.tr('Commits with diffs','Коммиты с diff'),O.icon('chevR'),()=>O.openGitTimeline()),
     O.listRow('shield',O.tr('Encrypted backup','Шифрованный бэкап'),O.tr('Profile, config and sessions to /sdcard/Download','Профиль, конфиг и сессии в /sdcard/Download'),O.icon('chevR'),()=>openBackup()),
     O.listRow('down',O.tr('Updates','Обновления'),O.tr('OpenCode Mobile & Core Runtime','Приложение и ядро OpenCode (1.x)'),O.icon('chevR'),()=>openUpdates()),
     O.listRow('code',O.tr('Export / Import settings','Экспорт / импорт настроек'),O.tr('Models, agents, themes, fallbacks as JSON','Модели, агенты, темы, резервные модели в JSON'),O.icon('chevR'),()=>openSettingsTransfer()),

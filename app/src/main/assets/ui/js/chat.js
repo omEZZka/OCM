@@ -268,6 +268,7 @@ function ensureMsg(m){
   else keepAnchor(()=>{syncParts(el,m);metaUpdate(el,m)})}
 function buildMsg(m){
   const el=h('div',{class:'msg '+m.info.role,'data-id':m.info.id},h('div',{class:'m-body'}),h('div',{class:'m-meta'}));
+  O.longPress(el,()=>msgMenu(m),520);
   msgEls.set(m.info.id,el);syncParts(el,m);metaUpdate(el,m);return el}
 function showPart(m,p){
   if(m.info.role==='user')return(p.type==='text'&&!p.synthetic&&!p.ignored)||p.type==='file'||p.type==='agent';
@@ -423,8 +424,73 @@ function sched(id,fn){if(timers.has(id))return;timers.set(id,setTimeout(()=>{
 },100))}
 function dropTimer(id){const t=timers.get(id);if(t){clearTimeout(t);timers.delete(id)}}
 
+function msgActions(m){
+  const bar=h('span',{class:'msg-actions'});
+  const txt=()=>msgText(m);
+  const ib=(icon,title,fn)=>h('button',{class:'ibtn s',title,onclick:e=>{e.stopPropagation();fn()}},O.icon(icon));
+  if(m.info.role==='assistant'){
+    bar.append(ib('copy',O.tr('Copy answer','Копировать ответ'),()=>O.native.copy(txt())));
+    bar.append(ib('refresh',O.tr('Regenerate','Перегенерировать'),()=>O.regenerateFrom&&O.regenerateFrom(m)));
+    bar.append(ib('branch',O.tr('Second opinion (another model)','Второе мнение (другая модель)'),()=>O.secondOpinion&&O.secondOpinion(m)));
+    bar.append(ib('share',O.tr('Share','Поделиться'),()=>O.native.share(txt())));
+  }else{
+    bar.append(ib('copy',O.tr('Copy','Копировать'),()=>O.native.copy(txt())));
+    bar.append(ib('edit',O.tr('Edit & resend','Изменить и отправить'),()=>{O.insertText(txt())}));
+    bar.append(ib('at',O.tr('Quote in prompt','Цитировать в запросе'),()=>{O.insertText('> '+txt().split('\n').join('\n> ')+'\n\n')}));
+  }
+  return bar;
+}
+// Regenerate: revert to this assistant message and resend the preceding user prompt.
+O.regenerateFrom=async m=>{
+  const sid=m.info.sessionID||S.sid;
+  const list=O.visibleMsgs(sid);
+  const idx=list.findIndex(x=>x.info.id===m.info.id);
+  let user=null;
+  for(let i=idx-1;i>=0;i--)if(list[i].info.role==='user'){user=list[i];break}
+  if(!user)return O.toast(O.tr('No prompt to repeat','Нет запроса для повтора'),2500);
+  const text=msgText(user);
+  try{await api('POST','/session/'+sid+'/revert',{messageID:m.info.id})}catch(_){}
+  O.chatSendText(text);
+};
+// Second opinion: same question to a different model in a throwaway session, shown side-by-side.
+O.secondOpinion=async m=>{
+  const sid=m.info.sessionID||S.sid;
+  const list=O.visibleMsgs(sid);
+  const idx=list.findIndex(x=>x.info.id===m.info.id);
+  let user=null;
+  for(let i=idx-1;i>=0;i--)if(list[i].info.role==='user'){user=list[i];break}
+  if(!user)return O.toast(O.tr('No question found','Вопрос не найден'),2500);
+  const cur=S.model?S.model.providerID+'/'+S.model.modelID:'';
+  const others=O.allModels().filter(x=>!O.isModelHidden(x.pid+'/'+x.mid)&&(x.pid+'/'+x.mid)!==cur);
+  if(!others.length)return O.toast(O.tr('No other models','Других моделей нет'),2500);
+  O.actions(O.tr('Second opinion — pick a model','Второе мнение — выберите модель'),others.slice(0,12).map(x=>({
+    label:x.name||x.mid,sub:x.pid,icon:'cpu',fn:async()=>{
+      const body=h('div');
+      const s2=O.sheet(O.tr('Second opinion: ','Второе мнение: ')+(x.name||x.mid),body,{full:true});
+      body.append(h('div',{class:'note'},O.tr('Original answer','Исходный ответ')),h('div',{class:'card',style:{padding:'10px',whiteSpace:'pre-wrap',fontSize:'13px',maxHeight:'30vh',overflow:'auto'}},msgText(m)));
+      const out=h('div',{class:'card',style:{padding:'10px',whiteSpace:'pre-wrap',fontSize:'13px',marginTop:'8px'}},O.tr('Asking…','Спрашиваю…'));
+      body.append(h('div',{class:'note',style:{marginTop:'8px'}},O.tr('New answer','Новый ответ')),out);
+      try{
+        const ses=await api('POST','/session',{title:'Opinion · '+x.mid});
+        await api('POST','/session/'+ses.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:{providerID:x.pid,modelID:x.mid},parts:[{type:'text',text:msgText(user)}]},{timeout:30000});
+        const deadline=Date.now()+180000;
+        while(Date.now()<deadline){
+          await new Promise(r=>setTimeout(r,1500));
+          const st=await api('GET','/session/status',null,{timeout:5000}).catch(()=>null);
+          const t0=st&&st[ses.id],t=typeof t0==='string'?t0:(t0&&t0.type);
+          if(!t||t==='idle'||t==='error')break;
+        }
+        const arr=await api('GET','/session/'+ses.id+'/message',null,{timeout:20000});
+        let txt='';for(const mm of arr||[])if(mm.info&&mm.info.role==='assistant'){const t2=(mm.parts||[]).filter(p=>p.type==='text').map(p=>p.text).join('\n');if(t2.trim())txt=t2}
+        out.textContent=txt||O.tr('(no answer)','(нет ответа)');
+        try{await api('DELETE','/session/'+ses.id)}catch(_){}
+      }catch(e){out.textContent=e.message||String(e)}
+    }
+  })));
+};
 function metaUpdate(el,m){
   const meta=el.lastChild;const i=m.info;meta.textContent='';
+  if(i.role==='user'){meta.append(h('span',null,i.time&&i.time.created?(O.mmFmtClock?O.mmFmtClock(i.time.created):new Date(i.time.created).toTimeString().slice(0,8)):''));meta.append(msgActions(m));return}
   if(i.role==='assistant'){
     const t=[];if(i.modelID)t.push(i.modelID);
     if(i.time&&i.time.completed&&i.time.created)t.push(((i.time.completed-i.time.created)/1000).toFixed(1)+'s');
@@ -435,6 +501,7 @@ function metaUpdate(el,m){
     const done=i.time&&i.time.completed?i.time.completed:(i.time&&i.time.end?i.time.end:0);
     if(done)t.push(O.mmFmtClock?O.mmFmtClock(done):new Date(done).toTimeString().slice(0,8));
     meta.append(h('span',null,t.join('  ')));
+    meta.append(msgActions(m));
 
     // Render diff stats line ONLY under messages that actually modified files (+N -M)
     const diffStat=getMsgDiff(m);
@@ -494,9 +561,9 @@ function metaUpdate(el,m){
           fix?h('button',{class:'btn sm pri',onclick:fix.fn},O.icon('zap'),fix.label):null,
           h('button',{class:'btn sm',onclick:()=>O.diagnoseError&&O.diagnoseError(em)},O.icon('bug'),O.tr('Why did it break?','Почему сломалось?'))))) }
     else if(i.error)meta.append(h('span',{class:'warn'},'прервано'))}
-  meta.append(h('span',{class:'grow'}),h('button',{class:'ibtn s',onclick:()=>msgActions(m)},O.icon('dots')))}
+  meta.append(h('span',{class:'grow'}),h('button',{class:'ibtn s',title:O.tr('More actions','Все действия'),onclick:()=>msgMenu(m)},O.icon('dots')))}
 function msgText(m){return m.parts.filter(p=>p.type==='text'&&!p.synthetic).map(p=>p.text).join('\n')}
-function msgActions(m){O.actions(m.info.role==='user'?'Сообщение':'Ответ',[
+function msgMenu(m){O.actions(m.info.role==='user'?'Сообщение':'Ответ',[
   {label:'Копировать текст',icon:'copy',fn:()=>O.native.copy(msgText(m))},
   {label:'Экспорт сессии в Markdown',icon:'doc',fn:()=>exportSessionMd()},
   {label:O.tr('Export session (JSON)','Экспорт сессии (JSON)'),icon:'down',fn:()=>{if(!S.sid)return;const json=O.exportSessionJson(S.sid);O.actions(O.tr('Export session (JSON)','Экспорт сессии (JSON)'),[
@@ -1004,6 +1071,12 @@ const BUILTINS=[
  {n:'resources',d:'Монитор ресурсов',i:'cpu',run:()=>O.openResources()},
  {n:'calls',d:'История звонков',i:'wave',run:()=>O.openCallHistory()},
  {n:'tour',d:'Обучающий тур',i:'info',run:()=>O.openTour()},
+ {n:'focus',d:'Фокус-режим: только чат',i:'eye',run:()=>O.setFocusMode(!O.focusMode())},
+ {n:'snippets',d:'Сниппеты промптов',i:'doc',run:()=>O.openSnippets()},
+ {n:'health',d:'Проверка здоровья проекта',i:'shield',run:()=>O.projectHealth()},
+ {n:'audit',d:'Аудит действий агента',i:'list',run:()=>O.openAgentAudit()},
+ {n:'env',d:'.env менеджер',i:'key',run:()=>O.openEnvManager()},
+ {n:'gallery',d:'Галерея медиа',i:'image',run:()=>O.openMediaGallery()},
  {n:'branches',d:'Ветки диалога',i:'branch',run:()=>O.openBranchTree()},
  {n:'share',d:'Поделиться сессией',i:'share',run:()=>doShare()},
  {n:'unshare',d:'Отключить шаринг',i:'share',run:()=>doUnshare()},
@@ -1097,6 +1170,8 @@ async function onSend(){
   // (10) Answer style: a short instruction rides along as a synthetic part (not shown as user text).
   const styleTxt=O.answerStyleText?O.answerStyleText():'';
   if(styleTxt)parts.push({type:'text',text:'[Стиль ответа: '+styleTxt+']',synthetic:true});
+  // dry-run: propose, never execute
+  if(O.dryRun&&O.dryRun())parts.push({type:'text',text:'[РЕЖИМ DRY-RUN: не выполняй команды и не изменяй файлы. Покажи план действий и точные команды/diff, которые ты бы выполнил, и дождись подтверждения.]',synthetic:true});
   if(text)parts.push({type:'text',text});
   mentions.filter(m=>text.includes(m.tok)).forEach(m=>{const p=JSON.parse(JSON.stringify(m.part));if(p.source&&p.source.text){p.source.text.start=text.indexOf(m.tok);p.source.text.end=p.source.text.start+m.tok.length}parts.push(p)});
   atts.forEach(a=>parts.push(a));

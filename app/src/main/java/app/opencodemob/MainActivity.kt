@@ -1555,6 +1555,41 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
         }
 
+        // ---- app lock: biometric (or device credential) gate ----
+        @JavascriptInterface fun biometricAvailable(): Boolean = try {
+            val bm = getSystemService(android.hardware.biometrics.BiometricManager::class.java)
+            bm.canAuthenticate(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL) ==
+                android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS
+        } catch (_: Exception) { false }
+
+        @JavascriptInterface fun biometricUnlock(id: String, title: String) {
+            runOnUiThread {
+                try {
+                    val exec = androidx.core.content.ContextCompat.getMainExecutor(this@MainActivity)
+                    val prompt = android.hardware.biometrics.BiometricPrompt.Builder(this@MainActivity)
+                        .setTitle(title.ifEmpty { "OpenCode Mobile" })
+                        .setAllowedAuthenticators(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                            android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                        .build()
+                    prompt.authenticate(android.os.CancellationSignal(), exec,
+                        object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                            override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult) {
+                                emit("appUnlock", JSONObject().put("id", id).put("ok", true))
+                            }
+                            override fun onAuthenticationFailed() {
+                                emit("appUnlock", JSONObject().put("id", id).put("ok", false).put("retry", true))
+                            }
+                            override fun onAuthenticationError(code: Int, msg: CharSequence) {
+                                emit("appUnlock", JSONObject().put("id", id).put("ok", false).put("err", msg.toString()))
+                            }
+                        })
+                } catch (e: Exception) {
+                    emit("appUnlock", JSONObject().put("id", id).put("ok", false).put("err", e.message ?: "failed"))
+                }
+            }
+        }
+
         @JavascriptInterface fun mediaServerStart() { runOnUiThread { MediaServer.start(this@MainActivity) { n, d -> emit(n, d) } } }
         @JavascriptInterface fun mediaServerStop() { MediaServer.stop() }
         @JavascriptInterface fun mediaAnswer(id: String, payload: String) {

@@ -114,6 +114,7 @@ function nodeActions(n){const isDir=n.type==='directory',abs=absOf(n);
     isDir?{label:'Новая папка здесь',icon:'folder',fn:()=>newEntry(n.path,true)}:null,
     {label:'Переименовать',icon:'edit',fn:async()=>{const v=await O.ask('Переименование',null,n.name);if(!v||v===n.name)return;const r=O.native.fs('rename',abs,v);r.ok?O.refreshFiles(true):O.toast(r.err||'Не удалось')}},
     {label:'Копировать путь',icon:'copy',fn:()=>O.native.copy(abs)},
+    !isDir?{label:'Git blame',icon:'branch',fn:()=>O.gitBlame&&O.gitBlame(abs)}:null,
     {label:'Удалить',icon:'trash',danger:true,fn:async()=>{if(await O.confirm('Удалить '+n.name+'?','Это действие нельзя отменить.','Удалить',true)){const r=O.native.fs('delete',abs);r.ok?O.refreshFiles(true):O.toast(r.err||'Не удалось')}}}].filter(Boolean))}
 async function newEntry(dirRel,isDir){const name=await O.ask(isDir?'Новая папка':'Новый файл','Название');if(!name)return;
   const base=dirRel&&dirRel!=='.'?S.dir+'/'+dirRel:S.dir;const r=O.native.fs(isDir?'mkdir':'create',base+'/'+name);
@@ -136,7 +137,8 @@ O.openFile=async n=>{const rel=typeof n==='string'?n:n.path,abs=typeof n==='stri
     if(isHtml){
       actions.append(h('button',{class:'ibtn',title:'Веб-предпросмотр',onclick:()=>O.openPreview(abs)},O.icon('globe')));
     }
-    actions.append(h('button',{class:'ibtn',onclick:()=>O.addMention(abs,false)||s.close()},O.icon('at')),h('button',{class:'ibtn',onclick:()=>O.native.copy(text)},O.icon('copy')),
+    actions.append(h('button',{class:'ibtn',title:O.tr('Explain this file','Объяснить этот файл'),onclick:()=>{s.close();O.explainFile(abs)}},O.icon('bulb')),
+      h('button',{class:'ibtn',onclick:()=>O.addMention(abs,false)||s.close()},O.icon('at')),h('button',{class:'ibtn',onclick:()=>O.native.copy(text)},O.icon('copy')),
       h('button',{class:'ibtn',onclick:()=>{editing=!editing;paint()}},O.icon(editing?'check':'edit')));
     if(editing){const ta=h('textarea',{class:'editor',spellcheck:'false'});ta.value=text;body.append(ta,h('div',{class:'cmdline'},h('button',{class:'btn grow',onclick:()=>{editing=false;paint()}},'Отмена'),h('button',{class:'btn pri grow',onclick:()=>{const r=O.native.writeText(abs,ta.value);if(r.ok){text=ta.value;editing=false;O.toastQuiet('Сохранено');paint();O.refreshFiles(false)}else O.toast(r.err||'Не удалось сохранить')}},'Сохранить')))}
     else body.append(O.codeView(text,abs))};
