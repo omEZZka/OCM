@@ -2,6 +2,8 @@
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
+// Parts the user expanded/collapsed by hand: survives re-renders, never auto-collapsed.
+const manualParts=new Set();
 let atts=[],mentions=[],stick=true,revKey='',trail=[];
 // True while WE move scrollTop programmatically: the scroll handler must not interpret our own
 // intermediate positions as "user scrolled away" (that killed pinning mid-inflation and left the
@@ -326,9 +328,19 @@ function fillPart(el,p,m,fresh){
     if(m.info.role==='user'){el.className='part p-user';if(el._t!==p.text){el._t=p.text;el.textContent=p.text}}
     else{el.className='part p-text';if(fresh)render(el);else sched(p.id,()=>render(el))}break;
   case'reasoning':{el.className='part think';
-    if(!el._d){el._d=h('details',null,h('summary',null,'Размышления'),h('div',{class:'p-text'}));el.append(el._d)}
+    if(!el._d){
+      el._d=h('details',null,h('summary',null,'Размышления'),h('div',{class:'p-text'}));
+      // remember the user's manual open/close so re-renders never fight it
+      el._d.addEventListener('toggle',()=>{if(el._d.open)manualParts.add(p.id);else manualParts.delete(p.id)});
+      if(manualParts.has(p.id))el._d.open=true;
+      el.append(el._d);
+    }
     const b=el._d.lastChild;if(fresh)renderR(el,b);else sched(p.id,()=>renderR(el,b));break}
-  case'tool':{const st=p.state||{};if(st.status==='running'&&p.tool==='bash'&&!el._auto){el._auto=1;open.add(p.id)}
+  case'tool':{const st=p.state||{};
+    // A tool the USER opened stays open no matter what: status transitions and re-renders must
+    // never collapse it (the old auto-collapse closed manually opened command output).
+    if(manualParts.has(p.id)){/* user chose the open-state; never touch it */}
+    else if(st.status==='running'&&p.tool==='bash'&&!el._auto){el._auto=1;open.add(p.id)}
     else if(st.status!=='running'&&el._auto===1){el._auto=2;open.delete(p.id)}
     // A finished tool collapses itself: long chats used to stay full of expanded command output.
     // Errors and diffs stay open because they are what the user actually wants to read.
@@ -701,7 +713,7 @@ function toolBody(p){const st=p.state||{},i=st.input||{},md=st.metadata||{};
 function fillTool(el,p){const st=p.state||{},m=toolMeta(p),isOpen=S.opts.details&&open.has(p.id);
   el.className='part tool '+(st.status||'pending')+(isOpen?' open':'');el.textContent='';el._p=p;
   const stat=st.status==='running'||st.status==='pending'?h('span',{class:'spin'}):st.status==='error'?O.icon('alert','err'):O.icon('check','ok');
-  el.append(h('button',{class:'tool-h',onclick:()=>{if(!S.opts.details)return;el._auto=2;open.has(p.id)?open.delete(p.id):open.add(p.id);fillTool(el,el._p)}},
+  el.append(h('button',{class:'tool-h',onclick:()=>{if(!S.opts.details)return;manualParts.add(p.id);el._auto=0;open.has(p.id)?open.delete(p.id):open.add(p.id);fillTool(el,el._p)}},
     O.icon(m.ic),h('span',{class:'t'},m.t),h('span',{class:'sub grow'},m.s||''),stat,S.opts.details?O.icon('chevR','chev'):null));
   if(isOpen)el.append(h('div',{class:'tool-b'},toolBody(p)))}
 async function openChild(sid){try{if(!O.child(sid)){const s=await api('GET','/session/'+sid);(S.childSessions=S.childSessions||{})[sid]=s}}catch{}trail.push(S.sid);await O.openSession(sid);bus.emit('session')}

@@ -314,6 +314,23 @@ try:
     # second opinion + regenerate helpers exist
     chk('regenerate helper',pg.evaluate("typeof OCM.regenerateFrom")=='function')
     chk('second opinion helper',pg.evaluate("typeof OCM.secondOpinion")=='function')
+    # ---- manually opened tool output must never auto-collapse ----
+    pg.evaluate("""() => {
+      // open the first tool by hand while it is still 'completed' in the mock
+      const t=document.querySelector('.tool');
+      if(t)t.querySelector('.tool-h').click();
+    }""")
+    pg.wait_for_timeout(200)
+    opened=pg.evaluate("document.querySelector('.tool').classList.contains('open')")
+    chk('tool opens on tap',opened)
+    # re-render the same part (simulates a status update / resync)
+    pg.evaluate("""() => {
+      const sid=OCM.S.sid;const list=OCM.visibleMsgs(sid);
+      for(const m of list)for(const p of m.parts)if(p.type==='tool'){OCM.bus.emit('part',sid,m,p);break}
+    }""")
+    pg.wait_for_timeout(300)
+    still=pg.evaluate("document.querySelector('.tool').classList.contains('open')")
+    chk('manually opened tool stays open after update',still)
     # ---- focus ring must not overflow the composer ----
     pg.click('#composer textarea')
     pg.wait_for_timeout(200)
