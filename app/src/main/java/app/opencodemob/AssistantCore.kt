@@ -53,10 +53,43 @@ object AssistantCore {
     private fun launchContext(fallback: Context): Context =
         PhoneAccessibilityService.instance ?: fallback
 
+    private val ABBREV = mapOf(
+        "тг" to "telegram", "tg" to "telegram", "телега" to "telegram", "теле" to "telegram", "tlgr" to "telegram", "tlg" to "telegram",
+        "инста" to "instagram", "insta" to "instagram", "инст" to "instagram", "inst" to "instagram", "иг" to "instagram",
+        "майн" to "minecraft", "майнкрафт" to "minecraft", "mc" to "minecraft", "майнкр" to "minecraft",
+        "ватс" to "whatsapp", "ватсап" to "whatsapp", "вацап" to "whatsapp", "whats" to "whatsapp", "wa" to "whatsapp", "васап" to "whatsapp",
+        "ютуб" to "youtube", "ют" to "youtube", "yt" to "youtube", "you" to "youtube",
+        "вк" to "vk", "вконтакте" to "vk",
+        "хром" to "chrome", "браузер" to "chrome",
+        "гугл" to "google", "гуг" to "google",
+        "тикток" to "tiktok", "тик" to "tiktok", "tt" to "tiktok", "tik" to "tiktok",
+        "спотифай" to "spotify", "спот" to "spotify", "spot" to "spotify",
+        "дискорд" to "discord", "дс" to "discord", "disc" to "discord", "ds" to "discord",
+        "твиттер" to "twitter", "тви" to "twitter",
+        "фейсбук" to "facebook", "фб" to "facebook", "fb" to "facebook", "face" to "facebook",
+        "реддит" to "reddit", "ред" to "reddit",
+        "пинтерест" to "pinterest", "пин" to "pinterest",
+        "снапчат" to "snapchat", "снап" to "snapchat", "snap" to "snapchat",
+        "зум" to "zoom", "слак" to "slack", "нотион" to "notion", "фигма" to "figma",
+        "гитхаб" to "github", "гит" to "github", "gh" to "github",
+        "камера" to "camera", "cam" to "camera", "галерея" to "photos", "фото" to "photos",
+        "настройки" to "settings", "сет" to "settings", "калькулятор" to "calculator", "кальк" to "calculator", "calc" to "calculator",
+        "часы" to "clock", "будильник" to "clock", "карты" to "maps", "почта" to "gmail", "мейл" to "gmail",
+        "музыка" to "music", "файлы" to "files", "телефон" to "phone", "звонки" to "phone",
+        "сообщения" to "messages", "смс" to "messages", "sms" to "messages",
+        "плей" to "play market", "маркет" to "play market", "драйв" to "drive",
+        "сбер" to "sberbank", "сбербанк" to "sberbank", "тинькофф" to "tinkoff", "тиньк" to "tinkoff", "тбанк" to "tbank",
+        "яндекс" to "yandex", "ян" to "yandex", "такси" to "yandex go",
+        "озон" to "ozon", "вб" to "wildberries", "валдберис" to "wildberries", "авито" to "avito"
+    )
+
     /** Result of an app launch attempt: ok + human-readable reason. */
     fun openAppDetailed(c: Context, target: String): JSONObject {
-        val t = target.trim()
-        if (t.isEmpty()) return JSONObject().put("ok", false).put("err", "пустое имя")
+        val t0 = target.trim()
+        if (t0.isEmpty()) return JSONObject().put("ok", false).put("err", "пустое имя")
+        // expand abbreviations: тг -> telegram, майн -> minecraft, инста -> instagram
+        val key0 = t0.lowercase().replace('ё', 'е').replace(Regex("[\\s._-]"), "")
+        val t = ABBREV[key0] ?: t0
         val ctx = launchContext(c)
         val pm = ctx.packageManager
         val lower = t.lowercase().replace('ё', 'е')
@@ -134,16 +167,18 @@ object AssistantCore {
                 val label = try { ri.loadLabel(pm).toString() } catch (_: Exception) { pkg }
                 val ln = norm(label)
                 val lt = translit(ln)
+                val lc = translit(ln) // cyr form of a latin label
                 val score = when {
                     ln == targetN -> 100
-                    ln == targetT || lt == targetN || lt == targetT -> 75
-                    ln.startsWith(targetN) || targetN.startsWith(ln) -> 80
-                    lt.startsWith(targetT) || targetT.startsWith(lt) -> 55
-                    ln.contains(targetN) || targetN.contains(ln) -> 60
-                    lt.contains(targetT) || targetT.contains(lt) -> 40
+                    ln == targetT || lt == targetN || lt == targetT || lc == targetN -> 80
+                    ln.startsWith(targetN) || targetN.startsWith(ln) -> 85
+                    lt.startsWith(targetT) || targetT.startsWith(lt) || lc.startsWith(targetN) || targetN.startsWith(lc) -> 70
+                    ln.contains(targetN) || targetN.contains(ln) -> 65
+                    lt.contains(targetT) || targetT.contains(lt) || lc.contains(targetN) || targetN.contains(lc) -> 55
+                    ln.split(Regex("\\s+")).any { it.startsWith(targetN) || translit(it).startsWith(targetT) } -> 60
                     else -> 0
                 }
-                if (score >= 40 && (best == null || score > best!!.second)) best = pkg to score
+                if (score >= 50 && (best == null || score > best!!.second)) best = pkg to score
             }
             if (best != null && tryPkg(best!!.first)) return JSONObject().put("ok", true).put("package", best!!.first)
         } catch (_: Exception) {}

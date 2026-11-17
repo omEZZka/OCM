@@ -144,24 +144,80 @@ O.translit=s=>{
 };
 // normalize an app name for matching: lowercase, ё->е, strip spaces/dots, translit both ways
 O.appKey=s=>String(s||'').toLowerCase().replace(/ё/g,'е').replace(/[\s._-]+/g,'');
+// common abbreviations / slang -> canonical names (ru + en)
+const ABBREV={
+  'тг':'telegram','tg':'telegram','телега':'telegram','теле':'telegram','телеграм':'telegram','tlgr':'telegram','tlg':'telegram',
+  'инста':'instagram','insta':'instagram','инст':'instagram','inst':'instagram','иг':'instagram',
+  'майн':'minecraft','майнкрафт':'minecraft','mc':'minecraft','майнкр':'minecraft',
+  'ватс':'whatsapp','ватсап':'whatsapp','вацап':'whatsapp','whats':'whatsapp','wa':'whatsapp','васап':'whatsapp',
+  'ютуб':'youtube','ют':'youtube','yt':'youtube','you':'youtube',
+  'вк':'vk','вконтакте':'vk','vk':'vk',
+  'хром':'chrome','chrome':'chrome','браузер':'chrome',
+  'гугл':'google','google':'google','гуг':'google',
+  'тикток':'tiktok','тик':'tiktok','tt':'tiktok','tik':'tiktok',
+  'спотифай':'spotify','спот':'spotify','spot':'spotify',
+  'дискорд':'discord','дс':'discord','disc':'discord','ds':'discord',
+  'твиттер':'twitter','тви':'twitter','x':'twitter',
+  'фейсбук':'facebook','фб':'facebook','fb':'facebook','face':'facebook',
+  'реддит':'reddit','ред':'reddit',
+  'пинтерест':'pinterest','пин':'pinterest',
+  'линкедин':'linkedin','линк':'linkedin',
+  'снапчат':'snapchat','снап':'snapchat','snap':'snapchat',
+  'тимс':'teams','teams':'teams',
+  'зум':'zoom','zoom':'zoom',
+  'слак':'slack','slack':'slack',
+  'нотион':'notion','notion':'notion',
+  'фигма':'figma','figma':'figma',
+  'гитхаб':'github','гит':'github','gh':'github',
+  'камера':'camera','cam':'camera',
+  'галерея':'photos','фото':'photos',
+  'настройки':'settings','сет':'settings',
+  'калькулятор':'calculator','кальк':'calculator','calc':'calculator',
+  'часы':'clock','будильник':'clock',
+  'карты':'maps','maps':'maps',
+  'почта':'gmail','gmail':'gmail','мейл':'gmail',
+  'музыка':'music','music':'music',
+  'файлы':'files','files':'files',
+  'телефон':'phone','звонки':'phone','dialer':'phone',
+  'сообщения':'messages','смс':'messages','sms':'messages',
+  'плей':'play market','маркет':'play market','play':'play market',
+  'драйв':'drive','drive':'drive',
+  'киви':'qiwi','qiwi':'qiwi',
+  'сбер':'sberbank','сбербанк':'sberbank',
+  'тинькофф':'tinkoff','тиньк':'tinkoff','тбанк':'tbank',
+  'яндекс':'yandex','ян':'yandex',
+  'го':'yandex go','такси':'yandex go',
+  'озон':'ozon','ozon':'ozon',
+  'вб':'wildberries','wildberries':'wildberries','валдберис':'wildberries',
+  'авито':'avito','avito':'avito'
+};
 O.appMatch=(query,labels)=>{
-  const q=O.appKey(query);
+  let q=O.appKey(query);
   if(!q)return null;
+  // abbreviation expansion first
+  if(ABBREV[q])q=O.appKey(ABBREV[q]);
   const ql=O.translit(q),qc=O.translit(query.toLowerCase().replace(/ё/g,'е'));
   let best=null,bestScore=0;
   for(const l of labels){
     const k=O.appKey(l);
     const kl=O.translit(k);
+    const kc=O.translit(k); // cyr form of latin label
     let score=0;
     if(k===q)score=100;
-    else if(k.startsWith(q)||q.startsWith(k))score=80;
-    else if(k.includes(q)||q.includes(k))score=60;
-    else if(kl===ql||kl===qc||k===qc)score=75;
-    else if(kl.startsWith(ql)||ql.startsWith(kl))score=55;
-    else if(kl.includes(ql)||ql.includes(kl))score=40;
+    else if(k.startsWith(q)||q.startsWith(k))score=85;
+    else if(k.includes(q)||q.includes(k))score=65;
+    // cross-script: cyr query vs latin label and vice versa
+    else if(kl===ql||kl===qc||kc===q||k===ql)score=80;
+    else if(kl.startsWith(ql)||ql.startsWith(kl)||kc.startsWith(q)||q.startsWith(kc))score=70;
+    else if(kl.includes(ql)||ql.includes(kl)||kc.includes(q)||q.includes(kc))score=55;
+    // partial prefix of any word in the label ("майн" -> "Minecraft" via translit prefix)
+    else{
+      const words=k.split(/\s+/);
+      if(words.some(w=>w.startsWith(q)||O.translit(w).startsWith(ql)))score=60;
+    }
     if(score>bestScore){bestScore=score;best=l}
   }
-  return bestScore>=40?best:null;
+  return bestScore>=50?best:null;
 };
 
 const APP_ALIASES={

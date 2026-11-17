@@ -393,6 +393,24 @@ try:
     chk('fuzzy match cyr query',tr['m']=='Telegram')
     chk('fuzzy match lat query',tr['m2']=='Телеграм')
     chk('fuzzy match ватсап',tr['m3']=='WhatsApp')
+    ab=pg.evaluate("""() => ({
+      tg:OCM.appMatch('тг',['Telegram','WhatsApp']),
+      mine:OCM.appMatch('майн',['Minecraft','Telegram']),
+      insta:OCM.appMatch('инста',['Instagram','VK']),
+      tele:OCM.appMatch('Теле',['Telegram','Teams']),
+      wa:OCM.appMatch('wa',['WhatsApp','Wallet']),
+      yt:OCM.appMatch('ют',['YouTube','Yandex']),
+      ds:OCM.appMatch('дс',['Discord','Settings']),
+      partial:OCM.appMatch(' Whats',['WhatsApp','Wallet'])
+    })""")
+    chk('abbrev тг',ab['tg']=='Telegram')
+    chk('abbrev майн',ab['mine']=='Minecraft')
+    chk('abbrev инста',ab['insta']=='Instagram')
+    chk('partial Теле',ab['tele']=='Telegram')
+    chk('abbrev wa',ab['wa']=='WhatsApp')
+    chk('abbrev ют',ab['yt']=='YouTube')
+    chk('abbrev дс',ab['ds']=='Discord')
+    chk('partial Whats',ab['partial']=='WhatsApp')
     bi=pg.evaluate("""() => {
       const c=t=>(OCM.parseAssistant(t)||[]).map(s=>s.cmd);
       return {shot:c('take a screenshot'),home:c('go home'),torch:c('turn on flashlight'),open:c('open telegram')};
