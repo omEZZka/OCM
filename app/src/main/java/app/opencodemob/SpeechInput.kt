@@ -165,10 +165,14 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-            // Long dictation: do not cut the phrase at the first short pause.
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2200L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2200L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1200L)
+            // Assistant/dictation (oneShot): end right after the phrase — short silence window.
+            // Long call dictation keeps the generous window so mid-sentence pauses survive.
+            val completeSilence = if (oneShot) 800L else 2200L
+            val possibleSilence = if (oneShot) 650L else 2200L
+            val minLen = if (oneShot) 500L else 1200L
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, completeSilence)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, possibleSilence)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, minLen)
             // Technical vocabulary must survive: no censoring of "bad" words in file names/commands.
             putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, mode == "offline")

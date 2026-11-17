@@ -69,7 +69,7 @@ window.OC={
  phoneCommand(cmd,args){(window.__phoneCalls=window.__phoneCalls||[]).push({cmd,args:JSON.parse(args||'[]')});return JSON.stringify({ok:true,cmd})},
  phoneCommandAsync(id,cmd,args){(window.__phoneCalls=window.__phoneCalls||[]).push({cmd,args:JSON.parse(args||'[]'),async:true});setTimeout(()=>OCEvent('phoneResult',{id,result:JSON.stringify({ok:true,cmd,path:'/sdcard/Download/OCM/screens/mock.png'})}),5)},
  assistantResult(t,ok){window.__assistantResult={t,ok}},assistantStatus(t){window.__assistantStatus=t},assistantPartial(t){window.__assistantPartial=t},
- phoneServerStart(){},phoneServerStop(){},phoneAnswer(id,p){(window.__phoneAnswers=window.__phoneAnswers||[]).push({id,p})},biometricUnlock(id,t){setTimeout(()=>OCEvent('appUnlock',{id,ok:true}),5)},
+ phoneServerStart(){},phoneServerStop(){},phoneAnswer(id,p){(window.__phoneAnswers=window.__phoneAnswers||[]).push({id,p})},setPref(k,v){(window.__prefs=window.__prefs||{})[k]=v},biometricUnlock(id,t){setTimeout(()=>OCEvent('appUnlock',{id,ok:true}),5)},
  resourceStats(){return JSON.stringify({ramTotal:8e9,ramAvail:3e9,jvmUsed:1e8,jvmMax:5e8,appPssKb:120000,cpuPct:17,rootfsBytes:2.1e9,profileBytes:5e7,diskFree:20e9,diskTotal:64e9,serverReady:true})},gitRun(){return JSON.stringify({ok:true,out:''})},
  checkpointCreate(){return JSON.stringify({ok:true,queued:true})},checkpointList(){return JSON.stringify({ok:true,items:[]})},checkpointRestore(){return JSON.stringify({ok:true})},
  startOverlay(){},stopOverlay(){},overlayState(){return JSON.stringify({allowed:false,running:false})},setOverlayState(){},

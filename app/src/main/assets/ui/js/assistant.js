@@ -69,7 +69,11 @@ const MACRO_DEFAULTS=[
   ]}
 ];
 O.macros=()=>{const l=O.store.get('macros',null);return Array.isArray(l)?l:MACRO_DEFAULTS};
-O.saveMacros=l=>O.store.set('macros',l||[]);
+O.saveMacros=l=>{
+  O.store.set('macros',l||[]);
+  // mirror into Prefs so the native overlay executor (AssistantCore) sees the same macros
+  try{if(window.OC&&OC.setPref)OC.setPref('assistant_macros',JSON.stringify(l||[]))}catch(_){}
+};
 O.macroByName=name=>{
   const q=String(name||'').trim().toLowerCase();
   return O.macros().find(m=>m.name.toLowerCase()===q||m.name.toLowerCase().includes(q))||null;
@@ -248,11 +252,17 @@ O.on('assistantMic',d=>{
     if(A.overlayOff){A.overlayOff();A.overlayOff=null}
   }
 });
-// overlay text submit
+// overlay text submit (legacy path; the overlay now executes natively, this is a fallback)
 O.on('assistantQuery',async d=>{
   if(!d||!d.text)return;
   O.phone.setStatus('Выполняю…');
   await O.runAssistant(d.text);
+});
+// overlay forwarded an unknown phrase → send it to the agent chat
+O.on('assistantAgent',d=>{
+  if(!d||!d.text)return;
+  O.setTab('chat');
+  if(O.chatSendText)O.chatSendText(d.text);
 });
 
 // ---------- agent → phone (PhoneServer) ----------

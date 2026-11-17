@@ -310,6 +310,11 @@ class MainActivity : ComponentActivity() {
             ui.postDelayed({ AssistantOverlayService.show(this@MainActivity) }, 200)
             return
         }
+        if (act == "assistant_agent") {
+            // overlay forwarded a non-phone phrase to the agent: put it in the composer and send
+            ui.postDelayed({ emit("assistantAgent", JSONObject().put("text", target)) }, 400)
+            return
+        }
         if (act == "voice") {
             ui.postDelayed({
                 try {
@@ -1631,7 +1636,7 @@ class MainActivity : ComponentActivity() {
             return try {
                 when (cmd.lowercase()) {
                     "status" -> PhoneControl.status(this@MainActivity).toString()
-                    "open", "app" -> JSONObject().put("ok", launchApp(a(0))).toString()
+                    "open", "app" -> { val ok = AssistantCore.openApp(this@MainActivity, a(0)); JSONObject().put("ok", ok).put("err", if (ok) "" else "приложение не найдено").toString() }
                     "torch", "flashlight" -> JSONObject().put("ok", PhoneControl.flashlight(this@MainActivity, a(0) != "off")).toString()
                     "dnd" -> PhoneControl.dnd(this@MainActivity, a(0)).toString()
                     "volume" -> PhoneControl.volume(this@MainActivity, a(0), a(1).toIntOrNull()).toString()
@@ -1649,6 +1654,7 @@ class MainActivity : ComponentActivity() {
                         if (svc == null) JSONObject().put("ok", false).put("err", "accessibility_off").toString()
                         else JSONObject().put("ok", svc.global("screenshot")).toString()
                     }
+                    "macro" -> AssistantCore.runStep(this@MainActivity, JSONObject().put("cmd", "macro").put("args", args)).toString()
                     else -> JSONObject().put("ok", false).put("err", "unknown cmd").toString()
                 }
             } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
@@ -1689,6 +1695,11 @@ class MainActivity : ComponentActivity() {
         }
         @JavascriptInterface fun assistantPartial(text: String) {
             AssistantOverlayService.instance?.setPartial(text)
+        }
+
+        /** Generic pref write for the assistant (macros shared with the native overlay). */
+        @JavascriptInterface fun setPref(key: String, value: String) {
+            if (key == "assistant_macros" || key.startsWith("assistant.")) Prefs.put(this@MainActivity, key, value)
         }
 
         @JavascriptInterface fun phoneServerStart() { runOnUiThread { PhoneServer.start(this@MainActivity) { n, d -> emit(n, d) } } }
