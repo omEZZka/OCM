@@ -20,4 +20,5 @@
     <string name="overlay_new">Новый</string>
     <string name="overlay_only_busy">Только во время работы</string>
     <string name="notif_mm_title">Мультимодальный агент</string>
+    <string name="accessibility_desc">Позволяет ассистенту OpenCode управлять телефоном без ADB: нажимать кнопки, открывать приложения, делать скриншоты и выполнять ваши команды и шаблоны. Включайте, только если доверяете приложению.</string>
 </resources>

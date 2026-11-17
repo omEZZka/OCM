@@ -353,6 +353,33 @@ try:
     chk('skeleton renders',pg.locator('.chat-skeleton .skeleton').count()>=4)
     pg.evaluate("OCM.chatSkeletonOff()")
     chk('skeleton removed',pg.locator('.chat-skeleton').count()==0)
+    # ---- phone assistant ----
+    asres=pg.evaluate("""() => {
+      const chain=OCM.parseAssistant('открой телеграм и в нем открой чат Миша');
+      return {chain:chain.map(s=>s.cmd),name:chain[1].args[0],
+        shot:OCM.parseAssistant('сделай скриншот')[0].cmd,
+        torch:OCM.parseAssistant('выключи фонарик')[0].args[0],
+        macro:OCM.parseAssistant('игровой режим')[0].cmd,
+        unknown:OCM.parseAssistant('объясни квантовую физику')};
+    }""")
+    chk('assistant chain parse',asres['chain']==['open','text'])
+    chk('assistant keeps name case',asres['name']=='Миша')
+    chk('assistant screenshot',asres['shot']=='shot')
+    chk('assistant torch off',asres['torch']=='off')
+    chk('assistant macro by name',asres['macro']=='macro')
+    chk('assistant unknown goes to agent',asres['unknown'] is None)
+    pg.evaluate("OCM.openAssistant()")
+    pg.wait_for_selector('.sheet.full:has-text("Ассистент телефона")')
+    at=pg.inner_text('.sheet.full')
+    chk('assistant sheet quick actions','Скриншот' in at and 'Фонарик' in at)
+    chk('assistant macros listed','Игровой режим' in at)
+    pg.evaluate("OCM.back()")
+    pg.evaluate("OCM.openAssistantSettings()")
+    pg.wait_for_selector('.sheet.full:has-text("Настройки ассистента")')
+    ast=pg.inner_text('.sheet.full')
+    chk('assistant settings wake phrase','Кодовая фраза' in ast)
+    chk('assistant settings permissions','Accessibility' in ast)
+    pg.evaluate("OCM.back()")
     # ---- settings ----
     pg.evaluate("OCM.openSettings()")
     pg.wait_for_selector('.sheet .settings-tabs')
@@ -368,6 +395,7 @@ try:
     chk('settings: key check row','Проверить все ключи' in st)
     chk('settings: quick chips',pg.locator('.settings-quick-chip').count()>=5)
     chk('settings: voice control near top','Настройки голосового управления' in st)
+    chk('settings: phone assistant row','Ассистент телефона' in st)
     pg.fill('.settings-search','бэкап')
     pg.wait_for_timeout(200)
     sf=pg.inner_text('.sheet')

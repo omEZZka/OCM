@@ -115,7 +115,9 @@ O.openSettings=()=>{
     O.listRow('mic',O.tr('Voice input & calls','Голосовой ввод и звонки'),O.tr('Dictation or a live call — choose on the microphone button','Диктовка или живой звонок — выбор на кнопке микрофона'),
       O.icon(O.callActive&&O.callActive()?'wave':'chevR'),()=>{s.close();setTimeout(()=>{O.onMicChoice&&O.onMicChoice()},200)}),
     O.listRow('list',O.tr('Call history','История звонков'),O.tr('Transcripts, continue by text','Транскрипты, продолжение текстом'),
-      O.icon('chevR'),()=>{s.close();setTimeout(()=>{O.openCallHistory&&O.openCallHistory()},200)})));
+      O.icon('chevR'),()=>{s.close();setTimeout(()=>{O.openCallHistory&&O.openCallHistory()},200)}),
+    O.listRow('bot',O.tr('Phone assistant','Ассистент телефона'),O.tr('Wake phrase, macros, full phone control without ADB','Кодовая фраза, шаблоны, управление телефоном без ADB'),
+      O.icon('chevR'),()=>{s.close();setTimeout(()=>{O.openAssistantSettings&&O.openAssistantSettings()},200)})));
 
   // 2. Models & Providers
   panes.main.append(h('div',{class:'settings-section-title'},O.tr('Models & Providers','Модели и провайдеры')));

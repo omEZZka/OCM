@@ -63,6 +63,7 @@ O.openSessions=()=>{
     tile('folder',O.tr('Projects','Проекты'),()=>O.openProjects()),
     tile('search',O.tr('Search','Поиск'),()=>O.openGlobalSearch()),
     tile('image',O.tr('Photo','Фото'),()=>O.openMedia&&O.openMedia('image')),
+    tile('mic',O.tr('Assistant','Ассистент'),()=>O.openAssistant()),
     tile('sliders',O.tr('Settings','Настройки'),()=>O.openSettings()));
   const moreBox=h('div',{class:'drawer-more hide'});
   const navItem=(ic,label,fn)=>h('button',{class:'drawer-nav-item',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
@@ -72,6 +73,8 @@ O.openSessions=()=>{
     navItem('note',O.tr('Music chat','Чат: Музыка'),()=>O.openMedia&&O.openMedia('music')),
     navItem('list',O.tr('Media history','История медиа'),()=>O.openMedia&&O.openMedia('history')),
     navItem('mic',O.tr('Voice settings','Настройки голоса'),()=>O.openCallSettings&&O.openCallSettings()),
+    navItem('bot',O.tr('Assistant settings','Настройки ассистента'),()=>O.openAssistantSettings&&O.openAssistantSettings()),
+    navItem('zap',O.tr('Phone macros','Шаблоны телефона'),()=>O.openMacroEditor&&O.openMacroEditor()),
     navItem('down',O.tr('Import session','Импорт сессии'),()=>importSessionFile()),
     navItem('cpu',O.tr('Resources','Ресурсы'),()=>O.openResources()),
     navItem('refresh',O.tr('Restart server','Перезапуск сервера'),()=>restartApp()));

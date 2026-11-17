@@ -236,6 +236,7 @@ class MainActivity : ComponentActivity() {
             web.evaluateJavascript("(window.OCM&&OCM.back&&OCM.back())===true") { r -> if (r != "true") moveTaskToBack(true) }
         }
         watch()
+        bindAssistant()
         handleWidgetIntent(intent)
         handleShareIntent(intent)
     }
@@ -305,6 +306,10 @@ class MainActivity : ComponentActivity() {
         val act = intent?.getStringExtra("widget_action") ?: return
         val target = intent.getStringExtra("widget_target") ?: ""
         val sessionId = intent.getStringExtra("widget_session") ?: ""
+        if (act == "assistant") {
+            ui.postDelayed({ AssistantOverlayService.show(this@MainActivity) }, 200)
+            return
+        }
         if (act == "voice") {
             ui.postDelayed({
                 try {
@@ -343,6 +348,12 @@ class MainActivity : ComponentActivity() {
     private fun startOverlay() {
         Prefs.putFlag(this, "overlay_enabled", true)
         OverlayService.start(this)
+    }
+
+    /** The assistant overlay forwards mic/queries through the same event bus as the main UI. */
+    private fun bindAssistant() {
+        AssistantOverlayService.instance?.emit = { n, d -> emit(n, d) }
+        ui.postDelayed({ bindAssistant() }, 1500)
     }
 
     private fun unlockHighRefreshRate() {
@@ -1588,6 +1599,102 @@ class MainActivity : ComponentActivity() {
                     emit("appUnlock", JSONObject().put("id", id).put("ok", false).put("err", e.message ?: "failed"))
                 }
             }
+        }
+
+        // ================= PHONE ASSISTANT (no ADB) =================
+
+        @JavascriptInterface fun phoneStatus(): String = PhoneControl.status(this@MainActivity).toString()
+
+        @JavascriptInterface fun phoneEnableAccessibility() {
+            runOnUiThread { PhoneControl.openSettingsPage(this@MainActivity, "accessibility") }
+        }
+
+        @JavascriptInterface fun phoneGrantOverlay() {
+            runOnUiThread {
+                if (!Settings.canDrawOverlays(this@MainActivity))
+                    overlayPerm.launch(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            }
+        }
+
+        @JavascriptInterface fun phoneGrantDnd() {
+            runOnUiThread { PhoneControl.openSettingsPage(this@MainActivity, "dnd") }
+        }
+
+        @JavascriptInterface fun phoneGrantWriteSettings() {
+            runOnUiThread { PhoneControl.openSettingsPage(this@MainActivity, "write_settings") }
+        }
+
+        /** Executes one phone command synchronously where possible; gestures run on a worker. */
+        @JavascriptInterface fun phoneCommand(cmd: String, argsJson: String): String {
+            val args = try { org.json.JSONArray(argsJson) } catch (_: Exception) { org.json.JSONArray() }
+            fun a(i: Int) = args.optString(i, "")
+            return try {
+                when (cmd.lowercase()) {
+                    "status" -> PhoneControl.status(this@MainActivity).toString()
+                    "open", "app" -> JSONObject().put("ok", launchApp(a(0))).toString()
+                    "torch", "flashlight" -> JSONObject().put("ok", PhoneControl.flashlight(this@MainActivity, a(0) != "off")).toString()
+                    "dnd" -> PhoneControl.dnd(this@MainActivity, a(0)).toString()
+                    "volume" -> PhoneControl.volume(this@MainActivity, a(0), a(1).toIntOrNull()).toString()
+                    "brightness" -> PhoneControl.brightness(this@MainActivity, a(0).toIntOrNull()).toString()
+                    "settings" -> JSONObject().put("ok", PhoneControl.openSettingsPage(this@MainActivity, a(0))).toString()
+                    "assistant" -> { runOnUiThread { AssistantOverlayService.show(this@MainActivity) }; JSONObject().put("ok", true).toString() }
+                    "assistant_hide" -> { runOnUiThread { AssistantOverlayService.hide(this@MainActivity) }; JSONObject().put("ok", true).toString() }
+                    "back", "home", "recents", "notifications", "quicksettings", "power", "lock", "split" -> {
+                        val svc = PhoneAccessibilityService.instance
+                        if (svc == null) JSONObject().put("ok", false).put("err", "accessibility_off").toString()
+                        else JSONObject().put("ok", svc.global(cmd)).toString()
+                    }
+                    "screenshot_system" -> {
+                        val svc = PhoneAccessibilityService.instance
+                        if (svc == null) JSONObject().put("ok", false).put("err", "accessibility_off").toString()
+                        else JSONObject().put("ok", svc.global("screenshot")).toString()
+                    }
+                    else -> JSONObject().put("ok", false).put("err", "unknown cmd").toString()
+                }
+            } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
+        }
+
+        /** Async gesture/screenshot/text commands (they block on gesture completion). */
+        @JavascriptInterface fun phoneCommandAsync(id: String, cmd: String, argsJson: String) {
+            thread {
+                val args = try { org.json.JSONArray(argsJson) } catch (_: Exception) { org.json.JSONArray() }
+                fun a(i: Int) = args.optString(i, "")
+                val svc = PhoneAccessibilityService.instance
+                val result = try {
+                    if (svc == null && cmd !in listOf("shot", "screenshot")) JSONObject().put("ok", false).put("err", "accessibility_off").toString()
+                    else when (cmd.lowercase()) {
+                        "tap" -> JSONObject().put("ok", svc!!.tap(a(0).toFloat(), a(1).toFloat())).toString()
+                        "longpress" -> JSONObject().put("ok", svc!!.longPress(a(0).toFloat(), a(1).toFloat(), a(2).toLongOrNull() ?: 650)).toString()
+                        "swipe" -> JSONObject().put("ok", svc!!.swipe(a(0).toFloat(), a(1).toFloat(), a(2).toFloat(), a(3).toFloat(), a(4).toLongOrNull() ?: 300)).toString()
+                        "text", "taptext" -> JSONObject().put("ok", svc!!.tapText(a(0), a(1) == "exact", a(2).toIntOrNull() ?: 0)).toString()
+                        "type" -> JSONObject().put("ok", svc!!.typeText(a(0))).toString()
+                        "screen" -> svc!!.screenText().put("ok", true).toString()
+                        "shot", "screenshot" -> {
+                            val dest = a(0).ifEmpty { "/sdcard/Download/OCM/screens/shot_" + System.currentTimeMillis() + ".png" }
+                            val host = Runtime.hostPath(this@MainActivity, uid(), dest)
+                            svc!!.screenshot(host.absolutePath)
+                        }
+                        else -> phoneCommand(cmd, argsJson)
+                    }
+                } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
+                emit("phoneResult", JSONObject().put("id", id).put("result", result))
+            }
+        }
+
+        @JavascriptInterface fun assistantResult(text: String, ok: Boolean) {
+            AssistantOverlayService.instance?.showResult(text, ok)
+        }
+        @JavascriptInterface fun assistantStatus(text: String) {
+            AssistantOverlayService.instance?.setStatus(text)
+        }
+        @JavascriptInterface fun assistantPartial(text: String) {
+            AssistantOverlayService.instance?.setPartial(text)
+        }
+
+        @JavascriptInterface fun phoneServerStart() { runOnUiThread { PhoneServer.start(this@MainActivity) { n, d -> emit(n, d) } } }
+        @JavascriptInterface fun phoneServerStop() { PhoneServer.stop() }
+        @JavascriptInterface fun phoneAnswer(id: String, payload: String) {
+            try { PhoneServer.answer(id, JSONObject(payload)) } catch (_: Exception) {}
         }
 
         @JavascriptInterface fun mediaServerStart() { runOnUiThread { MediaServer.start(this@MainActivity) { n, d -> emit(n, d) } } }
