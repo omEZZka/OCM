@@ -115,6 +115,33 @@ object AssistantCore {
             for ((info, _) in sorted) if (tryPkg(info.packageName)) return JSONObject().put("ok", true).put("package", info.packageName)
         } catch (_: Exception) {}
 
+        // 3b. transliteration fuzzy match: "телеграм"/"telegram"/"tlgrm" -> same app
+        try {
+            val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val resolved = pm.queryIntentActivities(q, 0)
+            val norm = { x: String -> x.lowercase().replace('ё', 'е').replace(Regex("[\\s._-]"), "") }
+            val targetN = norm(lower)
+            val targetT = translit(targetN)
+            var best: Pair<String, Int>? = null
+            for (ri in resolved) {
+                val pkg = ri.activityInfo?.packageName ?: continue
+                val label = try { ri.loadLabel(pm).toString() } catch (_: Exception) { pkg }
+                val ln = norm(label)
+                val lt = translit(ln)
+                val score = when {
+                    ln == targetN -> 100
+                    ln == targetT || lt == targetN || lt == targetT -> 75
+                    ln.startsWith(targetN) || targetN.startsWith(ln) -> 80
+                    lt.startsWith(targetT) || targetT.startsWith(lt) -> 55
+                    ln.contains(targetN) || targetN.contains(ln) -> 60
+                    lt.contains(targetT) || targetT.contains(lt) -> 40
+                    else -> 0
+                }
+                if (score >= 40 && (best == null || score > best!!.second)) best = pkg to score
+            }
+            if (best != null && tryPkg(best!!.first)) return JSONObject().put("ok", true).put("package", best!!.first)
+        } catch (_: Exception) {}
+
         // 4. direct package name
         if (t.matches(Regex("^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$"))) {
             if (tryPkg(t)) return JSONObject().put("ok", true).put("package", t)
@@ -131,6 +158,29 @@ object AssistantCore {
     }
 
     fun openApp(c: Context, target: String): Boolean = openAppDetailed(c, target).optBoolean("ok")
+
+    /** Rough latin<->cyrillic transliteration for fuzzy app-name matching. */
+    private fun translit(s: String): String {
+        val lat2cyr = mapOf("a" to "а", "b" to "б", "v" to "в", "g" to "г", "d" to "д", "e" to "е", "z" to "з", "i" to "и", "k" to "к", "l" to "л", "m" to "м", "n" to "н", "o" to "о", "p" to "п", "r" to "р", "s" to "с", "t" to "т", "u" to "у", "f" to "ф", "h" to "х", "c" to "к", "y" to "й", "w" to "в", "j" to "дж", "q" to "к")
+        val cyr2lat = mapOf("а" to "a", "б" to "b", "в" to "v", "г" to "g", "д" to "d", "е" to "e", "ж" to "zh", "з" to "z", "и" to "i", "й" to "y", "к" to "k", "л" to "l", "м" to "m", "н" to "n", "о" to "o", "п" to "p", "р" to "r", "с" to "s", "т" to "t", "у" to "u", "ф" to "f", "х" to "h", "ц" to "ts", "ч" to "ch", "ш" to "sh", "щ" to "sch", "ы" to "y", "э" to "e", "ю" to "yu", "я" to "ya")
+        val hasCyr = s.any { it in 'а'..'я' || it == 'ё' }
+        return if (hasCyr) s.map { cyr2lat[it.toString()] ?: it.toString() }.joinToString("")
+        else {
+            val sb = StringBuilder(); var i = 0
+            while (i < s.length) {
+                val two = s.substring(i, minOf(i + 2, s.length))
+                when (two) {
+                    "sh" -> { sb.append("ш"); i += 2 }
+                    "ch" -> { sb.append("ч"); i += 2 }
+                    "zh" -> { sb.append("ж"); i += 2 }
+                    "ya" -> { sb.append("я"); i += 2 }
+                    "yu" -> { sb.append("ю"); i += 2 }
+                    else -> { sb.append(lat2cyr[s[i].toString()] ?: s[i].toString()); i++ }
+                }
+            }
+            sb.toString()
+        }
+    }
 
     /** List launchable apps (for `phone apps` and debugging). */
     fun listApps(c: Context): JSONArray {

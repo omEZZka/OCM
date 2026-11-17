@@ -326,6 +326,7 @@ O.openModels=()=>{
   }
   const folderBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelFolders(()=>draw())},O.icon('folder'),O.tr('Folders & profiles','Папки и профили'));
   const compareBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelCompare()},O.icon('branch'),O.tr('Compare models on one prompt','Сравнить модели на одном запросе'));
+  const arenaBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openArena()},O.icon('zap'),O.tr('Arena: 4 models + judge','Арена: 4 модели + судья'));
   const taskInp=h('input',{placeholder:O.tr('Task for recommendations (optional)','Задача для рекомендаций (необязательно)'),style:{marginBottom:'8px'},onkeydown:e=>{if(e.key==='Enter'){e.preventDefault();recBtn.click()}}});
   const recBox=h('div');
   const recBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>{
@@ -337,7 +338,7 @@ O.openModels=()=>{
     rec.forEach(r=>card.append(O.listRow('star',r.x.name||r.x.mid,(r.why||[]).join(' · '),O.icon('chevR'),()=>{O.setModel(r.x.pid,r.x.mid);s.close()})));
     recBox.append(card);
   }},O.icon('star'),O.tr('Recommend a model','Подобрать модель'));
-  const container=h('div',null,effortCard,selectBar,taskInp,recBtn,recBox,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
+  const container=h('div',null,effortCard,selectBar,taskInp,recBtn,recBox,q,profBar,folderBtn,arenaBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
   // Folder edits from the action sheet / folder manager must repaint the list live.
   const offFolders=bus.on('folders',()=>{if(s.root&&s.root.isConnected)draw()});

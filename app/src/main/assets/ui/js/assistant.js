@@ -122,6 +122,48 @@ O.macroByName=name=>{
 
 // ---------- command parser ----------
 // Returns an array of steps [{cmd,args,label}] or null when the phrase is not a phone command.
+// ---- transliteration: latin <-> cyrillic so "telegram"/"телеграм"/"tlgrm" all match ----
+const LAT2CYR={a:'а',b:'б',v:'в',g:'г',d:'д',e:'е',z:'з',i:'и',k:'к',l:'л',m:'м',n:'н',o:'о',p:'п',r:'р',s:'с',t:'т',u:'у',f:'ф',h:'х',c:'к',y:'й',w:'в',x:'кс',j:'дж',q:'к'};
+const CYR2LAT={а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'ts',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya'};
+O.translit=s=>{
+  const t=String(s||'').toLowerCase();
+  const hasCyr=/[а-яё]/.test(t);
+  if(hasCyr)return [...t].map(c=>CYR2LAT[c]!==undefined?CYR2LAT[c]:c).join('');
+  // latin -> cyrillic (approximate, for matching only)
+  let out='';
+  for(let i=0;i<t.length;i++){
+    const two=t.slice(i,i+2);
+    if(two==='sh'){out+='ш';i++;continue}
+    if(two==='ch'){out+='ч';i++;continue}
+    if(two==='zh'){out+='ж';i++;continue}
+    if(two==='ya'){out+='я';i++;continue}
+    if(two==='yu'){out+='ю';i++;continue}
+    out+=LAT2CYR[t[i]]!==undefined?LAT2CYR[t[i]]:t[i];
+  }
+  return out;
+};
+// normalize an app name for matching: lowercase, ё->е, strip spaces/dots, translit both ways
+O.appKey=s=>String(s||'').toLowerCase().replace(/ё/g,'е').replace(/[\s._-]+/g,'');
+O.appMatch=(query,labels)=>{
+  const q=O.appKey(query);
+  if(!q)return null;
+  const ql=O.translit(q),qc=O.translit(query.toLowerCase().replace(/ё/g,'е'));
+  let best=null,bestScore=0;
+  for(const l of labels){
+    const k=O.appKey(l);
+    const kl=O.translit(k);
+    let score=0;
+    if(k===q)score=100;
+    else if(k.startsWith(q)||q.startsWith(k))score=80;
+    else if(k.includes(q)||q.includes(k))score=60;
+    else if(kl===ql||kl===qc||k===qc)score=75;
+    else if(kl.startsWith(ql)||ql.startsWith(kl))score=55;
+    else if(kl.includes(ql)||ql.includes(kl))score=40;
+    if(score>bestScore){bestScore=score;best=l}
+  }
+  return bestScore>=40?best:null;
+};
+
 const APP_ALIASES={
   'телеграм':'telegram','telegram':'telegram','тг':'telegram','tg':'telegram',
   'ютуб':'youtube','youtube':'youtube','хром':'chrome','chrome':'chrome','браузер':'chrome',
@@ -136,6 +178,15 @@ function parseOne(t){
   if(!s)return null;
   const om=r=>{const mm=orig.match(r);return mm?mm[1]:null};
   const has=(...w)=>w.some(x=>s.includes(x));
+  // bilingual intent hints: english words map to the same intents
+  const en={
+    shot:/screenshot|screen shot|capture screen/,torch:/flashlight|torch|flash/,
+    dnd:/do not disturb|silent mode|mute all|quiet mode/,home:/go home|home screen/,
+    back:/go back|navigate back/,recents:/recent apps|app switcher/,
+    notif:/notifications|notification shade|pull down/,wifi:/wi-?fi|wireless/,
+    bt:/bluetooth/,bright:/brightness/,vol:/volume|sound level/,
+    open:/^(open|launch|start|run)\s/,lock:/lock (the )?(screen|phone)/
+  };
   const step=(cmd,args,label)=>[{cmd,args:args||[],label:label||cmd}];
   // macros
   if(has('режим','макрос','macro','mode')){
@@ -143,9 +194,9 @@ function parseOne(t){
     const mac=O.macroByName(name)||O.macroByName(s);
     if(mac)return step('macro',[mac.id],mac.name);
   }
-  if(has('скриншот','скрин','screenshot','снимок экрана','screen shot','сфоткай экран','захвати экран'))return step('shot',[],'Скриншот');
-  if(has('фонарик','фонарь','flashlight','torch','вспышк')){const off=has('выключи','выкл','off','потуши','убери','отключи','disable','turn off');return step('torch',[off?'off':'on'],off?'Фонарик выкл':'Фонарик вкл')}
-  if(has('не беспокоить','днд','dnd','без звука','тихий режим','режим тишины','тишину','do not disturb','беззвучн','не тревожить')){const off=has('выключи','выкл','off','отключи','сними','disable','turn off','верни звук');return step('dnd',[off?'off':'silent'],off?'DND выкл':'DND вкл')}
+  if(has('скриншот','скрин','screenshot','снимок экрана','screen shot','сфоткай экран','захвати экран')||en.shot.test(s))return step('shot',[],'Скриншот');
+  if(has('фонарик','фонарь','flashlight','torch','вспышк')||en.torch.test(s)){const off=has('выключи','выкл','off','потуши','убери','отключи','disable','turn off');return step('torch',[off?'off':'on'],off?'Фонарик выкл':'Фонарик вкл')}
+  if(has('не беспокоить','днд','dnd','без звука','тихий режим','режим тишины','тишину','do not disturb','беззвучн','не тревожить')||en.dnd.test(s)){const off=has('выключи','выкл','off','отключи','сними','disable','turn off','верни звук');return step('dnd',[off?'off':'silent'],off?'DND выкл':'DND вкл')}
   let m=s.match(/(?:громкость|звук|volume)(?:\s+медиа|\s+музыки|\s+media)?\s*(?:на|до|=)?\s*(\d+)/);
   if(m)return step('volume',['media',m[1]],'Громкость '+m[1]);
   if(has('выключи звук','убери звук','mute','заглуши','звук на ноль','громкость 0'))return step('volume',['media','0'],'Звук выкл');
@@ -155,14 +206,14 @@ function parseOne(t){
   if(m)return step('brightness',[m[1]],'Яркость '+m[1]);
   if(has('ярче','яркость выше','прибавь яркость','brighter'))return step('brightness',['220'],'Ярче');
   if(has('темнее','яркость ниже','убавь яркость','dimmer','потусклее'))return step('brightness',['40'],'Темнее');
-  if(has('назад','back'))return step('back',[],'Назад');
-  if(has('домой','на главную','home','главный экран','рабочий стол'))return step('home',[],'Домой');
-  if(has('недавние','recents','последние приложения','открытые приложения'))return step('recents',[],'Недавние');
-  if(has('шторка','уведомления','notifications','шторку','панель уведомлений'))return step('notifications',[],'Уведомления');
+  if(has('назад','back')||en.back.test(s))return step('back',[],'Назад');
+  if(has('домой','на главную','home','главный экран','рабочий стол')||en.home.test(s))return step('home',[],'Домой');
+  if(has('недавние','recents','последние приложения','открытые приложения')||en.recents.test(s))return step('recents',[],'Недавние');
+  if(has('шторка','уведомления','notifications','шторку','панель уведомлений')||en.notif.test(s))return step('notifications',[],'Уведомления');
   if(has('быстрые настройки','quick settings'))return step('quicksettings',[],'Быстрые настройки');
-  if(has('заблокируй','lock','блокировка экрана'))return step('lock',[],'Блокировка');
-  if(has('вайфай','wifi','вай-фай','wi-fi','вифи'))return step('settings',['wifi'],'WiFi');
-  if(has('блютуз','bluetooth','блютус'))return step('settings',['bluetooth'],'Bluetooth');
+  if(has('заблокируй','lock','блокировка экрана')||en.lock.test(s))return step('lock',[],'Блокировка');
+  if(has('вайфай','wifi','вай-фай','wi-fi','вифи')||en.wifi.test(s))return step('settings',['wifi'],'WiFi');
+  if(has('блютуз','bluetooth','блютус')||en.bt.test(s))return step('settings',['bluetooth'],'Bluetooth');
   if(has('экономию энергии','battery saver','энергосбережение','энергосберегающий'))return step('settings',['battery_saver'],'Экономия энергии');
   if(has('геолокация','location','местоположение','gps'))return step('settings',['location'],'Геолокация');
   if(has('авиарежим','airplane','режим полета'))return step('settings',['airplane'],'Авиарежим');
@@ -178,6 +229,16 @@ function parseOne(t){
   }
   const bare=s.replace(/\s+приложение$/,'').trim();
   if(APP_ALIASES[bare])return step('open',[APP_ALIASES[bare]],'Открыть '+orig);
+  // fuzzy: match against installed app labels with transliteration (telegram/телеграм/tlgrm)
+  try{
+    const r=O.phone.cmd('apps',[]);
+    const labels=(r.apps||[]).map(a=>a.label);
+    const hit=O.appMatch(bare,labels);
+    if(hit){
+      const pkg=(r.apps||[]).find(a=>a.label===hit);
+      return step('open',[pkg?pkg.package:hit],'Открыть '+hit);
+    }
+  }catch(_){}
   if(has('свайп вверх','swipe up','листай вверх','прокрути вверх'))return step('swipe',['540','1800','540','600'],'Свайп вверх');
   if(has('свайп вниз','swipe down','листай вниз','прокрути вниз'))return step('swipe',['540','600','540','1800'],'Свайп вниз');
   return null;
@@ -447,62 +508,63 @@ O.openMacroEditor=()=>{
   draw();
 };
 
-// ---------- settings ----------
+// ---------- assistant control center (redesigned) ----------
 O.openAssistantSettings=()=>{
   const body=h('div');
-  const s=O.sheet(O.tr('Assistant settings','Настройки ассистента'),body,{full:true});
+  const s=O.sheet(O.tr('Assistant','Ассистент'),body,{full:true});
   const draw=()=>{
     body.textContent='';
-    const cfg=wakeCfg();
-    body.append(h('div',{class:'grp'},O.tr('Wake phrase','Кодовая фраза')));
-    body.append(O.toggleRow('mic',O.tr('Listen for wake phrase','Слушать кодовую фразу'),
-      O.tr('Uses the microphone in the background while the app is open','Микрофон работает в фоне, пока приложение открыто'),
-      cfg.enabled,v=>{O.store.set('assistant.wakeEnabled',v);if(v)O.assistantWakeStart();else O.assistantWakeStop();draw()}));
-    body.append(O.listRow('edit',O.tr('Phrase','Фраза'),cfg.phrase||O.tr('not set','не задана'),O.icon('chevR'),async()=>{
-      const v=await O.ask(O.tr('Wake phrase','Кодовая фраза'),O.tr('e.g. "окей код"','например: «окей код»'),cfg.phrase);
-      if(v!=null){O.store.set('assistant.wakePhrase',v.trim());if(A.listening){O.assistantWakeStop();O.assistantWakeStart()}draw()}
-    }));
-    body.append(h('div',{class:'note'},O.tr('Say the phrase followed by a command: "окей код, открой телеграм". Without a command the mini window opens and listens.','Скажите фразу и команду: «окей код, открой телеграм». Без команды откроется мини-окно и будет слушать.')));
-    body.append(h('div',{class:'grp',style:{marginTop:'12px'}},O.tr('Agent control','Управление агентом')));
-    body.append(O.toggleRow('bot',O.tr('Silent agent control','Агент без подтверждений'),
-      O.tr('Let the agent tap/swipe without asking each time (macros still confirm)','Агент тапает/свайпает без спроса (шаблоны всё равно подтверждают)'),
-      O.store.get('assistant.agentSilent',false),v=>O.store.set('assistant.agentSilent',v)));
-    body.append(h('div',{class:'note'},O.tr('The agent uses the `phone` CLI: phone open telegram · phone text "Миша" · phone shot · phone torch on · phone macro "Игровой режим". No ADB needed.','Агент использует CLI `phone`: phone open telegram · phone text "Миша" · phone shot · phone torch on · phone macro "Игровой режим". ADB не нужен.')));
-    body.append(h('div',{class:'grp',style:{marginTop:'12px'}},O.tr('Permissions','Разрешения')));
     const st=O.phone.status();
-    const row=(label,ok,fn)=>body.append(h('div',{class:'settings-row'},
+    const cfg=wakeCfg();
+    // ---- hero: big toggle + status ----
+    const allOk=st.accessibility&&st.overlay;
+    body.append(h('div',{class:'settings-card',style:{padding:'14px 16px',marginBottom:'12px'}},
+      h('div',{style:{display:'flex',alignItems:'center',gap:'12px'}},
+        h('div',{style:{width:'44px',height:'44px',borderRadius:'14px',display:'grid',placeItems:'center',background:allOk?'color-mix(in srgb, var(--ok) 18%, transparent)':'color-mix(in srgb, var(--warn) 18%, transparent)'}},O.icon('mic')),
+        h('div',{class:'grow'},
+          h('b',{style:{fontSize:'15px'}},O.tr('Phone assistant','Ассистент телефона')),
+          h('div',{class:'mut s'},allOk?O.tr('Ready · full control','Готов · полное управление'):O.tr('Setup needed','Нужна настройка'))),
+        h('button',{class:'btn sm pri',onclick:()=>{O.phone.showOverlay();s.close()}},O.tr('Open','Открыть'))),
+      h('div',{style:{display:'flex',gap:'6px',marginTop:'10px',flexWrap:'wrap'}},
+        h('span',{class:'chip'},st.accessibility?'✓ Accessibility':'✗ Accessibility'),
+        h('span',{class:'chip'},st.overlay?'✓ '+O.tr('Overlay','Поверх окон'):'✗ '+O.tr('Overlay','Поверх окон')),
+        h('span',{class:'chip'},st.dndAccess?'✓ DND':'✗ DND'),
+        h('span',{class:'chip'},st.writeSettings?'✓ '+O.tr('Brightness','Яркость'):'✗ '+O.tr('Brightness','Яркость')))));
+    // ---- voice ----
+    body.append(h('div',{class:'settings-section-title'},O.tr('Voice','Голос')));
+    body.append(h('div',{class:'settings-card'},
+      O.toggleRow('mic',O.tr('Wake phrase','Кодовая фраза'),
+        cfg.enabled?O.tr('Listening for «'+cfg.phrase+'»','Слушаю «'+cfg.phrase+'»'):O.tr('Off','Выключено'),
+        cfg.enabled,v=>{O.store.set('assistant.wakeEnabled',v);if(v)O.assistantWakeStart();else O.assistantWakeStop();draw()}),
+      O.listRow('edit',O.tr('Phrase text','Текст фразы'),cfg.phrase||O.tr('not set','не задана'),O.icon('chevR'),async()=>{
+        const v=await O.ask(O.tr('Wake phrase','Кодовая фраза'),O.tr('e.g. «окей код»','например: «окей код»'),cfg.phrase);
+        if(v!=null){O.store.set('assistant.wakePhrase',v.trim());if(A.listening){O.assistantWakeStop();O.assistantWakeStart()}draw()}
+      }),
+      O.listRow('wave',O.tr('Call & dictation settings','Настройки звонка и диктовки'),O.tr('Engine, language, voice','Движок, язык, голос'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openCallSettings&&O.openCallSettings(),200)})));
+    // ---- intelligence ----
+    body.append(h('div',{class:'settings-section-title'},O.tr('Intelligence','Интеллект')));
+    body.append(h('div',{class:'settings-card'},
+      O.toggleRow('bot',O.tr('Silent agent control','Агент без подтверждений'),
+        O.tr('Agent taps/swipes without asking (macros still confirm)','Агент тапает/свайпает без спроса (шаблоны подтверждают)'),
+        O.store.get('assistant.agentSilent',false),v=>O.store.set('assistant.agentSilent',v)),
+      O.listRow('chat',O.tr('Assistant chat','Чат ассистента'),O.tr('Dedicated session history','Отдельная сессия с историей'),O.icon('chevR'),()=>{s.close();O.openAssistantChat()}),
+      O.listRow('zap',O.tr('Macros','Шаблоны действий'),O.macros().length+' '+O.tr('templates','шаблонов'),O.icon('chevR'),()=>{s.close();O.openMacroEditor()}),
+      O.listRow('list',O.tr('Installed apps','Установленные приложения'),O.tr('What the assistant can open','Что ассистент может открыть'),O.icon('chevR'),()=>{s.close();O.openInstalledApps()})));
+    // ---- permissions ----
+    body.append(h('div',{class:'settings-section-title'},O.tr('Permissions','Разрешения')));
+    const perm=(label,ok,fn,desc)=>h('div',{class:'settings-row'},
       h('div',{class:'settings-row-icon '+(ok?'green':'amber')},O.icon('shield')),
-      h('div',{class:'settings-row-text'},h('b',null,label),h('span',null,ok?O.tr('granted','выдано'):O.tr('not granted','не выдано'))),
-      ok?O.icon('check','ok'):h('button',{class:'btn sm',onclick:fn},O.tr('Grant','Выдать'))));
-    row('Accessibility',st.accessibility,()=>O.phone.enableAccessibility());
-    row(O.tr('Overlay','Поверх окон'),st.overlay,()=>O.phone.grantOverlay());
-    row('DND',st.dndAccess,()=>O.phone.grantDnd());
-    row(O.tr('Brightness','Яркость'),st.writeSettings,()=>O.phone.grantWrite());
-    body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{s.close();O.openMacroEditor()}},O.icon('zap'),O.tr('Macros','Шаблоны действий')));
-    body.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{s.close();O.openInstalledApps()}},O.icon('list'),O.tr('Installed apps','Установленные приложения')));
+      h('div',{class:'settings-row-text'},h('b',null,label),h('span',null,desc)),
+      ok?O.icon('check','ok'):h('button',{class:'btn sm',onclick:fn},O.tr('Grant','Выдать')));
+    body.append(h('div',{class:'settings-card'},
+      perm('Accessibility',st.accessibility,()=>O.phone.enableAccessibility(),O.tr('Taps, swipes, screenshots','Тапы, свайпы, скриншоты')),
+      perm(O.tr('Overlay','Поверх окон'),st.overlay,()=>O.phone.grantOverlay(),O.tr('Mini window over apps','Мини-окно поверх приложений')),
+      perm(O.tr('Do Not Disturb','Не беспокоить'),st.dndAccess,()=>O.phone.grantDnd(),O.tr('Silent / game modes','Тихий / игровой режимы')),
+      perm(O.tr('Brightness','Яркость'),st.writeSettings,()=>O.phone.grantWrite(),O.tr('Screen brightness control','Управление яркостью экрана'))));
+    // ---- agent CLI hint ----
+    body.append(h('div',{class:'note',style:{marginTop:'12px'}},
+      O.tr('Agent CLI: phone open telegram · phone text "Миша" · phone shot · phone torch on · phone macro "Игровой режим". Names work in Russian, English and transliteration.','CLI агента: phone open telegram · phone text "Миша" · phone shot · phone torch on · phone macro "Игровой режим". Имена работают на русском, английском и транслитом.')));
   };
-  draw();
-};
-
-// ---------- installed apps viewer (what the assistant can open) ----------
-O.openInstalledApps=()=>{
-  const body=h('div');
-  const s=O.sheet(O.tr('Installed apps','Установленные приложения'),body,{full:true});
-  const q=h('input',{placeholder:O.tr('Search…','Поиск…'),oninput:()=>draw()});
-  const list=h('div');
-  let apps=[];
-  try{const r=O.phone.cmd('apps',[]);apps=r.apps||[]}catch(_){}
-  const draw=()=>{
-    list.textContent='';
-    const f=String(q.value||'').toLowerCase();
-    const shown=apps.filter(a=>(a.label+' '+a.package).toLowerCase().includes(f));
-    list.append(h('div',{class:'mut s',style:{margin:'4px 2px'}},shown.length+' '+O.tr('apps','приложений')));
-    shown.slice(0,200).forEach(a=>list.append(h('button',{class:'settings-row',onclick:()=>{
-      const r=O.phone.cmd('open',[a.package]);
-      O.toast(r.ok?('✓ '+a.label):(r.err||'error'),2500);
-    }},O.icon('out'),h('div',{class:'settings-row-text'},h('b',null,a.label),h('span',{class:'mono s'},a.package)))));
-  };
-  body.append(q,list);
   draw();
 };
 

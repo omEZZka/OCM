@@ -1100,6 +1100,7 @@ const BUILTINS=[
  {n:'tour',d:'Обучающий тур',i:'info',run:()=>O.openTour()},
  {n:'focus',d:'Фокус-режим: только чат',i:'eye',run:()=>O.setFocusMode(!O.focusMode())},
  {n:'fast',d:'Быстрый режим: mini-модель + минимум рассуждений',i:'zap',run:()=>O.setFastMode(!O.fastMode())},
+ {n:'arena',d:'Арена: 4 модели + судья',i:'branch',run:()=>O.openArena()},
  {n:'snippets',d:'Сниппеты промптов',i:'doc',run:()=>O.openSnippets()},
  {n:'health',d:'Проверка здоровья проекта',i:'shield',run:()=>O.projectHealth()},
  {n:'audit',d:'Аудит действий агента',i:'list',run:()=>O.openAgentAudit()},

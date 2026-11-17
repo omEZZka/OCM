@@ -365,6 +365,30 @@ try:
     pg.evaluate("OCM.setFastMode(false)")
     pg.wait_for_timeout(200)
     chk('fast mode off restores',pg.evaluate("OCM.fastMode()")==False)
+    # ---- arena + translit ----
+    chk('arena helpers',pg.evaluate("typeof OCM.openArena==='function'&&typeof OCM.arenaPickFour==='function'&&typeof OCM.arenaJudge==='function'"))
+    four=pg.evaluate("OCM.arenaPickFour().length")
+    chk('arena picks 4',four==4)
+    chk('arena judge exists',pg.evaluate("OCM.arenaJudge()")!=None)
+    tr=pg.evaluate("""() => ({
+      t1:OCM.translit('telegram'),t2:OCM.translit('телеграм'),
+      m:OCM.appMatch('телеграм',['Telegram','WhatsApp','Настройки']),
+      m2:OCM.appMatch('telegram',['Телеграм','WhatsApp']),
+      m3:OCM.appMatch('ватсап',['WhatsApp','Telegram'])
+    })""")
+    chk('translit latin->cyr',tr['t1']=='телеграм')
+    chk('translit cyr->lat',tr['t2']=='telegram')
+    chk('fuzzy match cyr query',tr['m']=='Telegram')
+    chk('fuzzy match lat query',tr['m2']=='Телеграм')
+    chk('fuzzy match ватсап',tr['m3']=='WhatsApp')
+    bi=pg.evaluate("""() => {
+      const c=t=>(OCM.parseAssistant(t)||[]).map(s=>s.cmd);
+      return {shot:c('take a screenshot'),home:c('go home'),torch:c('turn on flashlight'),open:c('open telegram')};
+    }""")
+    chk('bilingual screenshot',bi['shot']==['shot'])
+    chk('bilingual home',bi['home']==['home'])
+    chk('bilingual flashlight',bi['torch']==['torch'])
+    chk('bilingual open',bi['open']==['open'])
     # ---- phone assistant ----
     asres=pg.evaluate("""() => {
       const chain=OCM.parseAssistant('открой телеграм и в нем открой чат Миша');
@@ -407,6 +431,7 @@ try:
     ast=pg.inner_text('.sheet.full')
     chk('assistant settings wake phrase','Кодовая фраза' in ast)
     chk('assistant settings permissions','Accessibility' in ast)
+    chk('assistant control center sections','Интеллект' in ast and 'Разрешения' in ast and 'Голос' in ast)
     chk('assistant session helper',pg.evaluate("typeof OCM.assistantSession==='function'&&typeof OCM.assistantSend==='function'"))
     pg.evaluate("OCM.back()")
     pg.evaluate("OCM.openInstalledApps()")
