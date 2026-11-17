@@ -1104,6 +1104,7 @@ const BUILTINS=[
  {n:'env',d:'.env менеджер',i:'key',run:()=>O.openEnvManager()},
  {n:'gallery',d:'Галерея медиа',i:'image',run:()=>O.openMediaGallery()},
  {n:'assistant',d:'Ассистент телефона (без ADB)',i:'mic',run:()=>O.openAssistant()},
+ {n:'achat',d:'Чат ассистента (отдельная сессия)',i:'chat',run:()=>O.openAssistantChat()},
  {n:'macros',d:'Шаблоны действий телефона',i:'zap',run:()=>O.openMacroEditor()},
  {n:'branches',d:'Ветки диалога',i:'branch',run:()=>O.openBranchTree()},
  {n:'share',d:'Поделиться сессией',i:'share',run:()=>doShare()},

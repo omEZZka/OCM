@@ -395,6 +395,12 @@ try:
     ast=pg.inner_text('.sheet.full')
     chk('assistant settings wake phrase','Кодовая фраза' in ast)
     chk('assistant settings permissions','Accessibility' in ast)
+    chk('assistant session helper',pg.evaluate("typeof OCM.assistantSession==='function'&&typeof OCM.assistantSend==='function'"))
+    pg.evaluate("OCM.back()")
+    pg.evaluate("OCM.openInstalledApps()")
+    pg.wait_for_selector('.sheet.full:has-text("Установленные приложения")')
+    ia=pg.inner_text('.sheet.full')
+    chk('installed apps listed','Telegram' in ia)
     pg.evaluate("OCM.back()")
     # ---- settings ----
     pg.evaluate("OCM.openSettings()")

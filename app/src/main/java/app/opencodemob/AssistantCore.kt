@@ -53,50 +53,101 @@ object AssistantCore {
     private fun launchContext(fallback: Context): Context =
         PhoneAccessibilityService.instance ?: fallback
 
-    fun openApp(c: Context, target: String): Boolean {
+    /** Result of an app launch attempt: ok + human-readable reason. */
+    fun openAppDetailed(c: Context, target: String): JSONObject {
         val t = target.trim()
-        if (t.isEmpty()) return false
+        if (t.isEmpty()) return JSONObject().put("ok", false).put("err", "пустое имя")
         val ctx = launchContext(c)
         val pm = ctx.packageManager
-        val lower = t.lowercase()
+        val lower = t.lowercase().replace('ё', 'е')
 
-        fun start(i: Intent): Boolean = try {
+        fun start(i: Intent): String? = try {
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
             ctx.startActivity(i)
-            true
-        } catch (_: Exception) { false }
+            null
+        } catch (e: Exception) { e.message ?: "start blocked" }
 
-        // 1. known aliases → installed package
-        val candidates = ALIASES[lower] ?: listOf(t)
-        for (pkg in candidates) {
-            val li = pm.getLaunchIntentForPackage(pkg) ?: continue
-            if (start(li)) return true
+        var lastErr: String? = null
+        fun tryPkg(pkg: String): Boolean {
+            val li = pm.getLaunchIntentForPackage(pkg) ?: return false
+            val err = start(li)
+            if (err == null) return true
+            lastErr = err
+            return false
         }
-        // 2. fuzzy search over installed app labels
+
+        // 1. known aliases
+        val candidates = ALIASES[lower] ?: ALIASES[t.lowercase()] ?: emptyList()
+        for (pkg in candidates) if (tryPkg(pkg)) return JSONObject().put("ok", true).put("package", pkg)
+
+        // 2. enumerate ALL launchable apps via MAIN/LAUNCHER query (sees preinstalled apps too)
         try {
-            val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-            // exact label first, then contains
-            val sorted = apps.sortedBy {
-                val l = pm.getApplicationLabel(it).toString().lowercase()
-                when { l == lower -> 0; l.startsWith(lower) -> 1; l.contains(lower) -> 2; it.packageName.contains(lower) -> 3; else -> 9 }
-            }
-            for (info in sorted) {
-                val l = pm.getApplicationLabel(info).toString().lowercase()
-                if (l == lower || l.contains(lower) || info.packageName.lowercase().contains(lower)) {
-                    val li = pm.getLaunchIntentForPackage(info.packageName) ?: continue
-                    if (start(li)) return true
+            val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val resolved = pm.queryIntentActivities(q, 0)
+            data class Cand(val pkg: String, val label: String, val score: Int)
+            val cands = ArrayList<Cand>()
+            for (ri in resolved) {
+                val pkg = ri.activityInfo?.packageName ?: continue
+                val label = try { ri.loadLabel(pm).toString() } catch (_: Exception) { pkg }
+                val l = label.lowercase().replace('ё', 'е')
+                val score = when {
+                    l == lower -> 0
+                    l.startsWith(lower) -> 1
+                    l.contains(lower) -> 2
+                    pkg.lowercase().contains(lower) -> 3
+                    else -> 9
                 }
+                if (score < 9) cands.add(Cand(pkg, label, score))
+            }
+            cands.sortBy { it.score }
+            for (cd in cands) if (tryPkg(cd.pkg)) return JSONObject().put("ok", true).put("package", cd.pkg).put("label", cd.label)
+        } catch (_: Exception) {}
+
+        // 3. getInstalledApplications fallback (labels of apps without launcher aliases)
+        try {
+            val apps = pm.getInstalledApplications(0)
+            val sorted = apps.mapNotNull { info ->
+                val label = try { pm.getApplicationLabel(info).toString() } catch (_: Exception) { info.packageName }
+                val l = label.lowercase().replace('ё', 'е')
+                val score = when { l == lower -> 0; l.startsWith(lower) -> 1; l.contains(lower) -> 2; info.packageName.lowercase().contains(lower) -> 3; else -> 9 }
+                if (score < 9) info to score else null
+            }.sortedBy { it.second }
+            for ((info, _) in sorted) if (tryPkg(info.packageName)) return JSONObject().put("ok", true).put("package", info.packageName)
+        } catch (_: Exception) {}
+
+        // 4. direct package name
+        if (t.matches(Regex("^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$"))) {
+            if (tryPkg(t)) return JSONObject().put("ok", true).put("package", t)
+        }
+        // 5. uri
+        if (t.contains("://")) {
+            val err = start(Intent(Intent.ACTION_VIEW, Uri.parse(t)))
+            if (err == null) return JSONObject().put("ok", true)
+            lastErr = err
+        }
+        // distinguish "not found" from "found but launch blocked"
+        return if (lastErr != null) JSONObject().put("ok", false).put("err", "запуск заблокирован: $lastErr. Включите Accessibility или разрешите поверх окон")
+        else JSONObject().put("ok", false).put("err", "приложение «$t» не найдено")
+    }
+
+    fun openApp(c: Context, target: String): Boolean = openAppDetailed(c, target).optBoolean("ok")
+
+    /** List launchable apps (for `phone apps` and debugging). */
+    fun listApps(c: Context): JSONArray {
+        val out = JSONArray()
+        try {
+            val pm = c.packageManager
+            val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val seen = HashSet<String>()
+            for (ri in pm.queryIntentActivities(q, 0)) {
+                val pkg = ri.activityInfo?.packageName ?: continue
+                if (!seen.add(pkg)) continue
+                val label = try { ri.loadLabel(pm).toString() } catch (_: Exception) { pkg }
+                out.put(JSONObject().put("package", pkg).put("label", label))
+                if (out.length() >= 300) break
             }
         } catch (_: Exception) {}
-        // 3. uri
-        if (t.contains("://")) {
-            return start(Intent(Intent.ACTION_VIEW, Uri.parse(t)))
-        }
-        // 4. market fallback for a package-looking name
-        if (t.matches(Regex("^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$"))) {
-            return start(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$t")))
-        }
-        return false
+        return out
     }
 
     // ---------- macros stored in Prefs (shared with the WebView) ----------
@@ -289,7 +340,8 @@ object AssistantCore {
                         JSONObject().put("ok", ok).put("label", mac.optString("name")).put("detail", labels.toString().trim())
                     }
                 }
-                "open", "app" -> { val ok = openApp(c, a(0)); JSONObject().put("ok", ok).put("err", if (ok) "" else "приложение не найдено") }
+                "open", "app" -> openAppDetailed(c, a(0))
+                "apps" -> JSONObject().put("ok", true).put("apps", listApps(c))
                 "torch", "flashlight" -> JSONObject().put("ok", PhoneControl.flashlight(c, a(0) != "off"))
                 "dnd" -> PhoneControl.dnd(c, a(0))
                 "volume" -> PhoneControl.volume(c, a(0), a(1).toIntOrNull())

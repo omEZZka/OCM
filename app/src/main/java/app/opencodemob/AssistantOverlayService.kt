@@ -21,18 +21,15 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import org.json.JSONObject
 
 /**
- * Assistant mini window — stays open for a conversation, not a one-shot toast.
+ * Minimal assistant pill.
  *
- * Design: a compact rounded card with a clear visual hierarchy:
- *   header (title + close) · status line · big mic button (primary action) ·
- *   text field + send · quick chips · result area.
- * After a command finishes the window stays open so the next request is one tap away;
- * it closes only via ✕, the back gesture, or an explicit long idle timeout.
+ * One row: [mic] [text field] [send] [✕]. A single status line appears only while working or
+ * showing a result. No chips, no big buttons, no header — the smallest useful surface.
+ * Stays open after each command; closes via ✕ or 90 s idle.
  */
 class AssistantOverlayService : Service() {
 
@@ -51,10 +48,7 @@ class AssistantOverlayService : Service() {
     private var card: LinearLayout? = null
     private var input: EditText? = null
     private var status: TextView? = null
-    private var answer: TextView? = null
     private var micBtn: ImageButton? = null
-    private var micRing: View? = null
-    private var progress: ProgressBar? = null
     private val ui = Handler(Looper.getMainLooper())
     var emit: ((String, JSONObject) -> Unit)? = null
     private var stt: SpeechInput? = null
@@ -81,19 +75,17 @@ class AssistantOverlayService : Service() {
             val open = android.app.PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
             val n = androidx.core.app.NotificationCompat.Builder(this, "assistant")
-                .setSmallIcon(R.drawable.ic_tile_server).setContentTitle("OpenCode Assistant")
-                .setContentText("Ассистент").setOngoing(true)
-                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_MIN).setContentIntent(open).build()
+                .setSmallIcon(R.drawable.ic_tile_server).setContentTitle("Assistant")
+                .setOngoing(true).setPriority(androidx.core.app.NotificationCompat.PRIORITY_MIN).setContentIntent(open).build()
             if (Build.VERSION.SDK_INT >= 34) startForeground(7, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             else startForeground(7, n)
         } catch (_: Exception) {}
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
-    private fun bg(color: Int, radius: Int, stroke: Int = 0, strokeColor: Int = 0): GradientDrawable =
-        GradientDrawable().apply { cornerRadius = dp(radius).toFloat(); setColor(color); if (stroke > 0) setStroke(dp(stroke), strokeColor) }
+    private fun bg(color: Int, radius: Int): GradientDrawable =
+        GradientDrawable().apply { cornerRadius = dp(radius).toFloat(); setColor(color) }
 
-    /** Long idle (90 s) auto-hide; any interaction resets it. Never closes right after a command. */
     private fun resetIdle() {
         idleTimer?.let { ui.removeCallbacks(it) }
         idleTimer = Runnable { if (!busy && !listening) hideSelf() }
@@ -106,118 +98,64 @@ class AssistantOverlayService : Service() {
 
         card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = bg(0xFA141419.toInt(), 28, 1, 0xFF33333C.toInt())
-            setPadding(dp(20), dp(18), dp(20), dp(18))
-            elevation = dp(24).toFloat()
+            background = bg(0xF2141419.toInt(), 26)
+            setPadding(dp(10), dp(8), dp(8), dp(8))
+            elevation = dp(16).toFloat()
         }
 
-        // ---- header ----
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val logo = View(this).apply { background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            colors = intArrayOf(0xFFFAB283.toInt(), 0xFFF97316.toInt())
-            gradientType = GradientDrawable.LINEAR_GRADIENT
-            orientation = GradientDrawable.Orientation.TL_BR
-        } }
-        header.addView(logo, LinearLayout.LayoutParams(dp(12), dp(12)).apply { marginEnd = dp(10) })
-        header.addView(TextView(this).apply {
-            text = "Ассистент"; setTextColor(0xFFF5F5F7.toInt()); textSize = 15f
-            setTypeface(typeface, Typeface.BOLD); letterSpacing = 0.01f
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        val close = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
-            background = bg(0xFF23232B.toInt(), 15)
-            setColorFilter(0xFFA0A0AA.toInt())
-            setOnClickListener { hideSelf() }
-        }
-        header.addView(close, LinearLayout.LayoutParams(dp(32), dp(32)))
-        card!!.addView(header)
+        // single row: mic · input · send · close
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
 
-        // ---- status ----
-        status = TextView(this).apply {
-            text = "Чем помочь?"; setTextColor(0xFF9A9AA5.toInt()); textSize = 12.5f
-            setPadding(0, dp(10), 0, dp(4))
-        }
-        card!!.addView(status)
-
-        // ---- big mic: the primary action, centered ----
-        val micArea = FrameLayout(this).apply { setPadding(0, dp(6), 0, dp(6)) }
-        micRing = View(this).apply { background = bg(0x2EF97316.toInt(), 34); visibility = View.GONE }
-        micArea.addView(micRing, FrameLayout.LayoutParams(dp(68), dp(68), Gravity.CENTER))
         micBtn = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_btn_speak_now)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                colors = intArrayOf(0xFF2A2A33.toInt(), 0xFF1E1E26.toInt())
-                gradientType = GradientDrawable.LINEAR_GRADIENT
-                orientation = GradientDrawable.Orientation.TOP_BOTTOM
-                setStroke(dp(1), 0xFF3A3A45.toInt())
-            }
+            background = bg(0xFF26262E.toInt(), 20)
             setColorFilter(0xFFFAB283.toInt())
-            scaleType = android.widget.ImageView.ScaleType.CENTER
             setOnClickListener { toggleMic() }
         }
-        micArea.addView(micBtn, FrameLayout.LayoutParams(dp(60), dp(60), Gravity.CENTER))
-        progress = ProgressBar(this).apply { visibility = View.GONE; isIndeterminate = true }
-        micArea.addView(progress, FrameLayout.LayoutParams(dp(72), dp(72), Gravity.CENTER))
-        card!!.addView(micArea, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        row.addView(micBtn, LinearLayout.LayoutParams(dp(40), dp(40)))
 
-        // ---- text row: field + send ----
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         input = EditText(this).apply {
-            hint = "или напишите…"
-            setHintTextColor(0xFF5A5A64.toInt()); setTextColor(0xFFF5F5F7.toInt()); textSize = 14.5f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            maxLines = 3
-            background = bg(0xFF1F1F27.toInt(), 16, 1, 0xFF2C2C36.toInt())
-            setPadding(dp(14), dp(11), dp(14), dp(11))
+            hint = "Команда…"
+            setHintTextColor(0xFF5C5C66.toInt()); setTextColor(0xFFF5F5F7.toInt()); textSize = 14f
+            inputType = InputType.TYPE_CLASS_TEXT
+            maxLines = 1
+            background = null
+            setPadding(dp(12), dp(8), dp(8), dp(8))
             imeOptions = EditorInfo.IME_ACTION_SEND
             setOnEditorActionListener { _, actionId, event ->
                 if (actionId == EditorInfo.IME_ACTION_SEND || (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)) { submit(); true } else false
             }
         }
+        row.addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
         val send = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_menu_send)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                colors = intArrayOf(0xFFFAB283.toInt(), 0xFFF97316.toInt())
-                gradientType = GradientDrawable.LINEAR_GRADIENT
-                orientation = GradientDrawable.Orientation.TL_BR
-            }
+            background = bg(0xFFFAB283.toInt(), 20)
             setColorFilter(0xFF141419.toInt())
             setOnClickListener { submit() }
         }
-        row.addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(send, LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginStart = dp(9) })
+        row.addView(send, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(6) })
+
+        val close = ImageButton(this).apply {
+            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+            background = null
+            setColorFilter(0xFF77777F.toInt())
+            setOnClickListener { hideSelf() }
+        }
+        row.addView(close, LinearLayout.LayoutParams(dp(30), dp(30)))
+
         card!!.addView(row)
 
-        // ---- quick chips: two rows, even spacing ----
-        val chipDefs = listOf(
-            listOf("📸 Скрин" to "shot", "🔦 Фонарик" to "torch", "🔕 Тишина" to "dnd"),
-            listOf("🏠 Домой" to "home", "← Назад" to "back", "🔔 Шторка" to "notifications")
-        )
-        chipDefs.forEach { rowDefs ->
-            val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(8), 0, 0) }
-            rowDefs.forEach { (label, cmd) ->
-                chips.addView(TextView(this).apply {
-                    text = label; setTextColor(0xFFD0D0D8.toInt()); textSize = 12f
-                    background = bg(0xFF22222A.toInt(), 13, 1, 0xFF2E2E38.toInt())
-                    setPadding(dp(12), dp(8), dp(12), dp(8))
-                    gravity = Gravity.CENTER
-                    setOnClickListener { resetIdle(); runNative(cmd) }
-                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) })
-            }
-            card!!.addView(chips)
+        // status line: hidden until needed
+        status = TextView(this).apply {
+            visibility = View.GONE
+            setTextColor(0xFF9A9AA5.toInt()); textSize = 11.5f
+            setPadding(dp(12), dp(4), dp(10), dp(2))
+            maxLines = 4
         }
+        card!!.addView(status)
 
-        // ---- result ----
-        answer = TextView(this).apply {
-            visibility = View.GONE; setTextColor(0xFFDCDCE4.toInt()); textSize = 13f
-            maxLines = 12; setPadding(dp(2), dp(12), dp(2), 0); setLineSpacing(dp(3).toFloat(), 1f)
-        }
-        card!!.addView(answer)
-
-        val width = (sw * 0.92f).toInt().coerceAtMost(dp(420))
+        val width = (sw * 0.94f).toInt().coerceAtMost(dp(440))
         val p = WindowManager.LayoutParams(
             width, WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -226,37 +164,18 @@ class AssistantOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            y = dp(26)
+            y = dp(22)
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
         try {
             wm?.addView(card, p)
-            card!!.startAnimation(AlphaAnimation(0f, 1f).apply { duration = 200 })
+            card!!.startAnimation(AlphaAnimation(0f, 1f).apply { duration = 160 })
         } catch (_: Exception) { stopSelf() }
     }
 
-    // ---------- quick actions ----------
-    private fun runNative(cmd: String) {
-        if (busy) return
-        busy = true
-        status?.text = "Выполняю…"
-        progress?.visibility = View.VISIBLE
-        val args = org.json.JSONArray().apply {
-            if (cmd == "torch") put(if (PhoneControl.torchState()) "off" else "on")
-            if (cmd == "dnd") put("silent")
-        }
-        val st = JSONObject().put("cmd", cmd).put("args", args)
-        Thread {
-            val r = AssistantCore.runStep(this, st)
-            ui.post {
-                busy = false
-                progress?.visibility = View.GONE
-                val ok = r.optBoolean("ok")
-                status?.text = if (ok) "Готово ✓" else "Не получилось"
-                if (!ok) { answer?.text = r.optString("err"); answer?.visibility = View.VISIBLE }
-                resetIdle() // stays open for the next command
-            }
-        }.start()
+    private fun setStatus(text: String, visible: Boolean = true) {
+        status?.text = text
+        status?.visibility = if (visible && text.isNotEmpty()) View.VISIBLE else View.GONE
     }
 
     // ---------- voice ----------
@@ -265,18 +184,16 @@ class AssistantOverlayService : Service() {
         if (listening) { stopVoice(); return }
         listening = true
         micBtn?.setColorFilter(0xFFF87171.toInt())
-        micRing?.visibility = View.VISIBLE
-        micRing?.startAnimation(AlphaAnimation(0.3f, 1f).apply { duration = 650; repeatMode = Animation.REVERSE; repeatCount = Animation.INFINITE })
-        status?.text = "Слушаю…"
-        answer?.visibility = View.GONE
+        micBtn?.startAnimation(AlphaAnimation(0.5f, 1f).apply { duration = 600; repeatMode = Animation.REVERSE; repeatCount = Animation.INFINITE })
+        setStatus("Слушаю…")
         if (stt == null) stt = SpeechInput(this) { n, d ->
             if (n != "stt") return@SpeechInput
             ui.post {
                 when (d.optString("t")) {
                     "partial" -> { val t = d.optString("text"); input?.setText(t); input?.setSelection(t.length) }
                     "final" -> { val t = d.optString("text"); stopVoice(); if (t.isNotBlank()) { input?.setText(t); submit() } }
-                    "empty" -> { stopVoice(); status?.text = "Не расслышал — нажмите ещё раз" }
-                    "error" -> { stopVoice(); status?.text = "Ошибка микрофона" }
+                    "empty" -> { stopVoice(); setStatus("Не расслышал") }
+                    "error" -> { stopVoice(); setStatus("Ошибка микрофона") }
                 }
             }
         }
@@ -285,10 +202,9 @@ class AssistantOverlayService : Service() {
 
     private fun stopVoice() {
         listening = false
+        micBtn?.clearAnimation()
         micBtn?.setColorFilter(0xFFFAB283.toInt())
-        micRing?.clearAnimation(); micRing?.visibility = View.GONE
         try { stt?.stop() } catch (_: Exception) {}
-        if (status?.text == "Слушаю…") status?.text = "Чем помочь?"
     }
 
     // ---------- submit ----------
@@ -298,43 +214,34 @@ class AssistantOverlayService : Service() {
         resetIdle()
         stopVoice()
         input?.setText("")
-        answer?.visibility = View.GONE
         busy = true
-        status?.text = "Выполняю…"
-        progress?.visibility = View.VISIBLE
+        setStatus("…")
         AssistantCore.runPhrase(this, t,
-            onStatus = { s -> status?.text = s },
+            onStatus = { s -> setStatus(s + "…") },
             onDone = { ok, summary ->
                 busy = false
-                progress?.visibility = View.GONE
                 if (!ok && summary.startsWith("AGENT:")) {
                     val query = summary.removePrefix("AGENT:")
                     emit?.invoke("assistantQuery", JSONObject().put("text", query).put("source", "overlay"))
-                    status?.text = "Отправлено агенту ↗"
+                    setStatus("→ агент")
                     try {
                         startActivity(Intent(this, MainActivity::class.java)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             .putExtra("widget_action", "assistant_agent").putExtra("widget_target", query))
                     } catch (_: Exception) {}
-                    // keep the window: the user may want another command
+                    ui.postDelayed({ setStatus("", false) }, 2500)
                 } else {
-                    status?.text = if (ok) "Готово ✓" else "Не получилось"
-                    answer?.text = summary
-                    answer?.visibility = if (summary.isBlank()) View.GONE else View.VISIBLE
+                    setStatus(if (ok) "✓ " + summary.replace("\n", " · ") else summary.replace("\n", " · "))
+                    // result stays visible; window stays open for the next command
                 }
-                resetIdle() // stays open
+                resetIdle()
             })
     }
 
     fun showResult(text: String, ok: Boolean) {
-        ui.post {
-            busy = false; progress?.visibility = View.GONE
-            status?.text = if (ok) "Готово ✓" else "Ошибка"
-            answer?.text = text; answer?.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
-            resetIdle()
-        }
+        ui.post { busy = false; setStatus((if (ok) "✓ " else "") + text); resetIdle() }
     }
-    fun setStatus(text: String) { ui.post { status?.text = text; resetIdle() } }
+    fun setStatusText(text: String) { ui.post { setStatus(text); resetIdle() } }
     fun setPartial(text: String) { ui.post { input?.setText(text); input?.setSelection(text.length) } }
 
     private fun hideSelf() {

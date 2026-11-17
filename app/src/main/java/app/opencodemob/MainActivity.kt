@@ -1636,7 +1636,8 @@ class MainActivity : ComponentActivity() {
             return try {
                 when (cmd.lowercase()) {
                     "status" -> PhoneControl.status(this@MainActivity).toString()
-                    "open", "app" -> { val ok = AssistantCore.openApp(this@MainActivity, a(0)); JSONObject().put("ok", ok).put("err", if (ok) "" else "приложение не найдено").toString() }
+                    "open", "app" -> AssistantCore.openAppDetailed(this@MainActivity, a(0)).toString()
+                    "apps" -> JSONObject().put("ok", true).put("apps", AssistantCore.listApps(this@MainActivity)).toString()
                     "torch", "flashlight" -> JSONObject().put("ok", PhoneControl.flashlight(this@MainActivity, a(0) != "off")).toString()
                     "dnd" -> PhoneControl.dnd(this@MainActivity, a(0)).toString()
                     "volume" -> PhoneControl.volume(this@MainActivity, a(0), a(1).toIntOrNull()).toString()
@@ -1691,7 +1692,7 @@ class MainActivity : ComponentActivity() {
             AssistantOverlayService.instance?.showResult(text, ok)
         }
         @JavascriptInterface fun assistantStatus(text: String) {
-            AssistantOverlayService.instance?.setStatus(text)
+            AssistantOverlayService.instance?.setStatusText(text)
         }
         @JavascriptInterface fun assistantPartial(text: String) {
             AssistantOverlayService.instance?.setPartial(text)

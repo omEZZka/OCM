@@ -13,7 +13,48 @@ const O=window.OCM,h=O.h,S=O.S,bus=O.bus;
  *     assistant can still do everything the chat can.
  */
 
-const A=O.assistant={listening:false,wakeTimer:null};
+const A=O.assistant={listening:false,wakeTimer:null,sid:null};
+
+// ---- dedicated assistant session ----
+// Assistant requests live in their own persistent session, separate from the user's main chat.
+O.assistantSession=async()=>{
+  if(A.sid&&S.sessions.some(x=>x.id===A.sid))return A.sid;
+  const saved=O.store.get('assistant.sid',null);
+  if(saved){
+    try{
+      await O.api('GET','/session/'+saved,null,{timeout:8000});
+      A.sid=saved;return saved;
+    }catch(_){/* session gone — create a new one */}
+  }
+  try{
+    const ses=await O.api('POST','/session',{title:'🎙 Ассистент'});
+    A.sid=ses.id;O.store.set('assistant.sid',ses.id);
+    if(!S.sessions.some(x=>x.id===ses.id))S.sessions.unshift(ses);
+    bus.emit('sessions');
+    return ses.id;
+  }catch(e){return null}
+};
+// Send a phrase to the assistant session (not the currently open chat).
+O.assistantSend=async text=>{
+  const sid=await O.assistantSession();
+  if(!sid||!S.model)return false;
+  const mid=O.mid();
+  const parts=[{type:'text',text}];
+  try{
+    const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:S.model});
+    m.local=true;m.parts=parts.map((p,k)=>Object.assign({id:'prt_as'+k,sessionID:sid,messageID:mid},p));
+    if(sid===S.sid)bus.emit('msg',sid,m);
+    await O.api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,parts},{timeout:30000});
+    return true;
+  }catch(e){O.toast(e.message||String(e),3000);return false}
+};
+// Open the assistant session in the chat tab.
+O.openAssistantChat=async()=>{
+  const sid=await O.assistantSession();
+  if(!sid)return O.toast(O.tr('Server is not ready','Сервер не готов'),2500);
+  O.setTab('chat');
+  await O.openSession(sid);
+};
 
 // ---------- native wrappers ----------
 const pend=new Map();let seq=0;
@@ -180,9 +221,9 @@ async function runStep(st){
 O.runAssistant=async(text,{silent=false}={})=>{
   const steps=O.parseAssistant(text);
   if(!steps){
-    // Not a phone command → let the agent handle it like a normal chat prompt.
-    if(O.chatSendText){O.chatSendText(text);return{ok:true,agent:true}}
-    return{ok:false,err:'no agent'};
+    // Not a phone command → the agent handles it in the DEDICATED assistant session.
+    const sent=await O.assistantSend(text);
+    return{ok:sent,agent:true};
   }
   const done=[];
   for(const st of steps){
@@ -264,11 +305,11 @@ O.on('assistantQuery',async d=>{
   O.phone.setStatus('Выполняю…');
   await O.runAssistant(d.text);
 });
-// overlay forwarded an unknown phrase → send it to the agent chat
-O.on('assistantAgent',d=>{
+// overlay forwarded an unknown phrase → assistant session (opened in the chat tab)
+O.on('assistantAgent',async d=>{
   if(!d||!d.text)return;
-  O.setTab('chat');
-  if(O.chatSendText)O.chatSendText(d.text);
+  const sent=await O.assistantSend(d.text);
+  if(sent){O.setTab('chat');const sid=await O.assistantSession();if(sid)await O.openSession(sid)}
 });
 
 // ---------- agent → phone (PhoneServer) ----------
@@ -325,7 +366,8 @@ O.openAssistant=()=>{
   body.append(statusLine,inp,
     h('div',{style:{display:'flex',gap:'8px',marginTop:'8px'}},
       micBtn,h('button',{class:'btn pri grow',onclick:run},O.icon('send'),O.tr('Run','Выполнить')),
-      h('button',{class:'btn',onclick:()=>{O.phone.showOverlay();s.close()}},O.icon('out'),O.tr('Mini window','Мини-окно'))),
+      h('button',{class:'btn',onclick:()=>{O.phone.showOverlay();s.close()}},O.icon('out'),O.tr('Mini window','Мини-окно')),
+      h('button',{class:'btn',onclick:()=>{s.close();O.openAssistantChat()}},O.icon('chat'),O.tr('Assistant chat','Чат ассистента'))),
     out,
     h('div',{class:'grp',style:{marginTop:'14px'}},O.tr('Quick actions','Быстрые действия')));
   const quick=[
@@ -437,7 +479,30 @@ O.openAssistantSettings=()=>{
     row('DND',st.dndAccess,()=>O.phone.grantDnd());
     row(O.tr('Brightness','Яркость'),st.writeSettings,()=>O.phone.grantWrite());
     body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{s.close();O.openMacroEditor()}},O.icon('zap'),O.tr('Macros','Шаблоны действий')));
+    body.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{s.close();O.openInstalledApps()}},O.icon('list'),O.tr('Installed apps','Установленные приложения')));
   };
+  draw();
+};
+
+// ---------- installed apps viewer (what the assistant can open) ----------
+O.openInstalledApps=()=>{
+  const body=h('div');
+  const s=O.sheet(O.tr('Installed apps','Установленные приложения'),body,{full:true});
+  const q=h('input',{placeholder:O.tr('Search…','Поиск…'),oninput:()=>draw()});
+  const list=h('div');
+  let apps=[];
+  try{const r=O.phone.cmd('apps',[]);apps=r.apps||[]}catch(_){}
+  const draw=()=>{
+    list.textContent='';
+    const f=String(q.value||'').toLowerCase();
+    const shown=apps.filter(a=>(a.label+' '+a.package).toLowerCase().includes(f));
+    list.append(h('div',{class:'mut s',style:{margin:'4px 2px'}},shown.length+' '+O.tr('apps','приложений')));
+    shown.slice(0,200).forEach(a=>list.append(h('button',{class:'settings-row',onclick:()=>{
+      const r=O.phone.cmd('open',[a.package]);
+      O.toast(r.ok?('✓ '+a.label):(r.err||'error'),2500);
+    }},O.icon('out'),h('div',{class:'settings-row-text'},h('b',null,a.label),h('span',{class:'mono s'},a.package)))));
+  };
+  body.append(q,list);
   draw();
 };
 

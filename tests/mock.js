@@ -66,7 +66,7 @@ window.OC={
  biometricAvailable(){return true},haptic(k){(window.__haptics=window.__haptics||[]).push(k)},
  phoneStatus(){return JSON.stringify({accessibility:true,overlay:true,dndAccess:true,writeSettings:true,torch:false,mediaVolume:8,mediaMax:15,batterySaver:false})},
  phoneEnableAccessibility(){},phoneGrantOverlay(){},phoneGrantDnd(){},phoneGrantWriteSettings(){},
- phoneCommand(cmd,args){(window.__phoneCalls=window.__phoneCalls||[]).push({cmd,args:JSON.parse(args||'[]')});return JSON.stringify({ok:true,cmd})},
+ phoneCommand(cmd,args){(window.__phoneCalls=window.__phoneCalls||[]).push({cmd,args:JSON.parse(args||'[]')});if(cmd==='apps')return JSON.stringify({ok:true,apps:[{package:'org.telegram.messenger',label:'Telegram'},{package:'com.android.settings',label:'Настройки'}]});return JSON.stringify({ok:true,cmd})},
  phoneCommandAsync(id,cmd,args){(window.__phoneCalls=window.__phoneCalls||[]).push({cmd,args:JSON.parse(args||'[]'),async:true});setTimeout(()=>OCEvent('phoneResult',{id,result:JSON.stringify({ok:true,cmd,path:'/sdcard/Download/OCM/screens/mock.png'})}),5)},
  assistantResult(t,ok){window.__assistantResult={t,ok}},assistantStatus(t){window.__assistantStatus=t},assistantPartial(t){window.__assistantPartial=t},
  phoneServerStart(){},phoneServerStop(){},phoneAnswer(id,p){(window.__phoneAnswers=window.__phoneAnswers||[]).push({id,p})},setPref(k,v){(window.__prefs=window.__prefs||{})[k]=v},biometricUnlock(id,t){setTimeout(()=>OCEvent('appUnlock',{id,ok:true}),5)},
