@@ -1673,7 +1673,9 @@ class MainActivity : ComponentActivity() {
                         "tap" -> JSONObject().put("ok", svc!!.tap(a(0).toFloat(), a(1).toFloat())).toString()
                         "longpress" -> JSONObject().put("ok", svc!!.longPress(a(0).toFloat(), a(1).toFloat(), a(2).toLongOrNull() ?: 650)).toString()
                         "swipe" -> JSONObject().put("ok", svc!!.swipe(a(0).toFloat(), a(1).toFloat(), a(2).toFloat(), a(3).toFloat(), a(4).toLongOrNull() ?: 300)).toString()
-                        "text", "taptext" -> JSONObject().put("ok", svc!!.tapText(a(0), a(1) == "exact", a(2).toIntOrNull() ?: 0)).toString()
+                        "text", "taptext", "find" -> svc!!.tapTextSmart(a(0), a(1) == "exact", a(2).toIntOrNull() ?: 0, true).toString()
+                        "scroll" -> JSONObject().put("ok", svc!!.scroll(if (a(0) == "up" || a(0) == "-1") -1 else 1)).toString()
+                        "waittext" -> svc!!.waitText(a(0), a(1).toLongOrNull() ?: 8000).toString()
                         "type" -> JSONObject().put("ok", svc!!.typeText(a(0))).toString()
                         "screen" -> svc!!.screenText().put("ok", true).toString()
                         "shot", "screenshot" -> {

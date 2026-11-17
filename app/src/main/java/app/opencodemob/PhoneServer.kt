@@ -72,6 +72,9 @@ object PhoneServer {
                 |#   phone torch on|off
                 |#   phone dnd off|priority|silent
                 |#   phone volume media <0-15>
+                |#   phone find "<text>"             (smart tap: fuzzy+translit+scroll+verify)
+                |#   phone scroll down|up
+                |#   phone waittext "<text>" [ms]
                 |#   phone macro "<name>"
                 |INFO="§HOME/.ocm/phone.json"
                 |[ -f "§INFO" ] || { echo 'phone bridge is not running' >&2; exit 1; }

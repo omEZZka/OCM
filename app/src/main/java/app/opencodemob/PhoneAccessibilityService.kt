@@ -120,18 +120,84 @@ class PhoneAccessibilityService : AccessibilityService() {
         return gesture(p, 0, ms.coerceIn(80, 3000))
     }
 
-    // ---------- node search & tap by text ----------
+    // ---------- smart screen engine ----------
+
+    /** All roots: active window + every interactive window (dialogs, popups, split panes). */
+    private fun roots(): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        try { rootInActiveWindow?.let { out.add(it) } } catch (_: Exception) {}
+        try {
+            for (w in windows) {
+                val r = w.root ?: continue
+                if (out.none { it == r }) out.add(r)
+            }
+        } catch (_: Exception) {}
+        return out
+    }
+
+    private fun norm(x: String): String = x.lowercase().replace('ё', 'е').trim()
+
+    /** Rough latin<->cyrillic for matching "Misha"/"Миша". */
+    private fun translit(x: String): String {
+        val l2c = mapOf("a" to "а","b" to "б","v" to "в","g" to "г","d" to "д","e" to "е","z" to "з","i" to "и","k" to "к","l" to "л","m" to "м","n" to "н","o" to "о","p" to "п","r" to "р","s" to "с","t" to "т","u" to "у","f" to "ф","h" to "х","c" to "к","y" to "й","w" to "в","j" to "дж","q" to "к")
+        val c2l = mapOf("а" to "a","б" to "b","в" to "v","г" to "g","д" to "d","е" to "e","ж" to "zh","з" to "z","и" to "i","й" to "y","к" to "k","л" to "l","м" to "m","н" to "n","о" to "o","п" to "p","р" to "r","с" to "s","т" to "t","у" to "u","ф" to "f","х" to "h","ц" to "ts","ч" to "ch","ш" to "sh","щ" to "sch","ы" to "y","э" to "e","ю" to "yu","я" to "ya")
+        val hasCyr = x.any { it in 'а'..'я' }
+        return if (hasCyr) x.map { c2l[it.toString()] ?: it.toString() }.joinToString("")
+        else {
+            val sb = StringBuilder(); var i = 0
+            while (i < x.length) {
+                val two = x.substring(i, minOf(i + 2, x.length))
+                when (two) { "sh" -> { sb.append("ш"); i += 2 }; "ch" -> { sb.append("ч"); i += 2 }; "zh" -> { sb.append("ж"); i += 2 }; "ya" -> { sb.append("я"); i += 2 }; "yu" -> { sb.append("ю"); i += 2 }; else -> { sb.append(l2c[x[i].toString()] ?: x[i].toString()); i++ } }
+            }
+            sb.toString()
+        }
+    }
+
+    private fun matchScore(text: String, q: String, exact: Boolean): Int {
+        val t = norm(text); val qn = norm(q)
+        if (t.isEmpty() || qn.isEmpty()) return 0
+        if (exact) return if (t == qn) 100 else 0
+        if (t == qn) return 100
+        val tt = translit(t); val qt = translit(qn)
+        if (tt == qt || t == qt || tt == qn) return 90
+        if (t.startsWith(qn) || tt.startsWith(qt)) return 80
+        if (t.contains(qn) || tt.contains(qt) || t.contains(qt) || tt.contains(qn)) return 65
+        // word-level: every query word present
+        val words = qn.split(Regex("\\s+")).filter { it.length > 1 }
+        if (words.isNotEmpty() && words.all { t.contains(it) || tt.contains(translit(it)) }) return 55
+        return 0
+    }
+
+    private data class Hit(val node: AccessibilityNodeInfo, val score: Int, val text: String)
+
+    private fun findHits(query: String, exact: Boolean): List<Hit> {
+        val hits = ArrayList<Hit>()
+        fun walk(n: AccessibilityNodeInfo?, depth: Int) {
+            if (n == null || depth > 28 || hits.size > 120) return
+            val t = n.text?.toString() ?: ""
+            val d = n.contentDescription?.toString() ?: ""
+            val sc = maxOf(matchScore(t, query, exact), matchScore(d, query, exact))
+            if (sc > 0) {
+                val b = Rect().also { n.getBoundsInScreen(it) }
+                if (b.width() > 0 && b.height() > 0) hits.add(Hit(n, sc, t.ifEmpty { d }))
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
+        }
+        for (r in roots()) walk(r, 0)
+        return hits.sortedByDescending { it.score }
+    }
 
     private fun collectTexts(node: AccessibilityNodeInfo?, out: JSONArray, depth: Int = 0) {
-        if (node == null || depth > 24 || out.length() > 400) return
+        if (node == null || depth > 26 || out.length() > 500) return
         val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
         if (text.isNotBlank()) {
             val b = Rect().also { node.getBoundsInScreen(it) }
-            out.put(JSONObject()
-                .put("text", text.take(120))
+            if (b.width() > 0) out.put(JSONObject()
+                .put("text", text.take(140))
                 .put("id", node.viewIdResourceName ?: "")
                 .put("cls", (node.className ?: "").toString().substringAfterLast('.'))
                 .put("clickable", node.isClickable)
+                .put("scrollable", node.isScrollable)
                 .put("x", b.centerX()).put("y", b.centerY())
                 .put("w", b.width()).put("h", b.height()))
         }
@@ -141,42 +207,154 @@ class PhoneAccessibilityService : AccessibilityService() {
     fun screenText(): JSONObject {
         val o = JSONObject().put("package", lastPackage).put("window", lastWindow)
         val arr = JSONArray()
-        try { collectTexts(rootInActiveWindow, arr) } catch (_: Exception) {}
+        for (r in roots()) collectTexts(r, arr)
         o.put("items", arr)
         return o
     }
 
-    /** Finds a node whose text/description contains [query] (case-insensitive) and taps it. */
-    fun tapText(query: String, exact: Boolean = false, index: Int = 0): Boolean {
-        val q = query.trim().lowercase()
-        if (q.isEmpty()) return false
-        val matches = ArrayList<AccessibilityNodeInfo>()
+    /** Screen fingerprint: used to VERIFY that a tap actually changed something. */
+    private fun fingerprint(): String {
+        val sb = StringBuilder(lastPackage).append('|')
+        var count = 0
         fun walk(n: AccessibilityNodeInfo?, depth: Int) {
-            if (n == null || depth > 24 || matches.size > 40) return
-            val t = (n.text?.toString() ?: "").lowercase()
-            val d = (n.contentDescription?.toString() ?: "").lowercase()
-            val hit = if (exact) t == q || d == q else t.contains(q) || d.contains(q)
-            if (hit) matches.add(n)
+            if (n == null || depth > 20 || count > 150) return
+            val t = n.text?.toString() ?: ""
+            if (t.isNotBlank()) { sb.append(t).append(';'); count++ }
             for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
         }
-        try { walk(rootInActiveWindow, 0) } catch (_: Exception) { return false }
-        if (matches.isEmpty()) return false
-        val target = matches.getOrElse(index) { matches[0] }
-        // prefer a clickable ancestor
+        for (r in roots()) walk(r, 0)
+        return sb.toString()
+    }
+
+    /** Wait until the foreground package becomes [pkg] (app actually launched). */
+    fun waitForPackage(pkg: String, timeoutMs: Long = 6000): Boolean {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < end) {
+            if (lastPackage == pkg) return true
+            try { rootInActiveWindow?.packageName?.toString()?.let { if (it == pkg) { lastPackage = it; return true } } } catch (_: Exception) {}
+            Thread.sleep(200)
+        }
+        return lastPackage == pkg
+    }
+
+    /** Wait until the screen changes (tap had a visible effect). */
+    private fun waitChange(before: String, timeoutMs: Long = 2500): Boolean {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < end) {
+            Thread.sleep(220)
+            if (fingerprint() != before) return true
+        }
+        return false
+    }
+
+    private fun clickNode(target: AccessibilityNodeInfo): Boolean {
         var n: AccessibilityNodeInfo? = target
         var hops = 0
-        while (n != null && !n.isClickable && hops < 6) { n = n.parent; hops++ }
+        while (n != null && !n.isClickable && hops < 7) { n = n.parent; hops++ }
         if (n != null && n.isClickable && n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
         val b = Rect().also { target.getBoundsInScreen(it) }
         return tap(b.centerX().toFloat(), b.centerY().toFloat())
     }
 
-    /** Types text into the currently focused editable field. */
+    /** Scroll the first scrollable container (or screen) in [dir]: 1 down, -1 up. */
+    fun scroll(dir: Int): Boolean {
+        for (r in roots()) {
+            var found: AccessibilityNodeInfo? = null
+            fun walk(n: AccessibilityNodeInfo?, depth: Int) {
+                if (n == null || depth > 24 || found != null) return
+                if (n.isScrollable) { found = n; return }
+                for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
+            }
+            walk(r, 0)
+            if (found != null) {
+                val act = if (dir > 0) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                if (found!!.performAction(act)) return true
+            }
+        }
+        val dm = resources.displayMetrics
+        val cx = dm.widthPixels / 2f
+        return if (dir > 0) swipe(cx, dm.heightPixels * 0.75f, cx, dm.heightPixels * 0.3f, 350)
+        else swipe(cx, dm.heightPixels * 0.3f, cx, dm.heightPixels * 0.75f, 350)
+    }
+
+    /**
+     * Smart tap-by-text: searches ALL windows, fuzzy + transliteration, retries while the app
+     * loads, scrolls to find off-screen items, and VERIFIES the tap changed the screen.
+     * Returns a detailed result instead of a blind boolean.
+     */
+    fun tapTextSmart(query: String, exact: Boolean = false, index: Int = 0, scrollSearch: Boolean = true): JSONObject {
+        val q = query.trim()
+        if (q.isEmpty()) return JSONObject().put("ok", false).put("err", "пустой запрос")
+        val deadline = System.currentTimeMillis() + 9000
+        var scrolls = 0
+        var lastSeen = ""
+        while (System.currentTimeMillis() < deadline) {
+            val hits = findHits(q, exact)
+            if (hits.isNotEmpty()) {
+                val target = hits.getOrElse(index) { hits[0] }
+                val before = fingerprint()
+                val clicked = clickNode(target.node)
+                if (!clicked) return JSONObject().put("ok", false).put("err", "не удалось нажать «${target.text}»")
+                // verify: screen must change (navigation, dialog, selection)
+                val changed = waitChange(before, 2600)
+                return if (changed) JSONObject().put("ok", true).put("matched", target.text).put("score", target.score)
+                else JSONObject().put("ok", false).put("err", "нажал «${target.text}», но экран не изменился").put("matched", target.text).put("verified", false)
+            }
+            // not found yet: maybe the app is still loading or the item is off-screen
+            val fp = fingerprint()
+            if (scrollSearch && fp == lastSeen && scrolls < 4) {
+                scroll(1); scrolls++
+                Thread.sleep(500)
+            } else if (scrollSearch && fp != lastSeen) {
+                lastSeen = fp
+                Thread.sleep(400)
+            } else {
+                Thread.sleep(400)
+            }
+        }
+        return JSONObject().put("ok", false).put("err", "«$q» не найдено на экране" + if (scrolls > 0) " (проскроллил $scrolls раз)" else "")
+    }
+
+    /** Legacy boolean API kept for the bridge. */
+    fun tapText(query: String, exact: Boolean = false, index: Int = 0): Boolean =
+        tapTextSmart(query, exact, index, false).optBoolean("ok")
+
+    /** Type into the focused field; falls back to the first editable node. Verified by read-back. */
     fun typeText(text: String): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
-        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
-        return focus.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        for (r in roots()) {
+            val focus = r.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (focus != null && focus.isEditable) {
+                val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
+                if (focus.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return true
+            }
+        }
+        // fallback: first editable
+        for (r in roots()) {
+            var ed: AccessibilityNodeInfo? = null
+            fun walk(n: AccessibilityNodeInfo?, depth: Int) {
+                if (n == null || depth > 24 || ed != null) return
+                if (n.isEditable) { ed = n; return }
+                for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
+            }
+            walk(r, 0)
+            if (ed != null) {
+                ed!!.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
+                if (ed!!.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return true
+            }
+        }
+        return false
+    }
+
+    /** Wait for text to appear (app loading / navigation). */
+    fun waitText(query: String, timeoutMs: Long = 8000): JSONObject {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < end) {
+            val hits = findHits(query, false)
+            if (hits.isNotEmpty()) return JSONObject().put("ok", true).put("matched", hits[0].text)
+            Thread.sleep(350)
+        }
+        return JSONObject().put("ok", false).put("err", "«$query» не появилось за ${timeoutMs / 1000}с")
     }
 
     // ---------- screenshot to file ----------

@@ -365,6 +365,18 @@ try:
     pg.evaluate("OCM.setFastMode(false)")
     pg.wait_for_timeout(200)
     chk('fast mode off restores',pg.evaluate("OCM.fastMode()")==False)
+    # ---- smart assistant commands ----
+    sm=pg.evaluate("""() => {
+      const c=t=>(OCM.parseAssistant(t)||[]).map(s=>s.cmd);
+      const a=(t,i)=>(OCM.parseAssistant(t)||[])[0].args[i||0];
+      return {scrollD:c('прокрути вниз'),scrollU:c('scroll up'),find:c('найди Миша'),
+        wait:c('подожди 3'),waitArg:a('подожди 3'),chain:c('открой телеграм и найди Миша')};
+    }""")
+    chk('smart scroll down',sm['scrollD']==['scroll'])
+    chk('smart scroll up en',sm['scrollU']==['scroll'])
+    chk('smart find',sm['find']==['find'])
+    chk('smart wait',sm['wait']==['wait'] and sm['waitArg']=='3000')
+    chk('smart chain open+find',sm['chain']==['open','find'])
     # ---- arena + translit ----
     chk('arena helpers',pg.evaluate("typeof OCM.openArena==='function'&&typeof OCM.arenaPickFour==='function'&&typeof OCM.arenaJudge==='function'"))
     four=pg.evaluate("OCM.arenaPickFour().length")

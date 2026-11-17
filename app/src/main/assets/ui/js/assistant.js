@@ -239,8 +239,10 @@ function parseOne(t){
       return step('open',[pkg?pkg.package:hit],'Открыть '+hit);
     }
   }catch(_){}
-  if(has('свайп вверх','swipe up','листай вверх','прокрути вверх'))return step('swipe',['540','1800','540','600'],'Свайп вверх');
-  if(has('свайп вниз','swipe down','листай вниз','прокрути вниз'))return step('swipe',['540','600','540','1800'],'Свайп вниз');
+  if(has('прокрути вниз','листай вниз','свайп вниз','scroll down','скролл вниз'))return step('scroll',['down'],'Прокрутка вниз');
+  if(has('прокрути вверх','листай вверх','свайп вверх','scroll up','скролл вверх'))return step('scroll',['up'],'Прокрутка вверх');
+  if((m=s.match(/^(?:подожди|жди|wait)\s*(\d+)?/)))return step('wait',[String((parseInt(m[1]||'2',10))*1000)],'Пауза');
+  if((m=orig.match(/^(?:найди|ищи|find)\s+(.+)$/i)))return step('find',[m[1]],'Найти «'+m[1]+'»');
   return null;
 }
 // Split "открой телеграм и в нем открой чат Миша" into steps.
@@ -270,9 +272,10 @@ async function runStep(st){
     for(const s of mac.steps){results.push(await runStep(s));await new Promise(r=>setTimeout(r,450))}
     return{ok:results.every(r=>r.ok!==false),label:mac.name,results};
   }
-  const asyncCmds=['tap','longpress','swipe','text','type','screen','shot','screenshot'];
+  const asyncCmds=['tap','longpress','swipe','text','type','screen','shot','screenshot','find','scroll','waittext'];
   let r;
-  if(asyncCmds.includes(st.cmd))r=await phoneAsync(st.cmd,st.args);
+  if(st.cmd==='wait'){await new Promise(r2=>setTimeout(r2,parseInt(st.args[0]||'1000',10)));r={ok:true}}
+  else if(asyncCmds.includes(st.cmd))r=await phoneAsync(st.cmd,st.args);
   else r=phoneSync(st.cmd,st.args);
   if(r&&r.err==='accessibility_off'){O.phone.enableAccessibility();return{ok:false,err:'Включите Accessibility для OpenCode Mobile в настройках Android'} }
   if(r&&r.err==='policy_access'){O.phone.grantDnd();return{ok:false,err:'Разрешите управление «Не беспокоить»'} }
@@ -393,7 +396,7 @@ O.on('phoneRequest',async d=>{
       const mac=O.macros().find(m=>m.id===args[0]||m.name.toLowerCase()===String(args[0]||'').toLowerCase());
       if(!mac){O.phone.answer(d.id,{ok:false,err:'macro not found'});return}
       r=await runStep({cmd:'macro',args:[mac.id]});
-    }else if(['tap','longpress','swipe','text','type','screen','shot','screenshot'].includes(cmd)){
+    }else if(['tap','longpress','swipe','text','type','screen','shot','screenshot','find','scroll','waittext'].includes(cmd)){
       r=await phoneAsync(cmd,args);
     }else{
       r=phoneSync(cmd,args);

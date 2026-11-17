@@ -71,9 +71,15 @@ object AssistantCore {
         fun tryPkg(pkg: String): Boolean {
             val li = pm.getLaunchIntentForPackage(pkg) ?: return false
             val err = start(li)
-            if (err == null) return true
-            lastErr = err
-            return false
+            if (err != null) { lastErr = err; return false }
+            // VERIFY: the app must actually reach the foreground, not just "intent sent"
+            val svc = PhoneAccessibilityService.instance
+            if (svc != null) {
+                if (!svc.waitForPackage(pkg, 6000)) { lastErr = "приложение не вышло на передний план"; return false }
+            } else {
+                Thread.sleep(1200) // no accessibility: best-effort settle time
+            }
+            return true
         }
 
         // 1. known aliases
@@ -355,9 +361,16 @@ object AssistantCore {
         val bare = s.removeSuffix(" приложение").trim()
         if (ALIASES.containsKey(bare)) return step("open", bare, label = "Открыть " + orig)
 
-        // ---- swipe gestures ----
-        if (has("свайп вверх", "swipe up", "листай вверх", "прокрути вверх")) return step("swipe", "540", "1800", "540", "600", label = "Свайп вверх")
-        if (has("свайп вниз", "swipe down", "листай вниз", "прокрути вниз")) return step("swipe", "540", "600", "540", "1800", label = "Свайп вниз")
+        // ---- scroll / wait ----
+        if (has("прокрути вниз", "листай вниз", "свайп вниз", "scroll down", "скролл вниз", "ниже")) return step("scroll", "down", label = "Прокрутка вниз")
+        if (has("прокрути вверх", "листай вверх", "свайп вверх", "scroll up", "скролл вверх", "выше")) return step("scroll", "up", label = "Прокрутка вверх")
+        Regex("^(?:подожди|жди|wait)\\s*(\\d+)?").find(s)?.let {
+            val ms = (it.groupValues[1].toIntOrNull() ?: 2) * 1000
+            return step("wait", ms.toString(), label = "Пауза")
+        }
+        Regex("^(?:найди|ищи|find)\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
+            return step("find", it.groupValues[1], label = "Найти «" + it.groupValues[1] + "»")
+        }
 
         return null
     }
@@ -411,9 +424,18 @@ object AssistantCore {
                     val svc = PhoneAccessibilityService.instance ?: return JSONObject().put("ok", false).put("err", "accessibility_off")
                     JSONObject().put("ok", svc.swipe(a(0).toFloat(), a(1).toFloat(), a(2).toFloat(), a(3).toFloat(), a(4).toLongOrNull() ?: 300))
                 }
-                "text", "taptext" -> {
+                "text", "taptext", "find" -> {
                     val svc = PhoneAccessibilityService.instance ?: return JSONObject().put("ok", false).put("err", "accessibility_off")
-                    JSONObject().put("ok", svc.tapText(a(0), a(1) == "exact", a(2).toIntOrNull() ?: 0))
+                    svc.tapTextSmart(a(0), a(1) == "exact", a(2).toIntOrNull() ?: 0, true)
+                }
+                "scroll" -> {
+                    val svc = PhoneAccessibilityService.instance ?: return JSONObject().put("ok", false).put("err", "accessibility_off")
+                    val dir = if (a(0) == "up" || a(0) == "-1") -1 else 1
+                    JSONObject().put("ok", svc.scroll(dir))
+                }
+                "waittext" -> {
+                    val svc = PhoneAccessibilityService.instance ?: return JSONObject().put("ok", false).put("err", "accessibility_off")
+                    svc.waitText(a(0), a(1).toLongOrNull() ?: 8000)
                 }
                 "type" -> {
                     val svc = PhoneAccessibilityService.instance ?: return JSONObject().put("ok", false).put("err", "accessibility_off")
@@ -456,7 +478,9 @@ object AssistantCore {
                 if (detail.isNotEmpty()) sb.append('\n').append(detail)
                 sb.append('\n')
                 if (!good) break
-                Thread.sleep(650)
+                // context-aware settle: apps need time to draw their first screen
+                val cmd = st.optString("cmd")
+                Thread.sleep(if (cmd == "open" || cmd == "app") 1500 else if (cmd == "text" || cmd == "find") 900 else 650)
             }
             val summary = sb.toString().trim()
             ui.post { onDone(ok, summary) }
