@@ -1981,6 +1981,18 @@ class MainActivity : ComponentActivity() {
             JSONObject().put("ok", false).put("err", e.message ?: "failed").toString()
         }
 
+        /** Light haptic tick for confirmations (send, toggle, long-press). */
+        @JavascriptInterface fun haptic(kind: String) {
+            try {
+                val v = if (Build.VERSION.SDK_INT >= 31) getSystemService(android.os.VibratorManager::class.java)?.defaultVibrator
+                    else @Suppress("DEPRECATION") getSystemService(android.os.Vibrator::class.java)
+                val ms = when (kind) { "heavy" -> 24L; "light" -> 8L; else -> 12L }
+                if (Build.VERSION.SDK_INT >= 29) v?.vibrate(android.os.VibrationEffect.createPredefined(
+                    if (kind == "heavy") android.os.VibrationEffect.EFFECT_HEAVY_CLICK else android.os.VibrationEffect.EFFECT_TICK))
+                else @Suppress("DEPRECATION") v?.vibrate(ms)
+            } catch (_: Exception) {}
+        }
+
         // --- clipboard / share / links ---
         @JavascriptInterface fun copy(text: String) {
             runOnUiThread { (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("OpenCode", text)) }

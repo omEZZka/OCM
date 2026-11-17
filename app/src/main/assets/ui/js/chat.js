@@ -216,6 +216,7 @@ function renderAll(){
   // drop pending per-part render jobs: their DOM nodes are about to be replaced anyway
   for(const t of timers.values())clearTimeout(t);
   timers.clear();
+  if(O.chatSkeletonOff)O.chatSkeletonOff();
   msgsEl.innerHTML='';msgEls.clear();partEls.clear();revKey=revisionKey();
   const list=S.sid?O.visibleMsgs(S.sid):[];
   if(draftSid!==S.sid){draftSid=S.sid;clearTimeout(draftTimer);ta.value=S.sid?(O.getDraft(S.sid)||''):'';autosize();updateSend()}
@@ -253,6 +254,19 @@ function showEmpty(){
   // (63) customizable home tiles on the empty chat screen
   if(O.buildHomeTiles)O.buildHomeTiles(empty);
   msgsEl.append(empty)}
+// Skeleton placeholder while a session's messages are being fetched.
+O.chatSkeleton=()=>{
+  if(!msgsEl)return;
+  const old=msgsEl.querySelector('.chat-skeleton');if(old)old.remove();
+  const sk=h('div',{class:'chat-skeleton',style:{padding:'8px 4px'}},
+    h('div',{class:'skeleton',style:{height:'54px',width:'70%',marginLeft:'auto',marginBottom:'14px'}}),
+    h('div',{class:'skeleton',style:{height:'18px',width:'88%',marginBottom:'8px'}}),
+    h('div',{class:'skeleton',style:{height:'18px',width:'64%',marginBottom:'8px'}}),
+    h('div',{class:'skeleton',style:{height:'90px',width:'100%',marginBottom:'14px'}}),
+    h('div',{class:'skeleton',style:{height:'18px',width:'76%'}}));
+  msgsEl.append(sk);
+};
+O.chatSkeletonOff=()=>{const sk=msgsEl&&msgsEl.querySelector('.chat-skeleton');if(sk)sk.remove()};
 function flushPartTimers(){
   for(const el of partEls.values()){if(el._tt){clearTimeout(el._tt);el._tt=null;if(el._p)fillTool(el,el._p)}}
 }
@@ -268,7 +282,7 @@ function ensureMsg(m){
   else keepAnchor(()=>{syncParts(el,m);metaUpdate(el,m)})}
 function buildMsg(m){
   const el=h('div',{class:'msg '+m.info.role,'data-id':m.info.id},h('div',{class:'m-body'}),h('div',{class:'m-meta'}));
-  O.longPress(el,()=>msgMenu(m),520);
+  O.longPress(el,()=>{if(O.native.haptic)O.native.haptic('tick');msgMenu(m)},520);
   msgEls.set(m.info.id,el);syncParts(el,m);metaUpdate(el,m);return el}
 function showPart(m,p){
   if(m.info.role==='user')return(p.type==='text'&&!p.synthetic&&!p.ignored)||p.type==='file'||p.type==='agent';
@@ -1147,6 +1161,7 @@ function renderAtts(){attsEl.textContent='';attsEl.classList.toggle('hide',!atts
 async function onSend(){
   if(busy()&&!ta.value.trim()&&!atts.length){try{await api('POST','/session/'+S.sid+'/abort',{})}catch(e){O.toast(e.message)}return}
   const text=ta.value.trim();if(!text&&!atts.length)return;
+  if(O.native.haptic)O.native.haptic('light');
   const cm=/^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text);
   if(cm){const b=BUILTINS.find(x=>x.n===cm[1]);if(b){clear();b.run(cm[2]);return}
     const sc=(S.commands||[]).find(c=>c.name===cm[1]);

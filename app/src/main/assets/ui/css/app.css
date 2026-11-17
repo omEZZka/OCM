@@ -3001,3 +3001,150 @@ html.focus-mode .focus-exit { display: flex; }
 .media-model-info summary { cursor: pointer; font-weight: 600; font-size: 12.5px; }
 .media-model-info > div { margin-top: 5px; line-height: 1.45; overflow-wrap: anywhere; }
 .media-editor-models { max-height: 260px; overflow-y: auto; }
+
+/* ==========================================================================
+   2.11.1 VISUAL POLISH & ERGONOMICS
+   Consistent radii, 44px touch targets, theme-aware surfaces, softer depth,
+   readable typography, calm motion. Appended last so it wins the cascade.
+   ========================================================================== */
+
+:root {
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-xl: 26px;
+  --tap: 44px;
+  --shadow-1: 0 2px 10px rgba(0,0,0,.22);
+  --shadow-2: 0 10px 32px rgba(0,0,0,.38);
+  --ease-out: cubic-bezier(.16,1,.3,1);
+}
+html[data-theme=light] {
+  --shadow-1: 0 2px 10px rgba(0,0,0,.08);
+  --shadow-2: 0 10px 32px rgba(0,0,0,.14);
+}
+
+/* --- touch targets: every interactive control reaches 44px hit area --- */
+.ibtn { width: 40px; height: 40px; border-radius: var(--r-sm); }
+.ibtn.s { width: 34px; height: 34px; position: relative; }
+.ibtn.s::after { content: ''; position: absolute; inset: -5px; } /* invisible 44px hit zone */
+.btn { min-height: 44px; border-radius: var(--r-md); }
+.btn.sm { min-height: 36px; }
+.chip { min-height: 34px; padding: 6px 13px; }
+.attach-btn { width: 40px; height: 40px; }
+#send { width: 44px; height: 44px; border-radius: 14px; }
+.hud-pill { height: 36px; max-height: 36px; padding: 0 13px; }
+.top-menu-btn, .top-status-btn, .top-mm-btn { width: 44px; height: 44px; }
+.bottom-pill { min-height: 40px; padding: 8px 18px; }
+.settings-row { min-height: 52px; }
+.drawer-tile { min-height: 62px; }
+.drawer-nav-item { min-height: 44px; }
+.seg button { min-height: 38px; }
+input, textarea, select { font-size: 16px; } /* prevents iOS-style zoom-on-focus */
+.cbox textarea { font-size: 16px; }
+
+/* --- theme-aware surfaces (no more hardcoded dark hex in light theme) --- */
+.sheet { background: var(--bg2); border-top-color: var(--line); box-shadow: var(--shadow-2); }
+.sh-h { border-bottom-color: var(--line); }
+.hud-pill { background: color-mix(in srgb, var(--fg) 5%, transparent); border-color: var(--line); color: var(--fg); }
+.hud-dock-card, .hud-dock-header { background: var(--card); border-color: var(--line2); }
+.bottom-pill.active { background: var(--card-hover); border-color: var(--line); color: var(--fg); }
+#send { background: var(--card-hover); color: var(--mut); }
+#send.ready { background: var(--acc); color: var(--acc-fg); box-shadow: 0 4px 14px color-mix(in srgb, var(--acc) 30%, transparent); }
+#send.stop { background: var(--err); color: #fff; }
+.chip { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.sh-drag-handle { background: var(--line2); width: 40px; }
+.settings-tabs { background: var(--bg2); }
+.media-tabs { background: var(--bg2); }
+.wm-fill path { fill: color-mix(in srgb, var(--fg) 12%, transparent); }
+.wm-stroke path { fill: color-mix(in srgb, var(--fg) 20%, transparent); }
+
+/* --- composer: calmer depth, clearer focus, safe-area aware --- */
+#composer { padding: 0 12px calc(8px + env(safe-area-inset-bottom, 0px)); }
+.cbox { border-radius: var(--r-xl); padding: 12px 14px 10px; box-shadow: var(--shadow-1);
+  border-color: var(--line); transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out); }
+.cbox:focus-within { border-color: color-mix(in srgb, var(--acc2) 55%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc2) 14%, transparent), var(--shadow-1); }
+.cbox textarea::placeholder { color: var(--mut); opacity: .8; }
+
+/* --- messages: clearer hierarchy, comfier reading --- */
+.msg { margin: 0 0 16px; animation: msg-in .22s var(--ease-out); }
+@keyframes msg-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.msg.user .m-body {
+  background: color-mix(in srgb, var(--acc2) 13%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--acc2) 26%, var(--line));
+  border-radius: var(--r-lg) var(--r-lg) 6px var(--r-lg);
+  padding: 11px 15px; max-width: 88%;
+}
+.msg.assistant .m-body { padding: 2px 2px 0; }
+.m-meta { font-size: 11px; opacity: .85; margin-top: 5px; }
+.msg.user .m-meta { justify-content: flex-end; }
+.p-text { font-size: var(--fs); line-height: 1.62; }
+.p-text p { margin: .55em 0; }
+.p-text blockquote { border-left-color: var(--acc2); background: color-mix(in srgb, var(--acc2) 6%, transparent); }
+.msg-actions .ibtn { opacity: .45; transition: opacity .15s; }
+.msg:hover .msg-actions .ibtn, .msg:active .msg-actions .ibtn { opacity: .85; }
+
+/* --- tools & cards: consistent radius, subtle depth --- */
+.tool { border-radius: var(--r-md); box-shadow: none; transition: border-color .15s; }
+.tool.running { border-color: color-mix(in srgb, var(--acc2) 40%, var(--line)); }
+.tool-h { min-height: 46px; }
+.tool.error { border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+.card, .group-card, .settings-card { border-radius: var(--r-lg); }
+.hud-dock-card { border-radius: var(--r-xl); box-shadow: var(--shadow-2); }
+.errbox { border-radius: var(--r-md); }
+
+/* --- sheets & drawer: smoother, rounder, safer --- */
+.sheet { border-radius: var(--r-xl) var(--r-xl) 0 0; }
+.sh-h { padding: 14px 16px 12px; }
+.sh-h b { font-size: 16.5px; letter-spacing: -.01em; }
+.sh-b { padding: 12px 14px calc(22px + env(safe-area-inset-bottom, 0px)); }
+.sh-back { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+
+/* --- top bar & bottom bar: breathing room --- */
+#top { padding: 8px 12px; min-height: 54px; }
+#bottom-bar { padding: 6px 16px calc(10px + env(safe-area-inset-bottom, 0px)); gap: 10px; }
+
+/* --- scrollbars: thin, quiet, theme-aware --- */
+* { scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
+*::-webkit-scrollbar { width: 5px; height: 5px; }
+*::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 3px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* --- focus visibility for keyboard/switch users --- */
+:focus-visible { outline: 2px solid var(--acc2); outline-offset: 2px; border-radius: 6px; }
+button:focus:not(:focus-visible), input:focus:not(:focus-visible) { outline: none; }
+
+/* --- selection color --- */
+::selection { background: color-mix(in srgb, var(--acc2) 30%, transparent); }
+
+/* --- empty state: warmer --- */
+.empty { gap: 6px; }
+.home-tiles { margin-top: 22px; }
+.home-tile { border-radius: var(--r-md); min-height: 74px; transition: transform .12s, background .12s; }
+.home-tile:active { transform: scale(.96); }
+
+/* --- status line & jump button --- */
+.status-line { padding: 4px 16px 8px; }
+#jump { box-shadow: var(--shadow-1); }
+
+/* --- toast: rounded, elevated, readable --- */
+#toast { border-radius: var(--r-md); box-shadow: var(--shadow-2); max-width: min(92vw, 420px); }
+
+/* --- skeleton shimmer for loading rows --- */
+.skeleton { position: relative; overflow: hidden; background: var(--bg3); border-radius: var(--r-sm); }
+.skeleton::after { content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--fg) 7%, transparent), transparent);
+  animation: sk 1.4s infinite; }
+@keyframes sk { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+/* --- reduced motion: honor it everywhere --- */
+@media (prefers-reduced-motion: reduce) {
+  .msg { animation: none; }
+  .skeleton::after { animation: none; }
+  * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+/* --- wide screens: center the conversation column --- */
+@media (min-width: 820px) {
+  #msgs { padding-left: max(16px, calc((100% - 760px) / 2)); padding-right: max(16px, calc((100% - 760px) / 2)); }
+}

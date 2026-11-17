@@ -314,6 +314,16 @@ try:
     # second opinion + regenerate helpers exist
     chk('regenerate helper',pg.evaluate("typeof OCM.regenerateFrom")=='function')
     chk('second opinion helper',pg.evaluate("typeof OCM.secondOpinion")=='function')
+    # ---- haptics + skeleton ----
+    pg.fill('#composer textarea','haptic test')
+    pg.click('#send')
+    pg.wait_for_timeout(300)
+    chk('haptic on send',pg.evaluate("(window.__haptics||[]).length")>=1)
+    chk('skeleton helpers',pg.evaluate("typeof OCM.chatSkeleton==='function'&&typeof OCM.chatSkeletonOff==='function'"))
+    pg.evaluate("OCM.chatSkeleton()")
+    chk('skeleton renders',pg.locator('.chat-skeleton .skeleton').count()>=4)
+    pg.evaluate("OCM.chatSkeletonOff()")
+    chk('skeleton removed',pg.locator('.chat-skeleton').count()==0)
     # ---- settings ----
     pg.evaluate("OCM.openSettings()")
     pg.wait_for_selector('.sheet .settings-tabs')
@@ -325,6 +335,7 @@ try:
     chk('settings: answer style row','Стиль ответа' in st)
     chk('settings: auto-compact row','Авто-сжатие контекста' in st)
     chk('settings: home tiles row','Плитки главного экрана' in st)
+    chk('settings: haptics row','Тактильный отклик' in st)
     chk('settings: key check row','Проверить все ключи' in st)
     chk('settings: quick chips',pg.locator('.settings-quick-chip').count()>=5)
     chk('settings: voice control near top','Настройки голосового управления' in st)

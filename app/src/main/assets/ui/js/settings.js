@@ -182,10 +182,11 @@ O.openSettings=()=>{
     O.tr('Automatically summarize the session at 85% context usage','Автоматически сжимать сессию при заполнении контекста на 85%'),
     O.autoCompact(),v=>O.setAutoCompact(v));
   const tilesRow=O.listRow('sliders',O.tr('Home tiles','Плитки главного экрана'),O.tr('Choose shortcuts for the empty chat screen','Ярлыки на пустом экране чата'),O.icon('chevR'),()=>O.openHomeTiles());
+  const hapticRow=O.toggleRow('zap',O.tr('Haptic feedback','Тактильный отклик'),O.tr('Vibrate on send, toggles and long-press','Вибрация при отправке, переключении и долгом нажатии'),O.store.get('haptics',true),v=>O.store.set('haptics',v));
   const focusRow=O.toggleRow('eye',O.tr('Focus mode','Фокус-режим'),O.tr('Hide panels — only the conversation','Скрыть панели — только переписка'),O.focusMode(),v=>O.setFocusMode(v));
   const dryRow=O.toggleRow('shield',O.tr('Dry-run mode','Режим Dry-run'),O.tr('Agent proposes commands and diffs without executing','Агент предлагает команды и diff без выполнения'),O.dryRun(),v=>O.setDryRun(v));
   const tourRow=O.listRow('info',O.tr('Feature tour','Обучающий тур'),O.tr('Show the welcome guide again','Показать приветственный гид ещё раз'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openTour(),200)});
-  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,autoCompactRow,focusRow,dryRow,tilesRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
+  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,autoCompactRow,hapticRow,focusRow,dryRow,tilesRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
   panes.main.append(appCard);
 
   // 4. Notifications & Sounds

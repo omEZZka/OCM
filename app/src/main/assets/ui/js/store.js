@@ -1001,6 +1001,7 @@ O.openSession=async(sid,fresh)=>{
   }
   bus.emit('meta');
   const s=O.msgs(sid);
+  if(!s.list.length&&O.chatSkeleton)O.chatSkeleton();
   await O.loadCachedMsgs(sid);
   bus.emit('open',sid);
   if(fresh)return;

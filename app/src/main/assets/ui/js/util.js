@@ -29,7 +29,7 @@ O.stripAnsi=s=>String(s||'')
   .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g,'');
 O.debounce=(f,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),ms)}};
 O.longPress=(el,fn,ms)=>{ms=ms||480;let t=null;
-  const start=e=>{if(e&&e.button!=null&&e.button!==0)return;el._lpFired=false;clearTimeout(t);t=setTimeout(()=>{t=null;el._lpFired=true;fn(e)},ms)};
+  const start=e=>{if(e&&e.button!=null&&e.button!==0)return;el._lpFired=false;clearTimeout(t);t=setTimeout(()=>{t=null;el._lpFired=true;try{if(O.native&&O.native.haptic)O.native.haptic('tick')}catch(_){};fn(e)},ms)};
   const cancel=()=>{if(t){clearTimeout(t);t=null}};
   el.addEventListener('touchstart',start,{passive:true});
   el.addEventListener('touchend',cancel);
@@ -237,7 +237,7 @@ O.actions=(title,items)=>{
 O.back=()=>{const s=stack[stack.length-1];if(s){s.close();return true}return false};
 
 O.toggleRow=(icon,title,sub,checked,onchange)=>{
-  const i=h('input',{type:'checkbox',onchange:()=>onchange(i.checked)});i.checked=!!checked;
+  const i=h('input',{type:'checkbox',onchange:()=>{if(O.native&&O.native.haptic)O.native.haptic('tick');onchange(i.checked)}});i.checked=!!checked;
   const icEl=typeof icon==='string'?h('div',{class:'settings-row-icon'},O.icon(icon)):icon;
   return h('label',{class:'settings-row',style:{cursor:'pointer'}},icEl,h('div',{class:'settings-row-text'},h('b',null,title),sub?h('span',null,sub):null),h('span',{class:'sw'},i,h('s')))};
 
