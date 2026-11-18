@@ -60,6 +60,7 @@ class AssistantOverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
+        miniMode = Prefs.get(this, "assistant.miniMode", "1") == "1"
         if (!android.provider.Settings.canDrawOverlays(this)) { stopSelf(); return START_NOT_STICKY }
         startForegroundCompat()
         if (card == null) attach()
@@ -176,7 +177,7 @@ class AssistantOverlayService : Service() {
     }
 
     // (73) mini-mode: hide result area, keep only the pill row
-    private var miniMode = Prefs.get(this, "assistant.miniMode", "1") == "1"
+    private var miniMode = true
     private fun applyMode() {
         if (miniMode) { status?.visibility = View.GONE } else status?.visibility = if (status?.text?.isNotEmpty() == true) View.VISIBLE else View.GONE
     }
