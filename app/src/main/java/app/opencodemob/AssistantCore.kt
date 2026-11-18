@@ -88,7 +88,7 @@ object AssistantCore {
         val t0 = target.trim()
         if (t0.isEmpty()) return JSONObject().put("ok", false).put("err", "пустое имя")
         // expand abbreviations: тг -> telegram, майн -> minecraft, инста -> instagram
-        val key0 = t0.lowercase().replace('ё', 'е').replace(Regex("[\\\\\s._-]"))), "")
+        val key0 = t0.lowercase().replace('ё', 'е').replace(Regex("[\\s._-]"), "")
         val t = ABBREV[key0] ?: t0
         val ctx = launchContext(c)
         val pm = ctx.packageManager
@@ -158,7 +158,7 @@ object AssistantCore {
         try {
             val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
             val resolved = pm.queryIntentActivities(q, 0)
-            val norm = { x: String -> x.lowercase().replace('ё', 'е').replace(Regex("[\\\\\s._-]"))), "") }
+            val norm = { x: String -> x.lowercase().replace('ё', 'е').replace(Regex("[\\s._-]"), "") }
             val targetN = norm(lower)
             val targetT = translit(targetN)
             var best: Pair<String, Int>? = null
@@ -175,7 +175,7 @@ object AssistantCore {
                     lt.startsWith(targetT) || targetT.startsWith(lt) || lc.startsWith(targetN) || targetN.startsWith(lc) -> 70
                     ln.contains(targetN) || targetN.contains(ln) -> 65
                     lt.contains(targetT) || targetT.contains(lt) || lc.contains(targetN) || targetN.contains(lc) -> 55
-                    ln.split(Regex("\\\\\s+")))).any { it.startsWith(targetN) || translit(it).startsWith(targetT) } -> 60
+                    ln.split(Regex("\\s+")).any { it.startsWith(targetN) || translit(it).startsWith(targetT) } -> 60
                     else -> 0
                 }
                 if (score >= 50 && (best == null || score > best!!.second)) best = pkg to score
@@ -184,7 +184,7 @@ object AssistantCore {
         } catch (_: Exception) {}
 
         // 4. direct package name
-        if (t.matches(Regex("^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$"))))) {
+        if (t.matches(Regex("^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$"))) {
             if (tryPkg(t)) return JSONObject().put("ok", true).put("package", t)
         }
         // 5. uri
@@ -282,8 +282,7 @@ object AssistantCore {
         macroByName(c, raw)?.let {
             return JSONArray().put(JSONObject().put("cmd", "macro").put("args", JSONArray().put(it.optString("id"))).put("label", it.optString("name")))
         }
-        val parts = raw.split(Regex("\\\\\s+(?:и(?:\\\\\s+в\\\\\s+н[её]м)?|затем|потом|после этого)\\\\s+")), RegexOption.IGNORE_CASE))
-            .map { it.trim() }.filter { it.isNotEmpty() }
+        val parts = raw.split(Regex("\\s+(?:и(?:\\s+в\\s+н[её]м)?|затем|потом|после этого)\\s+", RegexOption.IGNORE_CASE)).map { it.trim() }.filter { it.isNotEmpty() }
         val steps = JSONArray()
         for (p in parts) {
             val one = parseOne(c, p) ?: return null
@@ -295,13 +294,13 @@ object AssistantCore {
     private fun parseOne(c: Context, t: String): JSONArray? {
         // normalize: strip polite/filler words, punctuation, leading "в нём"
         var orig = t.trim().trimEnd('.', '!', '?', ',')
-            .replace(Regex("^в\\\\\s+н[её]м\\\\\s+")), RegexOption.IGNORE_CASE), "")
+            .replace(Regex("^в\\s+н[её]м\\s+", RegexOption.IGNORE_CASE), "")
         // NLU pass: slang -> canonical, typo fix, numbers in words
         orig = AssistantNLU.normalizeSlang(orig)
         orig = AssistantNLU.fixTypos(orig)
         orig = AssistantNLU.replaceNumbers(orig)
-        orig = orig.replace(Regex("^(пожалуйста|плиз|please|ну|давай|ка|будь добр[аы]?|сделай мне|мне)\\\\s+")), RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\\\\s+(пожалуйста|плиз|please)$")), RegexOption.IGNORE_CASE), "")
+        orig = orig.replace(Regex("^(пожалуйста|плиз|please|ну|давай|ка|будь добр[аы]?|сделай мне|мне)\\s+", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\s+(пожалуйста|плиз|please)$", RegexOption.IGNORE_CASE), "")
             .trim()
         val s = orig.lowercase().replace('ё', 'е')
         if (s.isEmpty()) return null
@@ -314,7 +313,7 @@ object AssistantCore {
 
         // ---- macros ----
         if (has("режим", "макрос", "macro", "mode")) {
-            val name = s.replace(Regex("^(включи|запусти|активируй|вруби|поставь|activate|enable|turn on)?\\\\s*(режим|макрос|macro|mode)?\\\\s*"))), "").trim()
+            val name = s.replace(Regex("^(включи|запусти|активируй|вруби|поставь|activate|enable|turn on)?\\s*(режим|макрос|macro|mode)?\\s*"), "").trim()
             macroByName(c, name)?.let { return step("macro", it.optString("id"), label = it.optString("name")) }
             macroByName(c, s)?.let { return step("macro", it.optString("id"), label = it.optString("name")) }
         }
@@ -336,7 +335,7 @@ object AssistantCore {
         }
 
         // ---- volume ----
-        Regex("(?:громкость|звук|volume)(?:\\\\s+медиа|\\\\s+музыки|\\\\s+media)?\\\\s*(?:на|до|=)?\\\\s*(\\\d+)"))).find(s)?.let {
+        Regex("(?:громкость|звук|volume)(?:\\s+медиа|\\s+музыки|\\s+media)?\\s*(?:на|до|=)?\\s*(\\d+)").find(s)?.let {
             return step("volume", "media", it.groupValues[1], label = "Громкость " + it.groupValues[1])
         }
         if (has("выключи звук", "убери звук", "без звука полностью", "mute", "заглуши", "тише полностью", "звук на ноль", "громкость 0"))
@@ -353,7 +352,7 @@ object AssistantCore {
                 else return step("volume", "media", "delta", (dir * n).toString(), if (isPct == 1) "percent" else "points", label = (if (dir > 0) "+" else "-") + n.toString())
             }
         }
-        Regex("(?:яркость|brightness)(?:\\\\s+экрана)?\\\\s*(?:на|до|=)?\\\\s*(\\\d+)"))).find(s)?.let {
+        Regex("(?:яркость|brightness)(?:\\s+экрана)?\\s*(?:на|до|=)?\\s*(\\d+)").find(s)?.let {
             return step("brightness", it.groupValues[1], label = "Яркость " + it.groupValues[1])
         }
         if (has("ярче", "яркость выше", "прибавь яркость", "brighter")) return step("brightness", "220", label = "Ярче")
@@ -378,26 +377,26 @@ object AssistantCore {
         if (s == "настройки" || s == "открой настройки" || s == "settings") return step("settings", "", label = "Настройки")
 
         // ---- chat / contact (before generic open) ----
-        Regex("^(?:открой|найди|перейди в|зайди в|напиши в|открыть|open)?\\\\s*(?:чат|диалог|контакт|переписку с|чат с)\\\\s+(.+)$")), RegexOption.IGNORE_CASE).find(orig)?.let {
+        Regex("^(?:открой|найди|перейди в|зайди в|напиши в|открыть|open)?\\s*(?:чат|диалог|контакт|переписку с|чат с)\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             val name = it.groupValues[1].trim()
             if (name.isNotEmpty()) return step("text", name, label = "Чат «$name»")
         }
-        Regex("^чат\\\\\s+(.+)$")), RegexOption.IGNORE_CASE).find(orig)?.let {
+        Regex("^чат\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             return step("text", it.groupValues[1], label = "Чат «" + it.groupValues[1] + "»")
         }
 
         // ---- tap visible text ----
-        Regex("^(?:нажми|тапни|кликни|нажать|tap|click|press)\\\\s+(?:на\\\\s+)?(.+)$")), RegexOption.IGNORE_CASE).find(orig)?.let {
+        Regex("^(?:нажми|тапни|кликни|нажать|tap|click|press)\\s+(?:на\\s+)?(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             return step("text", it.groupValues[1], label = "Нажать «" + it.groupValues[1] + "»")
         }
 
         // ---- type text ----
-        Regex("^(?:напиши|введи|напечатай|ввести|type|набрать)\\\\s+(.+)$")), RegexOption.IGNORE_CASE).find(orig)?.let {
+        Regex("^(?:напиши|введи|напечатай|ввести|type|набрать)\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             return step("type", it.groupValues[1], label = "Ввести текст")
         }
 
         // ---- open app: flexible verb + optional "приложение" ----
-        Regex("^(?:открой|запусти|включи|вруби|открыть|запустить|open|launch|start|запусти мне|открой мне)\\\\s+(?:приложение\\\\s+|app\\\\s+)?(.+)$")), RegexOption.IGNORE_CASE).find(orig)?.let {
+        Regex("^(?:открой|запусти|включи|вруби|открыть|запустить|open|launch|start|запусти мне|открой мне)\\s+(?:приложение\\s+|app\\s+)?(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             val name = it.groupValues[1].trim().removeSuffix(" приложение").removePrefix("приложение ").trim()
             if (name.isNotEmpty()) return step("open", name, label = "Открыть $name")
         }
@@ -408,14 +407,14 @@ object AssistantCore {
 
         // ---- notifications / contacts / alarms / media ----
         if (has("что за уведомление", "последнее уведомление", "latest notification", "что пришло")) return step("notify_latest", label = "Последнее уведомление")
-        Regex("^(?:ответь|ответить|reply)\\\s*(?:на\\\s+)?(.+)$")), RegexOption.IGNORE_CASE).find(orig)?.let {
+        Regex("^(?:ответь|ответить|reply)\\s*(?:на\\s+)?(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             return step("reply", it.groupValues[1], label = "Ответить")
         }
-        Regex("^(?:позвони|вызови|call|набери)\\\s+(.+)$")), RegexOption.IGNORE_CASE).find(orig)?.let {
+        Regex("^(?:позвони|вызови|call|набери)\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             val target = it.groupValues[1]
             return step(if (target.any { ch -> ch.isDigit() || ch == '+' }) "dial" else "call", target, label = "Звонок $target")
         }
-        Regex("^(?:напиши смс|отправь смс|sms)\\\s+(.+?)\\\s+(?:текст|сообщение)?\\\s*(.+)?$")), RegexOption.IGNORE_CASE).find(orig)?.let {
+        Regex("^(?:напиши смс|отправь смс|sms)\\s+(.+?)\\s+(?:текст|сообщение)?\\s*(.+)?$", RegexOption.IGNORE_CASE).find(orig)?.let {
             return step("sms", it.groupValues[1], it.groupValues[2], label = "SMS")
         }
         Regex("^(?:поставь |заведи |установи )?(?:будильник|alarm)(?:\\s+на)?\\s+(\\d{1,2})(?::(\\d{2}))?").find(s)?.let {
@@ -438,11 +437,11 @@ object AssistantCore {
         // ---- scroll / wait ----
         if (has("прокрути вниз", "листай вниз", "свайп вниз", "scroll down", "скролл вниз", "ниже")) return step("scroll", "down", label = "Прокрутка вниз")
         if (has("прокрути вверх", "листай вверх", "свайп вверх", "scroll up", "скролл вверх", "выше")) return step("scroll", "up", label = "Прокрутка вверх")
-        Regex("^(?:подожди|жди|wait)\\\\s*(\\\d+)?"))).find(s)?.let {
+        Regex("^(?:подожди|жди|wait)\\s*(\\d+)?").find(s)?.let {
             val ms = (it.groupValues[1].toIntOrNull() ?: 2) * 1000
             return step("wait", ms.toString(), label = "Пауза")
         }
-        Regex("^(?:найди|ищи|find)\\\\s+(.+)$")), RegexOption.IGNORE_CASE).find(orig)?.let {
+        Regex("^(?:найди|ищи|find)\\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
             return step("find", it.groupValues[1], label = "Найти «" + it.groupValues[1] + "»")
         }
 
@@ -579,7 +578,7 @@ object AssistantCore {
                                         return@Thread
                                     }
                                 }
-                                val m = Regex("\\[[\\\\\s\\S]*\\]"))).find(answer)
+                                val m = Regex("\\[[\\s\\S]*\\]").find(answer)
                                 onDone(if (m != null) JSONArray(m.value) else null)
                             } catch (_: Exception) { onDone(null) }
                         }.start()
