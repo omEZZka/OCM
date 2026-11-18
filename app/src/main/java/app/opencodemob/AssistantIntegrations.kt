@@ -31,9 +31,9 @@ object AssistantIntegrations {
             val reply = android.app.RemoteInput()
             reply.addRemoteInput(remoteInput)
             reply.putCharSequence("android.text", text)
-            val intent = Intent()
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            reply.getFilledInIntent()?.send(c, 0, intent)
+            val pi = reply.getFilledInIntent()
+            if (pi == null) return JSONObject().put("ok", false).put("err", "не удалось подготовить ответ")
+            pi.send(c, 0)
             JSONObject().put("ok", true)
         } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed") }
     }
