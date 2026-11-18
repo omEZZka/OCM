@@ -555,7 +555,9 @@ object AssistantCore {
                         Thread {
                             try {
                                 var answer = ""
+                                var finished = false
                                 repeat(60) {
+                                    if (finished) return@repeat
                                     Thread.sleep(1000)
                                     val st = Net.requestSync(c, "asst_status_" + System.currentTimeMillis().toString(36), "GET", "/session/status", "")
                                     val status = JSONObject(st).optJSONObject("body")?.optJSONObject(sid)
@@ -575,7 +577,7 @@ object AssistantCore {
                                             }
                                             if (answer.isNotEmpty()) break
                                         }
-                                        return@Thread
+                                        finished = true
                                     }
                                 }
                                 val m = Regex("\\[[\\s\\S]*\\]").find(answer)
