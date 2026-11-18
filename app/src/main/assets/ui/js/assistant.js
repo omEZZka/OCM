@@ -620,9 +620,30 @@ O.openAssistantSettings=()=>{
       perm(O.tr('Overlay','Поверх окон'),st.overlay,()=>O.phone.grantOverlay(),O.tr('Mini window over apps','Мини-окно поверх приложений')),
       perm(O.tr('Do Not Disturb','Не беспокоить'),st.dndAccess,()=>O.phone.grantDnd(),O.tr('Silent / game modes','Тихий / игровой режимы')),
       perm(O.tr('Brightness','Яркость'),st.writeSettings,()=>O.phone.grantWrite(),O.tr('Screen brightness control','Управление яркостью экрана'))));
+    // ---- wake without button & LLM ----
+    body.append(h('div',{class:'settings-section-title'},O.tr('Wake without button & LLM','Вызов без кнопки и ИИ')));
+    body.append(h('div',{class:'settings-card'},
+      O.toggleRow('mic',O.tr('Always listen for wake phrase','Всегда слушать кодовую фразу'),
+        O.tr('Background listening while the app is open (no button needed)','Фоновое прослушивание, пока приложение открыто — кнопка не нужна'),
+        cfg.enabled,v=>{O.store.set('assistant.wakeEnabled',v);if(v)O.assistantWakeStart();else O.assistantWakeStop();draw()}),
+      O.toggleRow('bot',O.tr('LLM for unknown phrases','ИИ для непонятных фраз'),
+        O.tr('Model structures the intent and executes it locally instead of dumping to chat','Модель разбирает намерение и выполняет локально вместо отправки в чат'),
+        O.store.get('assistant.llm',true),v=>{O.store.set('assistant.llm',v);try{OC.setPref('assistant.llm',v?'1':'0')}catch(_){}})));
+    // ---- mini mode & voice output ----
+    body.append(h('div',{class:'settings-section-title'},O.tr('Mini window & voice','Мини-окно и озвучка')));
+    body.append(h('div',{class:'settings-card'},
+      O.toggleRow('eye',O.tr('Minimal pill','Минимальная пилюля'),
+        O.tr('Only mic + input + send + close; no result card','Только mic, ввод, отправка, закрытие — без карточки результата'),
+        O.store.get('assistant.miniMode',true),v=>{O.store.set('assistant.miniMode',v);try{OC.setPref('assistant.miniMode',v?'1':'0')}catch(_){}}),
+      O.toggleRow('wave',O.tr('Speak results','Озвучивать результаты'),
+        O.tr('Read the assistant answer aloud','Проговаривать ответ ассистента вслух'),
+        O.store.get('assistant.tts',false),v=>{O.store.set('assistant.tts',v);try{OC.setPref('assistant.tts',v?'1':'0')}catch(_){}}),
+      O.listRow('zap',O.tr('Speech rate','Скорость речи'),O.store.get('assistant.rate','1.0')+'x',O.icon('chevR'),()=>{
+        O.actions(O.tr('Speech rate','Скорость речи'),['0.75','1.0','1.25','1.5','2.0'].map(r=>({label:r+'x',icon:r===O.store.get('assistant.rate','1.0')?'check':'zap',fn:()=>{O.store.set('assistant.rate',r);try{OC.setPref('assistant.rate',r)}catch(_){};draw()}})));
+      })));
     // ---- agent CLI hint ----
     body.append(h('div',{class:'note',style:{marginTop:'12px'}},
-      O.tr('Agent CLI: phone open telegram · phone text "Миша" · phone shot · phone torch on · phone macro "Игровой режим". Names work in Russian, English and transliteration.','CLI агента: phone open telegram · phone text "Миша" · phone shot · phone torch on · phone macro "Игровой режим". Имена работают на русском, английском и транслитом.')));
+      O.tr('Agent CLI: phone open telegram · phone text "Миша" · phone shot · phone torch on · phone macro "Игровой режим" · phone find/scroll/waittext · phone reply/alarm/timer/media. Names work in Russian, English and transliteration.','CLI агента: phone open telegram · phone text "Миша" · phone shot · phone torch on · phone macro "Игровой режим" · phone find/scroll/waittext · phone reply/alarm/timer/media. Имена работают на русском, английском и транслитом.')));
   };
   draw();
 };

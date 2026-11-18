@@ -65,6 +65,7 @@ class AssistantOverlayService : Service() {
         if (card == null) attach()
         card?.visibility = View.VISIBLE
         resetIdle()
+        if (Prefs.get(this, "assistant.wakeEnabled", "0") == "1") startWakeLoop()
         return START_NOT_STICKY
     }
 
@@ -154,6 +155,7 @@ class AssistantOverlayService : Service() {
             maxLines = 4
         }
         card!!.addView(status)
+        applyMode()
 
         val width = (sw * 0.94f).toInt().coerceAtMost(dp(440))
         val p = WindowManager.LayoutParams(
@@ -173,9 +175,55 @@ class AssistantOverlayService : Service() {
         } catch (_: Exception) { stopSelf() }
     }
 
+    // (73) mini-mode: hide result area, keep only the pill row
+    private var miniMode = Prefs.get(this, "assistant.miniMode", "1") == "1"
+    private fun applyMode() {
+        if (miniMode) { status?.visibility = View.GONE } else status?.visibility = if (status?.text?.isNotEmpty() == true) View.VISIBLE else View.GONE
+    }
+
     private fun setStatus(text: String, visible: Boolean = true) {
         status?.text = text
         status?.visibility = if (visible && text.isNotEmpty()) View.VISIBLE else View.GONE
+    }
+
+    // ---- (21) wake-without-button: continuous low-cost listening for the wake phrase ----
+    private var wakeLoop = false
+    private var wakeRecognizer: SpeechInput? = null
+    private fun startWakeLoop() {
+        if (wakeLoop) return
+        wakeLoop = true
+        if (wakeRecognizer == null) wakeRecognizer = SpeechInput(this) { n, d ->
+            if (n != "stt") return@SpeechInput
+            ui.post {
+                if (d.optString("t") == "final" && d.optString("text").isNotBlank()) {
+                    val phrase = d.optString("text").lowercase()
+                    val wake = Prefs.get(this, "assistant.wakePhrase", "окей код").lowercase()
+                    if (wake.isNotEmpty() && phrase.contains(wake)) {
+                        // wake phrase heard: open assistant and hand the rest to it
+                        wakeRecognizer?.stop()
+                        wakeLoop = false
+                        if (card?.visibility != View.VISIBLE) show(this)
+                        val rest = d.optString("text").substringAfter(wake, "").trimStart(' ', ',', '.')
+                        if (rest.isNotBlank()) {
+                            input?.setText(rest)
+                            ui.postDelayed({ submit() }, 250)
+                        } else {
+                            ui.postDelayed({ toggleMic() }, 250)
+                        }
+                    } else {
+                        // not the wake phrase: keep listening without opening anything
+                        if (wakeLoop) ui.postDelayed({ startWakeLoop() }, 500)
+                    }
+                } else if (wakeLoop && d.optString("t") != "partial") {
+                    ui.postDelayed({ startWakeLoop() }, 1200)
+                }
+            }
+        }
+        wakeRecognizer?.start("system", if (Prefs.get(this, "lang") == "en") "en-US" else "ru-RU", arrayOf(Prefs.get(this, "assistant.wakePhrase", "окей код")), false)
+    }
+    private fun stopWakeLoop() {
+        wakeLoop = false
+        try { wakeRecognizer?.stop() } catch (_: Exception) {}
     }
 
     // ---------- voice ----------
@@ -231,7 +279,11 @@ class AssistantOverlayService : Service() {
                     } catch (_: Exception) {}
                     ui.postDelayed({ setStatus("", false) }, 2500)
                 } else {
-                    setStatus(if (ok) "✓ " + summary.replace("\n", " · ") else summary.replace("\n", " · "))
+                    // (27) speak result when TTS is enabled
+                    if (Prefs.get(this, "assistant.tts", "0") == "1" && summary.isNotBlank())
+                        AssistantIntegrations.speak(this, summary, Prefs.get(this, "assistant.rate", "1.0").toFloatOrNull() ?: 1.0f)
+                    if (miniMode) setStatus(if (ok) "✓" else summary, ok || summary.isNotEmpty())
+                    else setStatus(if (ok) "✓ " + summary.replace("\n", " · ") else summary.replace("\n", " · "))
                     // result stays visible; window stays open for the next command
                 }
                 resetIdle()
@@ -246,6 +298,7 @@ class AssistantOverlayService : Service() {
 
     private fun hideSelf() {
         stopVoice()
+        stopWakeLoop()
         idleTimer?.let { ui.removeCallbacks(it) }
         stopSelf()
     }

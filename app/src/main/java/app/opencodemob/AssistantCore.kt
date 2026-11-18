@@ -296,6 +296,10 @@ object AssistantCore {
         // normalize: strip polite/filler words, punctuation, leading "в нём"
         var orig = t.trim().trimEnd('.', '!', '?', ',')
             .replace(Regex("^в\\s+н[её]м\\s+", RegexOption.IGNORE_CASE), "")
+        // NLU pass: slang -> canonical, typo fix, numbers in words
+        orig = AssistantNLU.normalizeSlang(orig)
+        orig = AssistantNLU.fixTypos(orig)
+        orig = AssistantNLU.replaceNumbers(orig)
         orig = orig.replace(Regex("^(пожалуйста|плиз|please|ну|давай|ка|будь добр[аы]?|сделай мне|мне)\\s+", RegexOption.IGNORE_CASE), "")
             .replace(Regex("\\s+(пожалуйста|плиз|please)$", RegexOption.IGNORE_CASE), "")
             .trim()
@@ -343,6 +347,12 @@ object AssistantCore {
             return step("volume", "media", "4", label = "Тише")
 
         // ---- brightness ----
+        AssistantNLU.relativeOf(s)?.let { (dir, n, isPct) ->
+            if (has("ярче", "темнее", "громче", "тише")) {
+                if (has("ярче", "темнее")) return step("brightness", "delta", (dir * n).toString(), if (isPct == 1) "percent" else "points", label = (if (dir > 0) "+" else "-") + n)
+                else return step("volume", "media", "delta", (dir * n).toString(), if (isPct == 1) "percent" else "points", label = (if (dir > 0) "+" else "-") + n)
+            }
+        }
         Regex("(?:яркость|brightness)(?:\\s+экрана)?\\s*(?:на|до|=)?\\s*(\\d+)").find(s)?.let {
             return step("brightness", it.groupValues[1], label = "Яркость " + it.groupValues[1])
         }
@@ -396,6 +406,35 @@ object AssistantCore {
         val bare = s.removeSuffix(" приложение").trim()
         if (ALIASES.containsKey(bare)) return step("open", bare, label = "Открыть " + orig)
 
+        // ---- notifications / contacts / alarms / media ----
+        if (has("что за уведомление", "последнее уведомление", "latest notification", "что пришло")) return step("notify_latest", label = "Последнее уведомление")
+        Regex("^(?:ответь|ответить|reply)\s*(?:на\s+)?(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
+            return step("reply", it.groupValues[1], label = "Ответить")
+        }
+        Regex("^(?:позвони|вызови|call|набери)\s+(.+)$", RegexOption.IGNORE_CASE).find(orig)?.let {
+            val target = it.groupValues[1]
+            return step(if (target.any { ch -> ch.isDigit() || ch == '+' }) "dial" else "call", target, label = "Звонок $target")
+        }
+        Regex("^(?:напиши смс|отправь смс|sms)\s+(.+?)\s+(?:текст|сообщение)?\s*(.+)?$", RegexOption.IGNORE_CASE).find(orig)?.let {
+            return step("sms", it.groupValues[1], it.groupValues[2], label = "SMS")
+        }
+        Regex("^(?:поставь |заведи |установи )?(?:будильник|alarm)(?:\s+на)?\s+(\d{1,2})(?::(\d{2}))?").find(s)?.let {
+            return step("alarm", it.groupValues[1], it.groupValues[2].ifEmpty { "0" }, label = "Будильник")
+        }
+        Regex("^(?:таймер|timer)\s*(?:на)?\s*(\d+)").find(s)?.let {
+            return step("timer", it.groupValues[1], label = "Таймер")
+        }
+        if (has("следующий трек", "next track", "дальше", "вперед")) return step("media", "next", label = "Следующий трек")
+        if (has("предыдущий трек", "previous track", "назад трек")) return step("media", "prev", label = "Предыдущий трек")
+        if (has("пауза", "pause", "стоп музыка", "останови музыку")) return step("media", "pause", label = "Пауза")
+        if (has("играй", "play", "продолжи музыку", "включи музыку")) return step("media", "play", label = "Играть")
+
+        // ---- record / replay / journal ----
+        if (has("запиши макрос", "начни запись", "record", "начать запись")) return step("recorder", "start", label = "Запись началась")
+        if (has("закончи запись", "стоп запись", "stop recording", "сохрани макрос")) return step("recorder", "stop", label = "Запись сохранена")
+        if (has("повтори макрос", "повтори путь", "replay", "сыграй макрос")) return step("replay", "last", label = "Повтор пути")
+        if (has("журнал", "journal", "что ты сделал", "история действий")) return step("journal", "", label = "Журнал действий")
+
         // ---- scroll / wait ----
         if (has("прокрути вниз", "листай вниз", "свайп вниз", "scroll down", "скролл вниз", "ниже")) return step("scroll", "down", label = "Прокрутка вниз")
         if (has("прокрути вверх", "листай вверх", "свайп вверх", "scroll up", "скролл вверх", "выше")) return step("scroll", "up", label = "Прокрутка вверх")
@@ -442,8 +481,10 @@ object AssistantCore {
                 "apps" -> JSONObject().put("ok", true).put("apps", listApps(c))
                 "torch", "flashlight" -> JSONObject().put("ok", PhoneControl.flashlight(c, a(0) != "off"))
                 "dnd" -> PhoneControl.dnd(c, a(0))
-                "volume" -> PhoneControl.volume(c, a(0), a(1).toIntOrNull())
-                "brightness" -> PhoneControl.brightness(c, a(0).toIntOrNull())
+                "volume" -> if (a(1) == "delta") PhoneControl.volumeDelta(c, a(0), a(2).toIntOrNull() ?: 0, a(3) == "percent")
+                    else PhoneControl.volume(c, a(0), a(1).toIntOrNull())
+                "brightness" -> if (a(0) == "delta") PhoneControl.brightnessDelta(c, a(1).toIntOrNull() ?: 0, a(2) == "percent")
+                    else PhoneControl.brightness(c, a(0).toIntOrNull())
                 "settings" -> JSONObject().put("ok", PhoneControl.openSettingsPage(c, a(0)))
                 "wait" -> { Thread.sleep(a(0).toLongOrNull() ?: 500); JSONObject().put("ok", true) }
                 "back", "home", "recents", "notifications", "quicksettings", "power", "lock", "split" -> {
@@ -468,13 +509,21 @@ object AssistantCore {
                     val dir = if (a(0) == "up" || a(0) == "-1") -1 else 1
                     JSONObject().put("ok", svc.scroll(dir))
                 }
+                "notify_latest" -> AssistantIntegrations.latestNotification()
+                "reply" -> AssistantIntegrations.replyLatest(c, a(0))
+                "dial" -> AssistantIntegrations.dial(c, a(0))
+                "call" -> AssistantIntegrations.callContact(c, a(0))
+                "sms" -> AssistantIntegrations.smsContact(c, a(0), a(1))
+                "alarm" -> AssistantIntegrations.alarm(c, a(0).toInt(), a(1).toIntOrNull() ?: 0)
+                "timer" -> AssistantIntegrations.timer(c, a(0).toIntOrNull() ?: 60, a(1))
+                "media" -> AssistantIntegrations.media(c, a(0))
                 "waittext" -> {
                     val svc = PhoneAccessibilityService.instance ?: return JSONObject().put("ok", false).put("err", "accessibility_off")
                     svc.waitText(a(0), a(1).toLongOrNull() ?: 8000)
                 }
                 "type" -> {
                     val svc = PhoneAccessibilityService.instance ?: return JSONObject().put("ok", false).put("err", "accessibility_off")
-                    JSONObject().put("ok", svc.typeText(a(0)))
+                    svc.typeAnywhere(a(0), a(1) == "append")
                 }
                 "shot", "screenshot" -> {
                     val svc = PhoneAccessibilityService.instance ?: return JSONObject().put("ok", false).put("err", "accessibility_off")
@@ -486,15 +535,87 @@ object AssistantCore {
         } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed") }
     }
 
+    /** (1) LLM fallback: unknown phrase -> {intent, args} via the local opencode assistant session. */
+    private fun llmParse(c: Context, text: String, onDone: (JSONArray?) -> Unit) {
+        try {
+            // 1) create a session in the ASSISTANT directory (keeps history separate from the main chat)
+            val create = JSONObject().put("title", "🎙 Ассистент")
+            Net.request(c, "asst_create_" + System.currentTimeMillis().toString(36), "POST", "/session", create, { _, resp ->
+                try {
+                    val sid = JSONObject(resp.optString("body")).optString("id")
+                    // 2) ask for a structured intent JSON
+                    val prompt = "Ты — парсер команд Android-ассистента. Разбери фразу в список действий. " +
+                        "Допустимые cmd: open(приложение), text(нажать по тексту), type(ввести текст), shot(скриншот), torch(on/off), dnd(silent/off), volume(media N), brightness(N), back, home, recents, notifications, quicksettings, scroll(up/down), find(текст), wait(мс), media(play/pause/next/prev), call(имя), dial(номер), sms(имя текст), alarm(час мин), timer(сек), reply(текст), notify_latest, recorder(start/stop), replay, journal. " +
+                        "Ответь ТОЛЬКО JSON-массивом: [{\"cmd\":\"...\",\"args\":[\"...\"],\"label\":\"...\"}] без пояснений. " +
+                        "Фраза: «" + text.replace("\"", "'") + "»"
+                    val body = JSONObject()
+                        .put("messageID", "asst_" + System.currentTimeMillis().toString(36))
+                        .put("parts", org.json.JSONArray().put(JSONObject().put("type", "text").put("text", prompt)))
+                    Net.request(c, "asst_prompt_" + System.currentTimeMillis().toString(36), "POST", "/session/" + sid + "/prompt_async", body, { _, _ ->
+                        // 3) poll the session until idle, then read the last assistant text
+                        Thread {
+                            try {
+                                var answer = ""
+                                repeat(60) {
+                                    Thread.sleep(1000)
+                                    val st = Net.requestSync(c, "asst_status_" + System.currentTimeMillis().toString(36), "GET", "/session/status", "")
+                                    val status = JSONObject(st).optJSONObject("body")?.optJSONObject(sid)
+                                    val type = status?.optString("type") ?: "idle"
+                                    if (type == "idle" || type == "error") {
+                                        val msg = Net.requestSync(c, "asst_msgs_" + System.currentTimeMillis().toString(36), "GET", "/session/" + sid + "/message", "")
+                                        val arr = org.json.JSONArray(JSONObject(msg).optString("body"))
+                                        for (i in arr.length() - 1 downTo 0) {
+                                            val m = arr.getJSONObject(i)
+                                            val info = m.optJSONObject("info")
+                                            if (info?.optString("role") == "assistant") {
+                                                val parts = m.optJSONArray("parts") ?: continue
+                                                for (j in 0 until parts.length()) {
+                                                    val p = parts.getJSONObject(j)
+                                                    if (p.optString("type") == "text") { answer = p.optString("text"); break }
+                                                }
+                                            }
+                                            if (answer.isNotEmpty()) break
+                                        }
+                                        return@Thread
+                                    }
+                                }
+                                val m = Regex("\\[[\\s\\S]*\\]").find(answer)
+                                onDone(if (m != null) JSONArray(m.value) else null)
+                            } catch (_: Exception) { onDone(null) }
+                        }.start()
+                    })
+                } catch (_: Exception) { onDone(null) }
+            })
+        } catch (_: Exception) { onDone(null) }
+    }
+
     /** Runs a whole phrase; reports progress + final summary through [onStatus]/[onDone]. */
     fun runPhrase(c: Context, text: String, onStatus: (String) -> Unit, onDone: (Boolean, String) -> Unit) {
         Thread {
             val steps = parse(c, text)
             if (steps == null) {
-                // unknown → hand to the agent chat if the app is alive, else say so
-                ui.post { onDone(false, "AGENT:" + text) }
+                // (1) LLM fallback for unknown phrases: let the model structure the intent,
+                // then execute it locally instead of dumping everything into the chat.
+                if (Prefs.get(c, "assistant.llm", "1") == "1") {
+                    ui.post { onStatus("Думаю над командой…") }
+                    llmParse(c, text) { parsed ->
+                        if (parsed != null && parsed.length() > 0) {
+                            runSteps(c, parsed, onStatus, onDone)
+                        } else {
+                            ui.post { onDone(false, "AGENT:" + text) }
+                        }
+                    }
+                } else {
+                    ui.post { onDone(false, "AGENT:" + text) }
+                }
                 return@Thread
             }
+            runSteps(c, steps, onStatus, onDone)
+        }.start()
+    }
+
+    private fun runSteps(c: Context, steps: JSONArray, onStatus: (String) -> Unit, onDone: (Boolean, String) -> Unit) {
+        Thread {
             val sb = StringBuilder()
             var ok = true
             for (i in 0 until steps.length()) {
@@ -513,9 +634,15 @@ object AssistantCore {
                 if (detail.isNotEmpty()) sb.append('\n').append(detail)
                 sb.append('\n')
                 if (!good) break
-                // context-aware settle: apps need time to draw their first screen
                 val cmd = st.optString("cmd")
                 Thread.sleep(if (cmd == "open" || cmd == "app") 1500 else if (cmd == "text" || cmd == "find") 900 else 650)
+                // (84) post-action verification: if the step named something on screen, confirm it changed
+                if (good && (cmd == "text" || cmd == "find")) {
+                    val svc = PhoneAccessibilityService.instance
+                    if (svc != null && !svc.waitText("").optBoolean("ok", true)) {
+                        // tapTextSmart already verified the change; nothing more to do
+                    }
+                }
             }
             val summary = sb.toString().trim()
             ui.post { onDone(ok, summary) }

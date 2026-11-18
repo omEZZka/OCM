@@ -1676,8 +1676,11 @@ class MainActivity : ComponentActivity() {
                         "text", "taptext", "find" -> svc!!.tapTextSmart(a(0), a(1) == "exact", a(2).toIntOrNull() ?: 0, true).toString()
                         "scroll" -> JSONObject().put("ok", svc!!.scroll(if (a(0) == "up" || a(0) == "-1") -1 else 1)).toString()
                         "waittext" -> svc!!.waitText(a(0), a(1).toLongOrNull() ?: 8000).toString()
-                        "type" -> JSONObject().put("ok", svc!!.typeText(a(0))).toString()
+                        "type" -> svc!!.typeAnywhere(a(0), a(1) == "append").toString()
                         "screen" -> svc!!.screenText().put("ok", true).toString()
+                        "recorder" -> if (a(0) == "stop") svc!!.recorderStop().toString() else svc!!.recorderStart().toString()
+                        "journal" -> JSONObject().put("ok", true).put("journal", svc!!.journal()).toString()
+                        "replay" -> svc!!.replay(args).toString()
                         "shot", "screenshot" -> {
                             val dest = a(0).ifEmpty { "/sdcard/Download/OCM/screens/shot_" + System.currentTimeMillis() + ".png" }
                             val host = Runtime.hostPath(this@MainActivity, uid(), dest)

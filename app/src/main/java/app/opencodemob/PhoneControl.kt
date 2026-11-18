@@ -57,6 +57,16 @@ object PhoneControl {
         } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed") }
     }
 
+    fun volumeDelta(c: Context, stream: String, delta: Int, isPercent: Boolean): JSONObject = try {
+        val am = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val s = if (stream == "alarm") AudioManager.STREAM_ALARM else AudioManager.STREAM_MUSIC
+        val cur = am.getStreamVolume(s)
+        val max = am.getStreamMaxVolume(s)
+        val target = if (isPercent) (cur * (100 + delta) / 100).coerceIn(0, max) else (cur + delta).coerceIn(0, max)
+        am.setStreamVolume(s, target, 0)
+        JSONObject().put("ok", true).put("level", target).put("max", max)
+    } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed") }
+
     fun volume(c: Context, stream: String, level: Int?): JSONObject = try {
         val am = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val s = when (stream.lowercase()) {
@@ -71,6 +81,17 @@ object PhoneControl {
         if (level != null) am.setStreamVolume(s, level.coerceIn(0, max), 0)
         JSONObject().put("ok", true).put("stream", stream).put("level", am.getStreamVolume(s)).put("max", max)
     } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed") }
+
+    fun brightnessDelta(c: Context, delta: Int, isPercent: Boolean): JSONObject {
+        if (!Settings.System.canWrite(c)) return JSONObject().put("ok", false).put("err", "write_settings")
+        return try {
+            val cur = Settings.System.getInt(c.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128)
+            val target = if (isPercent) (cur * (100 + delta) / 100).coerceIn(1, 255) else (cur + delta).coerceIn(1, 255)
+            Settings.System.putInt(c.contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE, Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
+            Settings.System.putInt(c.contentResolver, Settings.System.SCREEN_BRIGHTNESS, target)
+            JSONObject().put("ok", true).put("level", target)
+        } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed") }
+    }
 
     fun brightness(c: Context, level: Int?): JSONObject {
         // system brightness needs WRITE_SETTINGS; open the page when not granted

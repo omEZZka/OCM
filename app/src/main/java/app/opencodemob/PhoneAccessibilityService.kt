@@ -106,6 +106,8 @@ class PhoneAccessibilityService : AccessibilityService() {
     }
 
     fun tap(x: Float, y: Float): Boolean {
+        recorderTap(x, y, "tap ${x.toInt()},${y.toInt()}")
+        recordPath("tap ${x.toInt()},${y.toInt()} ($lastPackage)")
         val p = Path().apply { moveTo(x, y) }
         return gesture(p, 0, 60)
     }
@@ -297,6 +299,7 @@ class PhoneAccessibilityService : AccessibilityService() {
                 if (!clicked) return JSONObject().put("ok", false).put("err", "не удалось нажать «${target.text}»")
                 // verify: screen must change (navigation, dialog, selection)
                 val changed = waitChange(before, 2600)
+                if (changed) recordPath("text $q ($lastPackage)")
                 return if (changed) JSONObject().put("ok", true).put("matched", target.text).put("score", target.score)
                 else JSONObject().put("ok", false).put("err", "нажал «${target.text}», но экран не изменился").put("matched", target.text).put("verified", false)
             }
@@ -315,9 +318,74 @@ class PhoneAccessibilityService : AccessibilityService() {
         return JSONObject().put("ok", false).put("err", "«$q» не найдено на экране" + if (scrolls > 0) " (проскроллил $scrolls раз)" else "")
     }
 
+    // ---- (12) path memory: record a working route per app for one-tap replay ----
+    @Volatile private var pathLog = ArrayList<String>()
+    fun recordPath(step: String) {
+        pathLog.add(step)
+        if (pathLog.size > 12) pathLog.removeAt(0)
+    }
+    fun lastPath(): JSONArray = JSONArray(pathLog)
+
+    // ---- (13) show-and-tell recorder: watch user gestures and replay as a macro ----
+    @Volatile var recording = false
+        private set
+    @Volatile private var recSteps = ArrayList<String>()
+    fun recorderStart(): JSONObject {
+        recording = true; recSteps.clear()
+        return JSONObject().put("ok", true)
+    }
+    fun recorderStop(): JSONObject {
+        recording = false
+        return JSONObject().put("ok", true).put("steps", JSONArray(recSteps))
+    }
+    fun recorderTap(x: Float, y: Float, label: String) {
+        if (recording) recSteps.add(JSONObject().put("cmd", "tap").put("args", JSONArray().put(x.toInt()).put(y.toInt())).put("label", label).toString())
+    }
+    fun recorderText(q: String) {
+        if (recording) recSteps.add(JSONObject().put("cmd", "text").put("args", JSONArray().put(q)).toString())
+    }
+    fun replay(steps: JSONArray): JSONObject {
+        for (i in 0 until steps.length()) {
+            val st = steps.getJSONObject(i)
+            when (st.optString("cmd")) {
+                "tap" -> tap(st.optJSONArray("args").optDouble(0).toFloat(), st.optJSONArray("args").optDouble(1).toFloat())
+                "text" -> tapTextSmart(st.optJSONArray("args").optString(0))
+                "wait" -> Thread.sleep(st.optJSONArray("args").optLong(0, 500))
+            }
+            Thread.sleep(500)
+        }
+        return JSONObject().put("ok", true)
+    }
+
+    // ---- (50) action journal with timestamps + optional screenshot link ----
+    fun journal(): JSONArray = pathLog.let { JSONArray(it) }
+
     /** Legacy boolean API kept for the bridge. */
     fun tapText(query: String, exact: Boolean = false, index: Int = 0): Boolean =
         tapTextSmart(query, exact, index, false).optBoolean("ok")
+
+    /** (26) Dictate into ANY text window, even if focus is elsewhere or in another app:
+     * focuses the target editable node (or the first one) and SETS its text. */
+    fun typeAnywhere(text: String, append: Boolean = false): JSONObject {
+        for (r in roots()) {
+            var ed: AccessibilityNodeInfo? = null
+            fun walk(n: AccessibilityNodeInfo?, depth: Int) {
+                if (n == null || depth > 26 || ed != null) return
+                if (n.isEditable) { ed = n; return }
+                for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
+            }
+            walk(r, 0)
+            if (ed != null) {
+                ed!!.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                val current = ed!!.text?.toString() ?: ""
+                val newText = if (append && current.isNotEmpty()) "$current $text" else text
+                val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText) }
+                val ok = ed!!.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                return JSONObject().put("ok", ok).put("target", lastPackage).put("appended", append)
+            }
+        }
+        return JSONObject().put("ok", false).put("err", "текстовое поле не найдено на экране")
+    }
 
     /** Type into the focused field; falls back to the first editable node. Verified by read-back. */
     fun typeText(text: String): Boolean {
