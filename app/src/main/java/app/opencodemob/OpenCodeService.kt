@@ -136,7 +136,12 @@ class OpenCodeService : Service() {
         }
     }
 
-    private val quotaRe = Regex("(?i)quota|usage.?limit|rate.?limit|limit\\s+reached|insufficient|exceeded|credit|\\b429\\b")
+    // Only real provider quota/limit errors. The old regex matched any "exceeded"/"credit" anywhere
+    // in the event JSON (tool output included), so a working model kept triggering "quota" alerts.
+    private val quotaRe = Regex("(?i)FreeUsageLimitError|GoUsageLimitError|BudgetLimitError|insufficient_quota|\"statusCode\":\\s*429|usage.?limit|rate.?limit|limit\\s+reached|too many requests")
+    private val notQuotaRe = Regex("(?i)ContextOverflow|OutputLength|MessageAborted")
+    // One quota alert per burst: the core emits session.error for every retry attempt.
+    private var lastQuotaNotif = 0L
 
     /** Best-effort human title for a session, used in notifications. */
     private val titleCache = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -199,8 +204,17 @@ class OpenCodeService : Service() {
             }
             type == "question.asked" || (type.startsWith("permission.") && (type.endsWith("updated") || type.endsWith("asked"))) ->
                 Notifier.event(this, Notifier.ACTION, "Требуется действие", "OpenCode ждёт вашего ответа или подтверждения.", sessionId = sid, sessionTitle = sessionTitle(sid), permissionId = permId, questionId = qId)
-            type == "session.error" && quotaRe.containsMatchIn(o.toString()) ->
-                Notifier.event(this, Notifier.QUOTA, "Квота исчерпана", "Лимит модели исчерпан. Подключите свой ключ: Настройки → Модели → Подключить провайдера.", sessionId = sid, sessionTitle = sessionTitle(sid))
+            type == "session.error" -> {
+                val err = props.optJSONObject("error")
+                val errJson = err?.toString() ?: ""
+                if (err != null && !notQuotaRe.containsMatchIn(errJson) && quotaRe.containsMatchIn(errJson)) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastQuotaNotif > 60_000) {
+                        lastQuotaNotif = now
+                        Notifier.event(this, Notifier.QUOTA, "Квота исчерпана", "Лимит модели исчерпан. Подключите свой ключ: Настройки → Модели → Подключить провайдера.", sessionId = sid, sessionTitle = sessionTitle(sid))
+                    }
+                }
+            }
         }
     }
 

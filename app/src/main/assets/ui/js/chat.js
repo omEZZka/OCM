@@ -129,7 +129,15 @@ O.chatInit=root=>{
   bus.on('msg',()=>renderContinue());
   bus.on('meta',updateChips);bus.on('conn',updateChips);
   bus.on('serror',p=>{if(p&&(!p.sessionID||p.sessionID===S.sid)){const e=p.error;const t=e&&(e.data&&e.data.message||e.name);if(t&&e.name!=='MessageAbortedError'){
-    const quotaRe2=/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|balance|funds|\b429\b/i;
+    const kind=O.errorKind(e,t);
+    // ContextOverflow mid-run is a signal for the core's auto-compaction, not a user-facing error.
+    if(kind==='context'&&(S.status[p.sessionID]||{}).type!=='idle')return;
+    // The core retries transient failures itself (status=retry). Interrupting with a quota modal
+    // here produced "limit reached" popups while the model kept working and then answered fine.
+    if((S.status[p.sessionID]||{}).type==='retry'){
+      if(kind==='quota'&&O._fallback&&p.sessionID===O._fallback.sid&&O._fallback.tries.length){/* fall through to fallback */}
+      else return;
+    }
     if(O._fallback&&p.sessionID===O._fallback.sid&&O._fallback.tries.length){
       const fb=O._fallback;O._fallback=null;const next=fb.tries.shift();
       (async()=>{
@@ -143,9 +151,12 @@ O.chatInit=root=>{
       })();
       return;
     }
-    if(quotaRe2.test(String(t))){
+    if(kind==='quota'){
       O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));
       O.showQuotaAccountModal(t);
+    }
+    else if(kind==='output-length'){
+      O.toast(O.tr('Answer hit the output token limit — press Continue to resume','Ответ упёрся в лимит длины — нажмите «Продолжить», чтобы досказать'),4000);
     }
     else O.toast(t,4000)}}});
   O.on('voice',d=>{if(d&&d.text){ta.value=(ta.value?ta.value+' ':'')+d.text;onInput();ta.focus()}});
@@ -567,19 +578,20 @@ function metaUpdate(el,m){
 
     if(i.error&&i.error.name!=='MessageAbortedError'){const old=el.firstChild.querySelector('.errbox');if(old)old.remove();
       let em=(i.error.data&&i.error.data.message)||i.error.name||'Ошибка';
-      if(/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|\b429\b/i.test(String(em))){
+      const kind=O.errorKind(i.error,em);
+      if(kind==='quota'){
         em+='\n\n'+quotaHint();
         O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));
         O.showQuotaAccountModal(em);
       }
       // Classified error: the message says what to do, not just what failed.
-      const kind=O.classifyError?O.classifyError(em):'unknown';
       const fix={
         quota:{label:O.tr('Switch model or key','Сменить модель или ключ'),fn:()=>O.openModels()},
         auth:{label:O.tr('Fix API key','Исправить API-ключ'),fn:()=>O.openConnect()},
         model:{label:O.tr('Choose another model','Выбрать другую модель'),fn:()=>O.openModels()},
         network:{label:O.tr('Check connection','Проверить подключение'),fn:()=>O.runDiagnostics&&O.runDiagnostics()},
         context:{label:O.tr('Compact the session','Сжать сессию'),fn:()=>doCompact()},
+        'output-length':{label:O.tr('Continue generation','Продолжить генерацию'),fn:()=>O.continueGeneration()},
       }[kind];
       if(O.logError)O.logError(kind,em);
       el.firstChild.append(h('div',{class:'errbox'},em,
@@ -1100,15 +1112,11 @@ const BUILTINS=[
  {n:'tour',d:'Обучающий тур',i:'info',run:()=>O.openTour()},
  {n:'focus',d:'Фокус-режим: только чат',i:'eye',run:()=>O.setFocusMode(!O.focusMode())},
  {n:'fast',d:'Быстрый режим: mini-модель + минимум рассуждений',i:'zap',run:()=>O.setFastMode(!O.fastMode())},
- {n:'arena',d:'Арена: 4 модели + судья',i:'branch',run:()=>O.openArena()},
  {n:'snippets',d:'Сниппеты промптов',i:'doc',run:()=>O.openSnippets()},
  {n:'health',d:'Проверка здоровья проекта',i:'shield',run:()=>O.projectHealth()},
  {n:'audit',d:'Аудит действий агента',i:'list',run:()=>O.openAgentAudit()},
  {n:'env',d:'.env менеджер',i:'key',run:()=>O.openEnvManager()},
  {n:'gallery',d:'Галерея медиа',i:'image',run:()=>O.openMediaGallery()},
- {n:'assistant',d:'Ассистент телефона (без ADB)',i:'mic',run:()=>O.openAssistant()},
- {n:'achat',d:'Чат ассистента (отдельная сессия)',i:'chat',run:()=>O.openAssistantChat()},
- {n:'macros',d:'Шаблоны действий телефона',i:'zap',run:()=>O.openMacroEditor()},
  {n:'branches',d:'Ветки диалога',i:'branch',run:()=>O.openBranchTree()},
  {n:'share',d:'Поделиться сессией',i:'share',run:()=>doShare()},
  {n:'unshare',d:'Отключить шаринг',i:'share',run:()=>doUnshare()},
@@ -1223,7 +1231,6 @@ async function onSend(){
     if(O.sessionDir&&O.dir!==O.sessionDir(sid)){try{O.dir=O.sessionDir(sid)}catch(_){}}
     O.maybeAutoTitle(sid,text);
     const chain=[S.model].filter(Boolean).concat(O.fallbackChain());
-    const quotaRe=/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|\b429\b/i;
     for(let i=0;i<chain.length;i++){
       const mdl=chain[i];
       const mid=O.mid();
@@ -1237,9 +1244,10 @@ async function onSend(){
       }catch(e){
         lastErr=e;
         const s=O.msgs(sid);s.list=s.list.filter(x=>x.info.id!==mid);s.idx.delete(mid);const el=msgEls.get(mid);if(el){el.remove();msgEls.delete(mid)}
-        const retryable=quotaRe.test(String(e.message))||!e.status||e.status>=429;
+        const isQuota=O.isQuotaError(e);
+        const retryable=isQuota||!e.status||e.status>=429;
         // Quota exhausted: try the next key of the same provider before falling back to another model.
-        if(quotaRe.test(String(e.message))&&O.keyRingOf(mdl.providerID).length>1){
+        if(isQuota&&O.keyRingOf(mdl.providerID).length>1){
           const rotated=await O.rotateProviderKey(mdl.providerID,true);
           if(rotated){i--;continue} // retry the same model with the fresh key
         }
@@ -1255,7 +1263,7 @@ async function onSend(){
     if(usedModel&&S.model&&(usedModel.providerID!==S.model.providerID||usedModel.modelID!==S.model.modelID)){O.setLastFallback({model:usedModel.modelID,at:Date.now()});O.toast(O.tr('Answered by fallback model: ','Ответила резервная модель: ')+usedModel.modelID,2500)}
     else if(O.setLastFallback)O.setLastFallback(null);
   }catch(e){
-    if(/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|\b429\b/i.test(String(e.message))){
+    if(O.isQuotaError(e)){
       O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));
       O.showQuotaAccountModal(e.message);
     }else{

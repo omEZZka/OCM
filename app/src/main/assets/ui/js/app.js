@@ -7,7 +7,7 @@ function build(){
   if(built)return;built=true;
   const app=O.$('#app');
 
-  // Minimal Top Header matching Screenshot 1: Hamburger on left, Tokens badge right next to it, Ghost mascot on right
+  // Compact header: hamburger + tokens on the left, session title + ⋮ menu on the right.
   T.menu=h('button',{class:'top-menu-btn',onclick:()=>O.openSessions()},O.icon('menu'));
   const BOLT_SVG='<svg viewBox="0 0 24 24" width="13" height="13" fill="#71717a" style="display:inline-block;vertical-align:middle;margin-right:3px;"><path d="M13 2L3 14h7v8l11-13h-8l1-7z"/></svg>';
   T.tokensVal=h('span',{class:'top-tokens-val'},'0 tok');
@@ -25,9 +25,8 @@ function build(){
       {label:O.tr('Delete','Удалить'),icon:'trash',danger:true,fn:async()=>{if(await O.confirm(O.tr('Delete session?','Удалить сессию?'),O.sessionTitle(s),O.tr('Delete','Удалить'),true))try{await api('DELETE','/session/'+s.id);S.sessions=S.sessions.filter(y=>y.id!==s.id);if(S.sid===s.id)O.openSession(S.sessions[0]&&S.sessions[0].id||null);bus.emit('sessions')}catch(e){O.toast(e.message)}}}
     ]);
   });
-  T.mm=h('button',{class:'top-mm-btn',title:O.tr('Multimodal agents','Мультимодальные агенты'),onclick:()=>O.openMultimodalPicker()},O.icon('bot'),h('span',{class:'top-mm-txt'},'MM'));
-  T.status=h('button',{class:'top-status-btn',title:O.tr('Server & MCP Status','Статус сервера и MCP'),onclick:()=>O.openStatus()},O.icon('sliders'));
-  const topRight=h('div',{class:'top-right-box'},T.title,T.mm,T.status);
+  T.more=h('button',{class:'top-status-btn',title:O.tr('Menu','Меню'),onclick:()=>topMenu()},O.icon('dots'));
+  const topRight=h('div',{class:'top-right-box'},T.title,T.more);
   const top=h('div',{id:'top'},topLeft,topRight);
 
   T.banner=h('div',{id:'banner',class:'hide'});
@@ -45,20 +44,12 @@ function build(){
 
   const main=h('div',{id:'main'},P.files,P.chat,P.side);
 
-  // Bottom Pill Bar matching Screenshot 1: Centered [Chat] and [Memory on]
-  let memOn=O.store.get('memory',true);
-  const memLabel=()=>memOn?(O.tr('Memory on','Память вкл')):(O.tr('Memory off','Память выкл'));
+  // Compact bottom bar: Chat | Files | ⋮ menu (terminal, changes, memory live in the menu).
   B.chat=h('button',{class:'bottom-pill active',onclick:()=>O.setTab('chat')},O.icon('chat'),h('span',null,O.tr('Chat','Чат')));
-  B.memTxt=h('span',null,memLabel());
-  B.memory=h('button',{class:'bottom-pill'+(memOn?' active':''),onclick:()=>{
-    memOn=!memOn;
-    O.store.set('memory',memOn);
-    B.memTxt.textContent=memLabel();
-    B.memory.classList.toggle('active',memOn);
-    O.toast(memOn?(O.tr('Memory on: project map and rules are generated','Память включена: карта проекта и правила создаются')):(O.tr('Memory off: project map generation stopped','Память выключена: карта проекта больше не создаётся')),2000);
-  }},O.icon('memory'),B.memTxt);
+  B.files=h('button',{class:'bottom-pill',onclick:()=>O.setTab('files')},O.icon('folder'),h('span',null,O.tr('Files','Файлы')));
+  B.more=h('button',{class:'bottom-pill',onclick:()=>bottomMenu()},O.icon('dots'),h('span',null,O.tr('Menu','Меню')));
 
-  const bottomBar=h('div',{id:'bottom-bar'},B.chat,B.memory);
+  const bottomBar=h('div',{id:'bottom-bar'},B.chat,B.files,B.more);
 
   app.append(top,T.banner,main,bottomBar);
   // focus mode exit affordance (visible only in focus mode)
@@ -105,7 +96,35 @@ function layout(){
   SB.term.classList.toggle('on',sideTab==='term');
   SB.changes.classList.toggle('on',sideTab==='changes');
   if(B.chat)B.chat.classList.toggle('active',tab==='chat');
+  if(B.files)B.files.classList.toggle('active',tab==='files');
   if(O.termShown)O.termShown();
+}
+
+function bottomMenu(){
+  const memOn=O.store.get('memory',true);
+  O.actions(O.tr('Menu','Меню'),[
+    {label:O.tr('Terminal','Терминал'),icon:'terminal',fn:()=>O.setTab('term')},
+    {label:O.tr('Changes','Изменения'),icon:'branch',fn:()=>O.setTab('changes')},
+    {label:memOn?O.tr('Memory: on','Память: вкл'):O.tr('Memory: off','Память: выкл'),sub:O.tr('Project map and rules generation','Создание карты проекта и правил'),icon:'memory',fn:()=>{
+      const v=!O.store.get('memory',true);
+      O.store.set('memory',v);
+      O.toast(v?(O.tr('Memory on: project map and rules are generated','Память включена: карта проекта и правила создаются')):(O.tr('Memory off: project map generation stopped','Память выключена: карта проекта больше не создаётся')),2000);
+    }},
+    {label:O.tr('Sessions','Сессии'),icon:'list',fn:()=>O.openSessions()},
+    {label:O.tr('Settings','Настройки'),icon:'sliders',fn:()=>O.openSettings()}
+  ]);
+}
+
+function topMenu(){
+  const mmA=O.mmActive&&O.mmActive();
+  O.actions(O.tr('Session menu','Меню сессии'),[
+    {label:O.tr('Token statistics','Статистика токенов'),sub:O.fmtK(O.calcSessionTokens(S.sid).total)+' tok',icon:'zap',fn:()=>O.openTokensModal()},
+    {label:O.tr('Server & MCP status','Статус сервера и MCP'),icon:'server',fn:()=>O.openStatus()},
+    {label:mmA?(O.tr('Multimodal: ','Мультимодальный: ')+mmA.name):O.tr('Multimodal agents','Мультимодальные агенты'),icon:'bot',fn:()=>O.openMultimodalPicker()},
+    {label:O.tr('Models','Модели'),icon:'cpu',fn:()=>O.openModels()},
+    {label:O.tr('New session','Новая сессия'),icon:'plus',fn:()=>O.newSession()},
+    {label:O.tr('Settings','Настройки'),icon:'sliders',fn:()=>O.openSettings()}
+  ]);
 }
 
 O.setFocusMode=on=>{
@@ -187,12 +206,11 @@ function updateTop(){
     const pct=tok.pct!=null?(' · '+tok.pct+'%'):'';
     T.tokensVal.textContent=txt+pct;
   }
-  // Status icon dot/indicator if MCP needs attention
+  // Status indicator in the ⋮ menu button if MCP needs attention
   const v=Object.values(S.mcp||{});
   const hasErr=v.some(x=>x.status==='failed'||x.status==='needs_auth');
-  if(T.status)T.status.classList.toggle('active',hasErr);
+  if(T.more)T.more.classList.toggle('active',hasErr);
   updateTopTitle();
-  updateTopMm();
 }
 
 function updateTopTitle(){
@@ -209,14 +227,6 @@ function updateTopTitle(){
     const busy=!!st&&st.type!=='idle';
     dot.classList.toggle('hide',!busy);
   }
-}
-
-function updateTopMm(){
-  if(!T.mm)return;
-  const mmA=O.mmActive&&O.mmActive();
-  T.mm.classList.toggle('active',!!mmA);
-  const sp=T.mm.querySelector('.top-mm-txt');
-  if(sp)sp.textContent=mmA?mmA.name:'MM';
 }
 
 function updateBanner(){

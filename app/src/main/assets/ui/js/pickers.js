@@ -63,20 +63,31 @@ O.openSessions=()=>{
     tile('folder',O.tr('Projects','Проекты'),()=>O.openProjects()),
     tile('search',O.tr('Search','Поиск'),()=>O.openGlobalSearch()),
     tile('image',O.tr('Photo','Фото'),()=>O.openMedia&&O.openMedia('image')),
-    tile('mic',O.tr('Assistant','Ассистент'),()=>O.openAssistant()),
     tile('sliders',O.tr('Settings','Настройки'),()=>O.openSettings()));
   const moreBox=h('div',{class:'drawer-more hide'});
   const navItem=(ic,label,fn)=>h('button',{class:'drawer-nav-item',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
+  const sect=t=>h('div',{class:'drawer-sect'},t);
+  // Grouped by purpose: sessions, media, models & agents, settings, resources.
   moreBox.append(
+    sect(O.tr('Sessions','Сессии')),
+    navItem('down',O.tr('Import session','Импорт сессии'),()=>importSessionFile()),
+    navItem('branch',O.tr('Dialog branches','Ветки диалога'),()=>O.openBranchTree&&O.openBranchTree()),
+    sect(O.tr('Media','Медиа')),
     navItem('film',O.tr('Video chat','Чат: Видео'),()=>O.openMedia&&O.openMedia('video')),
     navItem('wave',O.tr('Voice chat','Чат: Голос'),()=>O.openMedia&&O.openMedia('tts')),
     navItem('note',O.tr('Music chat','Чат: Музыка'),()=>O.openMedia&&O.openMedia('music')),
     navItem('list',O.tr('Media history','История медиа'),()=>O.openMedia&&O.openMedia('history')),
+    navItem('image',O.tr('Media gallery','Галерея медиа'),()=>O.openMediaGallery&&O.openMediaGallery()),
+    sect(O.tr('Models & agents','Модели и агенты')),
+    navItem('cpu',O.tr('Models','Модели'),()=>O.openModels()),
+    navItem('bot',O.tr('Multimodal agents','Мультимодальные агенты'),()=>O.openMultimodalPicker()),
+    navItem('key',O.tr('Connect provider','Подключить провайдера'),()=>O.openConnect()),
+    sect(O.tr('Settings','Настройки')),
     navItem('mic',O.tr('Voice settings','Настройки голоса'),()=>O.openCallSettings&&O.openCallSettings()),
-    navItem('bot',O.tr('Assistant settings','Настройки ассистента'),()=>O.openAssistantSettings&&O.openAssistantSettings()),
-    navItem('zap',O.tr('Phone macros','Шаблоны телефона'),()=>O.openMacroEditor&&O.openMacroEditor()),
-    navItem('down',O.tr('Import session','Импорт сессии'),()=>importSessionFile()),
-    navItem('cpu',O.tr('Resources','Ресурсы'),()=>O.openResources()),
+    navItem('palette',O.tr('Appearance','Оформление'),()=>O.openThemes()),
+    sect(O.tr('Resources','Ресурсы')),
+    navItem('cpu',O.tr('Resource monitor','Монитор ресурсов'),()=>O.openResources()),
+    navItem('server',O.tr('Server & MCP status','Статус сервера и MCP'),()=>O.openStatus()),
     navItem('refresh',O.tr('Restart server','Перезапуск сервера'),()=>restartApp()));
   let moreOpen=false;
   const moreBtn=h('button',{class:'drawer-more-btn',onclick:()=>{moreOpen=!moreOpen;moreBox.classList.toggle('hide',!moreOpen);moreBtn.classList.toggle('on',moreOpen)}},
@@ -326,7 +337,6 @@ O.openModels=()=>{
   }
   const folderBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelFolders(()=>draw())},O.icon('folder'),O.tr('Folders & profiles','Папки и профили'));
   const compareBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelCompare()},O.icon('branch'),O.tr('Compare models on one prompt','Сравнить модели на одном запросе'));
-  const arenaBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openArena()},O.icon('zap'),O.tr('Arena: 4 models + judge','Арена: 4 модели + судья'));
   const taskInp=h('input',{placeholder:O.tr('Task for recommendations (optional)','Задача для рекомендаций (необязательно)'),style:{marginBottom:'8px'},onkeydown:e=>{if(e.key==='Enter'){e.preventDefault();recBtn.click()}}});
   const recBox=h('div');
   const recBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>{
@@ -338,7 +348,7 @@ O.openModels=()=>{
     rec.forEach(r=>card.append(O.listRow('star',r.x.name||r.x.mid,(r.why||[]).join(' · '),O.icon('chevR'),()=>{O.setModel(r.x.pid,r.x.mid);s.close()})));
     recBox.append(card);
   }},O.icon('star'),O.tr('Recommend a model','Подобрать модель'));
-  const container=h('div',null,effortCard,selectBar,taskInp,recBtn,recBox,q,profBar,folderBtn,arenaBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
+  const container=h('div',null,effortCard,selectBar,taskInp,recBtn,recBox,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
   // Folder edits from the action sheet / folder manager must repaint the list live.
   const offFolders=bus.on('folders',()=>{if(s.root&&s.root.isConnected)draw()});
@@ -1129,14 +1139,14 @@ O.openCustomProvider=parentSheet=>{
 };
 
 // ---- themes / help ----
-O.openThemes=()=>{const th=[['opencode','OpenCode','#0D0D0F','#fab283'],['amoled','AMOLED','#000000','#ffffff'],['light','Светлая','#fafaf8','#c2641c'],['tokyonight','Tokyo Night','#1a1b26','#7aa2f7'],['nord','Nord','#2e3440','#88c0d0'],['gruvbox','Gruvbox','#282828','#fabd2f']];
+O.openThemes=()=>{const th=[['opencode','OpenCode','#101014','#fab283'],['amoled','AMOLED','#000000','#ffffff'],['light','Светлая','#faf9f7','#c2641c'],['tokyonight','Tokyo Night','#1a1b26','#7aa2f7'],['nord','Nord','#2e3440','#88c0d0'],['gruvbox','Gruvbox','#282828','#fabd2f']];
   const auto=O.store.get('themeAuto',false);
   const s=O.sheet('Оформление',h('div',null,
     O.toggleRow('bulb',O.tr('Auto by system','Авто по системе'),O.tr('Follow Android dark/light setting','Следовать тёмной/светлой теме Android'),auto,v=>{
       O.store.set('themeAuto',v);
-      if(v&&O.applyAutoTheme)O.applyAutoTheme();
+      if(v&&O.applyAutoTheme)O.applyAutoTheme();else O.saveOpts();
     }),
-    th.map(t=>O.listRow(h('span',{style:{width:'22px',height:'22px',borderRadius:'6px',background:t[2],border:'3px solid '+t[3],flex:'none'}}),t[1],'',S.opts.theme===t[0]?O.icon('check','ok'):null,()=>{S.opts.theme=t[0];O.store.set('themeAuto',false);O.saveOpts();s.close()})),
+    th.map(t=>O.listRow(h('span',{style:{width:'22px',height:'22px',borderRadius:'6px',background:t[2],border:'3px solid '+t[3],flex:'none'}}),t[1],'',S.opts.theme===t[0]?O.icon('check','ok'):null,()=>{S.opts.theme=t[0];O.store.set('themeManual',t[0]);O.store.set('themeAuto',false);O.saveOpts();s.close()})),
     h('div',{class:'grp'},'Размер текста'),h('div',{class:'seg'},[13,14,15,16,18,20].map(n=>h('button',{class:S.opts.fs===n?'on':'',onclick:()=>{S.opts.fs=n;O.saveOpts();s.close()}},n)))))};
 O.openHelp=()=>O.sheet('Справка',h('div',null,h('div',{class:'grp'},'Команды'),O.builtins.map(b=>O.listRow(b.i,'/'+b.n,b.d,null,()=>{O.back();b.run()})),
   h('div',{class:'grp'},'Подсказки ввода'),h('div',{class:'note'},'@файл — упомянуть файл или папку.  !команда — выполнить команду оболочки в сессии.  Долгое нажатие на файл в дереве открывает действия.')));

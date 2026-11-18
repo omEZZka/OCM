@@ -63,19 +63,6 @@ object Net {
         }
     }
 
-    /** Blocking request for background workers (Assistant NLU). Never call on the UI thread. */
-    fun requestSync(c: Context, id: String, method: String, path: String, body: String): String {
-        return try {
-            val needsBody = method == "POST" || method == "PUT" || method == "PATCH"
-            val rb = if (needsBody) (if (body.isEmpty()) "{}" else body).toRequestBody("application/json".toMediaType()) else null
-            val req = Request.Builder().url("http://${base()}$path").header("Authorization", auth()).method(method, rb).build()
-            http.newCall(req).execute().use { r ->
-                JSONObject().put("status", r.code).put("ct", r.header("Content-Type") ?: "")
-                    .put("body", r.body?.string() ?: "").toString()
-            }
-        } catch (e: Exception) { JSONObject().put("err", e.message ?: e.toString()).toString() }
-    }
-
     fun drop(c: Context, id: String) { try { File(File(c.cacheDir, "resp"), id.replace("/", "")).delete() } catch (_: Exception) {} }
 
     // ---- server-sent events: /global/event, reconnects by itself ----

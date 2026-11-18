@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit
  *  • takeScreenshot (API 30+): real screenshots to a file
  *
  * The user enables it once in Android Settings → Accessibility → OpenCode Mobile.
- * Everything is driven from the app (assistant overlay, JS bridge, or the agent's `phone` CLI
+ * Everything is driven from the app (JS bridge or the agent's `phone` CLI
  * through PhoneServer), so no adb connection is ever needed again.
  */
 class PhoneAccessibilityService : AccessibilityService() {

@@ -1,5 +1,5 @@
 (function(){
-const O=window.OCM,api=O.api;
+const O=window.OCM,api=O.api,h=O.h;
 const bus=O.bus={h:{},on(n,f){(this.h[n]=this.h[n]||[]).push(f);return()=>this.off(n,f)},
   off(n,f){const a=this.h[n];if(!a)return;const i=a.indexOf(f);if(i>=0)a.splice(i,1)},
   emit(n,...a){(this.h[n]||[]).slice().forEach(f=>{try{f(...a)}catch(e){console.error(n,e)}})}};
@@ -8,11 +8,13 @@ const S=O.S={dir:'',sessions:[],sid:null,status:{},perms:[],questions:[],todos:{
   offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false},O.store.get('opts',{}))};
 O.saveOpts=()=>{O.store.set('opts',S.opts);document.documentElement.dataset.theme=S.opts.theme;document.documentElement.style.setProperty('--fs',S.opts.fs+'px')};
 // Auto theme: follow the Android/system dark-mode preference when enabled.
+// The manual choice is remembered separately so toggling auto off restores it.
 O.applyAutoTheme=()=>{
   if(!O.store.get('themeAuto',false))return;
   try{
     const dark=matchMedia('(prefers-color-scheme: dark)').matches;
-    const want=dark?(S.opts.theme==='light'?'opencode':S.opts.theme):(S.opts.theme==='light'?'light':'light');
+    const manual=O.store.get('themeManual',null)||S.opts.theme;
+    const want=dark?(manual==='light'?'opencode':manual):'light';
     document.documentElement.dataset.theme=want;
   }catch(_){}
 };
@@ -559,14 +561,31 @@ O.logError=(kind,message,extra)=>{
     O.store.set('errorLog',l.slice(0,50));
   }catch(_){}
 };
-O.classifyError=msg=>{
-  const t=String(msg||'');
-  if(/quota|usage.?limit|rate.?limit|insufficient|credit|429/i.test(t))return 'quota';
+// Structured classifier first: the core tags every error (provider.rate-limit, provider.quota,
+// ContextOverflowError, MessageOutputLengthError...). Matching bare words like "exceeded" or
+// "credit" in free text turned output-length stops and tool failures into fake quota alerts.
+O.errorKind=(err,msg)=>{
+  const name=String((err&&err.name)||'');
+  if(/ContextOverflow/i.test(name))return 'context';
+  if(/OutputLength/i.test(name))return 'output-length';
+  if(/Aborted/i.test(name))return 'abort';
+  if(/ProviderAuth/i.test(name))return 'auth';
+  const status=(err&&err.data&&(err.data.statusCode||err.data.status))||(err&&err.status)||0;
+  if(status===429)return 'quota';
+  const body=String((err&&err.data&&err.data.responseBody)||'');
+  if(/FreeUsageLimitError|GoUsageLimitError|BudgetLimitError|insufficient_quota/i.test(body))return 'quota';
+  const t=String(msg||(err&&err.data&&err.data.message)||name||'');
+  if(/quota|usage.?limit|rate.?limit|limit\s+reached|too many requests|resource.?exhausted|insufficient (credit|balance|funds)|\b429\b/i.test(t))return 'quota';
+  if(/context.*(length|window)|too many tokens/i.test(t))return 'context';
   if(/401|unauthorized|invalid.?api.?key|authentication/i.test(t))return 'auth';
   if(/model.*not.*found|no such model|404/i.test(t))return 'model';
   if(/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network|dns/i.test(t))return 'network';
-  if(/context.*(length|window)|too many tokens/i.test(t))return 'context';
   return 'unknown';
+};
+O.isQuotaError=(err,msg)=>O.errorKind(err,msg)==='quota';
+O.classifyError=msg=>{
+  const k=O.errorKind(null,msg);
+  return k==='output-length'||k==='abort'?'unknown':k;
 };
 
 // ---- model folders: user-defined groups of models that can be pinned as one block ----

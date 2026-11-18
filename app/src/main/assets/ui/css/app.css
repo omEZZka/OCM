@@ -1,15 +1,15 @@
 :root {
-  --bg: #0d0d0f;
-  --bg2: #161619;
-  --bg3: #1c1c20;
-  --card: #1c1c1f;
-  --card-hover: #242429;
+  --bg: #101014;
+  --bg2: #17171d;
+  --bg3: #1f1f27;
+  --card: #1a1a22;
+  --card-hover: #23232d;
   --line: rgba(255, 255, 255, 0.08);
   --line2: rgba(255, 255, 255, 0.16);
-  --fg: #ffffff;
-  --mut: #8e8e93;
-  --acc: #ffffff;
-  --acc-fg: #0d0d0f;
+  --fg: #f5f5f7;
+  --mut: #9a9aa3;
+  --acc: #fab283;
+  --acc-fg: #1c120a;
   --acc2: #38bdf8;
   --blue: #3b82f6;
   --ok: #4ade80;
@@ -17,7 +17,7 @@
   --warn: #fbbf24;
   --add: #143522;
   --del: #3d171b;
-  --code: #09090b;
+  --code: #0b0b0f;
   --fs: 14.5px;
   color-scheme: dark;
 }
@@ -3256,4 +3256,80 @@ button:focus:not(:focus-visible), input:focus:not(:focus-visible) { outline: non
   .cbox { padding: 8px 10px 7px; }
   #send { width: 40px; height: 40px; }
   .bottom-pill { padding: 6px 12px; font-size: 12.5px; }
+}
+
+/* ==========================================================================
+   2.17 REDESIGN
+   Bigger headings, rounded message cards, peach accent, compact 3-item bottom
+   bar (Chat | Files | Menu), grouped drawer sections. Appended last on purpose.
+   ========================================================================== */
+
+/* --- typography: larger, confident headings --- */
+.sh-h b { font-size: 19px; font-weight: 800; letter-spacing: -0.02em; }
+.settings-section-title { font-size: 13px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--acc); opacity: .95; }
+.grp { font-size: 12.5px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: var(--mut); }
+.top-title { font-size: 16px; font-weight: 800; letter-spacing: -0.02em; }
+.drawer-sess-head b { font-size: 14.5px; font-weight: 800; }
+
+/* --- header: title + one ⋮ menu, no MM pill --- */
+.top-mm-btn { display: none !important; }
+.top-title-dot { background: var(--acc); box-shadow: 0 0 0 0 color-mix(in srgb, var(--acc) 60%, transparent); }
+@keyframes topdot {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--acc) 55%, transparent); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* --- bottom bar: three compact destinations --- */
+#bottom-bar { justify-content: center; gap: 6px; padding: 6px 14px calc(8px + env(safe-area-inset-bottom, 0px)); }
+.bottom-pill { flex: 0 1 auto; min-width: 96px; justify-content: center; gap: 7px;
+  padding: 9px 18px; font-size: 13.5px; font-weight: 600;
+  border-radius: 999px; background: transparent; border: 1px solid transparent; }
+.bottom-pill.active { background: color-mix(in srgb, var(--acc) 16%, var(--card));
+  border-color: color-mix(in srgb, var(--acc) 35%, transparent); color: var(--fg); }
+.bottom-pill.active .ic svg { color: var(--acc); }
+.bottom-pill .ic { width: 17px; height: 17px; }
+
+/* --- messages: rounded cards for both sides --- */
+.msg { margin: 0 0 14px; }
+.msg.user .m-body {
+  background: color-mix(in srgb, var(--acc) 14%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--acc) 28%, var(--line));
+  border-radius: 20px 20px 6px 20px;
+  padding: 12px 16px; max-width: 88%;
+}
+.msg.assistant .m-body {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px 20px 20px 6px;
+  padding: 12px 16px;
+  box-shadow: var(--shadow-1);
+}
+.msg.assistant .m-meta { padding: 0 4px; }
+.p-text { font-size: var(--fs); line-height: 1.65; }
+
+/* --- drawer: grouped sections --- */
+.drawer-sect { margin: 12px 4px 4px; font-size: 11.5px; font-weight: 800;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--acc); opacity: .9; }
+.drawer-sect:first-child { margin-top: 4px; }
+.drawer-more { border-left: 2px solid color-mix(in srgb, var(--acc) 30%, var(--line)); }
+.drawer-tile { border-radius: 16px; }
+.drawer-tile .ic svg { color: var(--acc); }
+
+/* --- accent touches: primary buttons, chips, cards --- */
+.btn.pri { background: var(--acc); color: var(--acc-fg); }
+.btn.pri:active { background: color-mix(in srgb, var(--acc) 85%, #000); }
+.card, .group-card, .settings-card { border-radius: 18px; }
+.tool { border-radius: 14px; }
+.chip.keep { border-color: color-mix(in srgb, var(--acc) 45%, transparent); }
+
+/* --- light theme keeps warm paper feel with the same accent --- */
+html[data-theme=light] {
+  --bg: #faf9f7;
+  --bg2: #f3f1ed;
+  --bg3: #e9e6e0;
+  --card: #ffffff;
+  --card-hover: #f4f1ec;
+  --acc: #c2641c;
+  --acc-fg: #ffffff;
 }

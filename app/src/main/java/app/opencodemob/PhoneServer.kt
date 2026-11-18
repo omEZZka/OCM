@@ -10,7 +10,7 @@ import kotlin.concurrent.thread
 
 /**
  * Loopback HTTP endpoint that lets the agent (inside proot, bash-only) control the phone
- * WITHOUT ADB: taps, swipes, text search, screenshots, flashlight, DND, apps, macros.
+ * WITHOUT ADB: taps, swipes, text search, screenshots, flashlight, DND, apps.
  *
  * Port + token live in /root/.ocm/phone.json; the `phone` CLI reads them.
  * Every mutating request can require user confirmation (configurable) — the UI shows a card.
@@ -75,7 +75,6 @@ object PhoneServer {
                 |#   phone find "<text>"             (smart tap: fuzzy+translit+scroll+verify)
                 |#   phone scroll down|up
                 |#   phone waittext "<text>" [ms]
-                |#   phone macro "<name>"
                 |INFO="§HOME/.ocm/phone.json"
                 |[ -f "§INFO" ] || { echo 'phone bridge is not running' >&2; exit 1; }
                 |PORT=§(sed -n 's/.*"port":\([0-9]*\).*/\1/p' "§INFO")

@@ -730,7 +730,10 @@ O.openMediaModelPicker=(provider,current,onPick)=>{
 };
 function pickInitialModel(prov){
   const saved=O.store.get(lastModelKey(prov.kind,prov.id),'');
-  return modelKey(prov).includes(saved)?saved:'';
+  const list=modelKey(prov);
+  if(list.includes(saved))return saved;
+  // A provider with exactly one known model needs no explicit pick; with several, stay unselected.
+  return list.length===1?list[0]:'';
 }
 
 O.mediaPreview=item=>{

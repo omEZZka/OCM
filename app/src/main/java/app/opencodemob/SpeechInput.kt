@@ -165,7 +165,7 @@ class SpeechInput(private val context: Context, private val emit: (String, JSONO
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-            // Assistant/dictation (oneShot): end right after the phrase — short silence window.
+            // Dictation (oneShot): end right after the phrase — short silence window.
             // Long call dictation keeps the generous window so mid-sentence pauses survive.
             val completeSilence = if (oneShot) 800L else 2200L
             val possibleSilence = if (oneShot) 650L else 2200L

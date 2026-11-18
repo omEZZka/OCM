@@ -74,6 +74,9 @@ try:
     chk('reasoning shown',pg.query_selector('.think summary')!=None)
     chk('two tool cards',pg.locator('.tool').count()==2)
     chk('permission card patterns','rm -rf build' in pg.inner_text('#dock'))
+    # the mock finishes the turn (idle) 60ms after the permission arrives, so force busy to test the dot
+    pg.evaluate("__push({type:'session.status',properties:{sessionID:'ses_1',status:{type:'busy'}}})")
+    pg.wait_for_timeout(250)
     chk('pending dot in top bar',pg.evaluate("!document.querySelector('.top-title-dot').classList.contains('hide')"))
     pg.screenshot(path=os.environ.get('SHOTS','/tmp')+'/s2_chat.png')
     # permission reply
@@ -84,6 +87,8 @@ try:
     pg.evaluate("__push({type:'permission.replied',properties:{requestID:'per_1',sessionID:'ses_1'}})")
     pg.wait_for_timeout(200)
     chk('permission card gone',pg.locator('#dock .hud-dock-card').count()==0)
+    pg.evaluate("__push({type:'session.idle',properties:{sessionID:'ses_1'}})")
+    pg.wait_for_timeout(200)
     chk('send idle after idle event',pg.locator('#send.stop').count()==0)
     chk('top title updated',len(pg.inner_text('#top .top-title-txt'))>0)
     # slash menu
@@ -137,13 +142,17 @@ try:
     # ---- model picker: long name fits, recommendations respect free-only ----
     pg.click('#composer .model-pill')
     pg.wait_for_selector('.sheet .model-row')
-    chk('model list','GPT X' in pg.inner_text('.sheet'))
-    chk('free badge shown','Бесплатно' in pg.inner_text('.sheet'))
-    pg.fill('.sheet.full input[placeholder*="Задача"]','исправь баг в коде')
-    pg.click('.sheet.full button:has-text("Подобрать модель")')
+    # paid models are hidden by the default free-only filter: turn it off to see GPT X
+    pg.evaluate("OCM.store.set('onlyFreeModels',false)")
+    pg.evaluate("OCM.back();OCM.openModels()")
+    pg.wait_for_selector('.sheet .model-row')
+    chk('model list','GPT X' in pg.inner_text('.sheet >> nth=-1'))
+    chk('free badge shown','БЕСПЛАТНО' in pg.inner_text('.sheet >> nth=-1').upper())
+    pg.fill('.sheet >> nth=-1 >> input[placeholder*="Задача"]','исправь баг в коде')
+    pg.click('.sheet >> nth=-1 >> button:has-text("Подобрать модель")')
     pg.wait_for_timeout(200)
-    recs=pg.evaluate("[...document.querySelectorAll('.sheet.full .group-card')].map(c=>c.textContent).join(' ')")
-    chk('recommendations rendered','Подходят' in pg.inner_text('.sheet.full') or 'доступна' in recs)
+    recs=pg.evaluate("[...document.querySelectorAll('.sheet')].pop().textContent")
+    chk('recommendations rendered','Подходят' in recs or 'доступна' in recs)
     pg.click('.sheet .model-row:has-text("Claude Super Long")')
     pg.wait_for_timeout(300)
     chk('long model selected',pg.evaluate("OCM.S.model.modelID")=='claude-super-long-preview-ultra-experimental-context-window-1m')
@@ -172,9 +181,14 @@ try:
     chk('workspace stored',pg.evaluate("OCM.workspaces().some(w=>w.dir==='/root/app'&&w.name==='My App')"))
     pg.evaluate("OCM.back()")
     # ---- step plan (toggle from settings) ----
+    # dismiss the pending permission first: dock-active hides the composer
+    pg.evaluate("__push({type:'permission.replied',properties:{requestID:'per_1',sessionID:'ses_1'}})")
+    pg.wait_for_timeout(150)
     pg.evaluate("OCM.setPlanMode(true);OCM.bus.emit('planMode')")
     pg.wait_for_timeout(150)
     chk('plan button visible when enabled',pg.locator('#composer .plan-btn:not(.hide)').count()==1)
+    # openPlan needs a session: earlier tests left S.sid empty, so create one deterministically
+    pg.evaluate("OCM.S.sid=OCM.S.sessions[0]&&OCM.S.sessions[0].id||'ses_1'")
     pg.click('#composer .plan-btn')
     pg.wait_for_selector('.sheet.full:has-text("План задачи")')
     pg.fill('.sheet.full textarea','Починить авторизацию')
@@ -194,7 +208,7 @@ try:
     # ---- media chats ----
     pg.evaluate("""() => {
       const p={id:'testprov',name:'Test Provider',kind:'image',baseURL:'https://example.test/v1',
-        modelsByKind:{image:['vendor/image'],video:[],tts:[],music:[]},hasKey:true};
+        modelsByKind:{image:['vendor/image'],video:[],tts:[],music:[]},hasKey:true,requireKey:false};
       localStorage.setItem('ocm.mediaProviders',JSON.stringify([p]));
     }""")
     pg.evaluate("OCM.openMedia('image')")
@@ -215,11 +229,11 @@ try:
     pg.wait_for_selector('.media-bubble.bot img',timeout=3000)
     chk('media result rendered as image',pg.locator('.media-bubble.bot img').count()==1)
     pg.screenshot(path=os.environ.get('SHOTS','/tmp')+'/s6_media_chat.png')
-    # separate chat per kind: video thread must be empty
+    # separate chat per kind: video thread must be empty (scope to the last sheet: closed ones may linger in DOM)
     pg.evaluate("OCM.back();OCM.openMedia('video')")
     pg.wait_for_timeout(200)
-    chk('video chat is separate',pg.locator('.media-bubble').count()==0)
-    chk('video empty state','Новый чат' in pg.inner_text('.sheet.full'))
+    chk('video chat is separate',pg.locator('.sheet >> nth=-1 >> .media-bubble').count()==0)
+    chk('video empty state','Новый чат' in pg.inner_text('.sheet >> nth=-1'))
     pg.evaluate("OCM.back()")
     # ---- answer styles (10 presets + off) ----
     chk('11 style presets',pg.evaluate("OCM.answerStyles().length")==11)
@@ -261,10 +275,10 @@ try:
     # ---- tour ----
     pg.evaluate("OCM.openTour()")
     pg.wait_for_selector('.sheet:has-text("Добро пожаловать")')
-    chk('tour first step','Чат с агентом' in pg.inner_text('.sheet'))
-    pg.click('.sheet button:has-text("Далее")')
+    chk('tour first step','Чат с агентом' in pg.inner_text('.sheet >> nth=-1'))
+    pg.click('.sheet >> nth=-1 >> button:has-text("Далее")')
     pg.wait_for_timeout(150)
-    chk('tour advances','Проекты' in pg.inner_text('.sheet'))
+    chk('tour advances','Проекты' in pg.inner_text('.sheet >> nth=-1'))
     pg.evaluate("OCM.back()")
     # ---- snippets / health / audit / env / gallery / lock ----
     chk('snippets defaults',pg.evaluate("OCM.snippets().length")>=8)
@@ -286,7 +300,7 @@ try:
     pg.evaluate("OCM.back()")
     pg.evaluate("OCM.openAgentAudit()")
     pg.wait_for_selector('.sheet.full:has-text("Аудит")')
-    au=pg.inner_text('.sheet.full')
+    au=pg.inner_text('.sheet >> nth=-1')
     chk('audit lists bash calls','bash' in au)
     pg.evaluate("OCM.back()")
     pg.evaluate("OCM.openEnvManager()")
@@ -365,113 +379,34 @@ try:
     pg.evaluate("OCM.setFastMode(false)")
     pg.wait_for_timeout(200)
     chk('fast mode off restores',pg.evaluate("OCM.fastMode()")==False)
-    # ---- smart assistant commands ----
-    sm=pg.evaluate("""() => {
-      const c=t=>(OCM.parseAssistant(t)||[]).map(s=>s.cmd);
-      const a=(t,i)=>(OCM.parseAssistant(t)||[])[0].args[i||0];
-      return {scrollD:c('прокрути вниз'),scrollU:c('scroll up'),find:c('найди Миша'),
-        wait:c('подожди 3'),waitArg:a('подожди 3'),chain:c('открой телеграм и найди Миша')};
-    }""")
-    chk('smart scroll down',sm['scrollD']==['scroll'])
-    chk('smart scroll up en',sm['scrollU']==['scroll'])
-    chk('smart find',sm['find']==['find'])
-    chk('smart wait',sm['wait']==['wait'] and sm['waitArg']=='3000')
-    chk('smart chain open+find',sm['chain']==['open','find'])
-    # ---- arena + translit ----
-    chk('arena helpers',pg.evaluate("typeof OCM.openArena==='function'&&typeof OCM.arenaPickFour==='function'&&typeof OCM.arenaJudge==='function'"))
-    four=pg.evaluate("OCM.arenaPickFour().length")
-    chk('arena picks 4',four==4)
-    chk('arena judge exists',pg.evaluate("OCM.arenaJudge()")!=None)
-    tr=pg.evaluate("""() => ({
-      t1:OCM.translit('telegram'),t2:OCM.translit('телеграм'),
-      m:OCM.appMatch('телеграм',['Telegram','WhatsApp','Настройки']),
-      m2:OCM.appMatch('telegram',['Телеграм','WhatsApp']),
-      m3:OCM.appMatch('ватсап',['WhatsApp','Telegram'])
+    # ---- error classification (no fake quota alerts) ----
+    ek=pg.evaluate("""() => ({
+      overflow:OCM.errorKind({name:'ContextOverflowError'},''),
+      outlen:OCM.errorKind({name:'MessageOutputLengthError'},''),
+      aborted:OCM.errorKind({name:'MessageAbortedError'},''),
+      quota429:OCM.errorKind({data:{statusCode:429}},'Too Many Requests'),
+      free:OCM.errorKind({data:{responseBody:'{"error":"FreeUsageLimitError"}'}},''),
+      toolfail:OCM.errorKind({name:'UnknownError'},'maximum output tokens exceeded for this tool'),
+      credits:OCM.errorKind({name:'UnknownError'},'insufficient credit balance'),
+      plain:OCM.errorKind(null,'rate limit reached')
     })""")
-    chk('translit latin->cyr',tr['t1']=='телеграм')
-    chk('translit cyr->lat',tr['t2']=='telegram')
-    chk('fuzzy match cyr query',tr['m']=='Telegram')
-    chk('fuzzy match lat query',tr['m2']=='Телеграм')
-    chk('fuzzy match ватсап',tr['m3']=='WhatsApp')
-    ab=pg.evaluate("""() => ({
-      tg:OCM.appMatch('тг',['Telegram','WhatsApp']),
-      mine:OCM.appMatch('майн',['Minecraft','Telegram']),
-      insta:OCM.appMatch('инста',['Instagram','VK']),
-      tele:OCM.appMatch('Теле',['Telegram','Teams']),
-      wa:OCM.appMatch('wa',['WhatsApp','Wallet']),
-      yt:OCM.appMatch('ют',['YouTube','Yandex']),
-      ds:OCM.appMatch('дс',['Discord','Settings']),
-      partial:OCM.appMatch(' Whats',['WhatsApp','Wallet'])
-    })""")
-    chk('abbrev тг',ab['tg']=='Telegram')
-    chk('abbrev майн',ab['mine']=='Minecraft')
-    chk('abbrev инста',ab['insta']=='Instagram')
-    chk('partial Теле',ab['tele']=='Telegram')
-    chk('abbrev wa',ab['wa']=='WhatsApp')
-    chk('abbrev ют',ab['yt']=='YouTube')
-    chk('abbrev дс',ab['ds']=='Discord')
-    chk('partial Whats',ab['partial']=='WhatsApp')
-    bi=pg.evaluate("""() => {
-      const c=t=>(OCM.parseAssistant(t)||[]).map(s=>s.cmd);
-      return {shot:c('take a screenshot'),home:c('go home'),torch:c('turn on flashlight'),open:c('open telegram')};
+    chk('kind: context overflow',ek['overflow']=='context')
+    chk('kind: output length is not quota',ek['outlen']=='output-length')
+    chk('kind: aborted',ek['aborted']=='abort')
+    chk('kind: 429 is quota',ek['quota429']=='quota')
+    chk('kind: FreeUsageLimitError is quota',ek['free']=='quota')
+    chk('kind: tool "exceeded" is not quota',ek['toolfail']!='quota')
+    chk('kind: insufficient credit is quota',ek['credits']=='quota')
+    chk('kind: rate limit text is quota',ek['plain']=='quota')
+    # transient session.error while status=retry must not pop the quota modal
+    pg.evaluate("""() => {
+      window.__notified=null;
+      __push({type:'session.status',properties:{sessionID:'ses_1',status:{type:'retry',attempt:1,message:'rate limit'}}});
+      __push({type:'session.error',properties:{sessionID:'ses_1',error:{name:'APIError',data:{message:'rate limit reached, retrying'}}}});
     }""")
-    chk('bilingual screenshot',bi['shot']==['shot'])
-    chk('bilingual home',bi['home']==['home'])
-    chk('bilingual flashlight',bi['torch']==['torch'])
-    chk('bilingual open',bi['open']==['open'])
-    # ---- phone assistant ----
-    asres=pg.evaluate("""() => {
-      const chain=OCM.parseAssistant('открой телеграм и в нем открой чат Миша');
-      return {chain:chain.map(s=>s.cmd),name:chain[1].args[0],
-        shot:OCM.parseAssistant('сделай скриншот')[0].cmd,
-        torch:OCM.parseAssistant('выключи фонарик')[0].args[0],
-        macro:OCM.parseAssistant('игровой режим')[0].cmd,
-        unknown:OCM.parseAssistant('объясни квантовую физику')};
-    }""")
-    chk('assistant chain parse',asres['chain']==['open','text'])
-    chk('assistant keeps name case',asres['name']=='Миша')
-    chk('assistant screenshot',asres['shot']=='shot')
-    chk('assistant torch off',asres['torch']=='off')
-    chk('assistant macro by name',asres['macro']=='macro')
-    chk('assistant unknown goes to agent',asres['unknown'] is None)
-    tol=pg.evaluate("""() => {
-      const c=t=>(OCM.parseAssistant(t)||[]).map(s=>s.cmd);
-      return {shot:c('сделай скриншот пожалуйста'),torch:c('вруби фонарик'),
-        home:c('на главный экран'),yt:c('открой ютуб'),bare:c('телеграм'),
-        macro:c('включи ночной режим'),chain:c('открой телеграм и в нем открой чат Миша')};
-    }""")
-    chk('tolerant: screenshot+please',tol['shot']==['shot'])
-    chk('tolerant: вруби фонарик',tol['torch']==['torch'])
-    chk('tolerant: главный экран',tol['home']==['home'])
-    chk('tolerant: ютуб',tol['yt']==['open'])
-    chk('tolerant: bare app name',tol['bare']==['open'])
-    chk('tolerant: macro verb',tol['macro']==['macro'])
-    chk('tolerant: chain',tol['chain']==['open','text'])
-    chk('macro mirror bridge',pg.evaluate("typeof window.OC.setPref")=='function')
-    pg.evaluate("OCM.saveMacros([{id:'t',name:'Тест',steps:[{cmd:'home',args:[]}]}])")
-    chk('macros mirrored to native',pg.evaluate("(window.__prefs||{})['assistant_macros']||''").find('Тест')>=0)
-    pg.evaluate("OCM.openAssistant()")
-    pg.wait_for_selector('.sheet.full:has-text("Ассистент телефона")')
-    at=pg.inner_text('.sheet.full')
-    chk('assistant sheet quick actions','Скриншот' in at and 'Фонарик' in at)
-    chk('assistant macros listed','Игровой режим' in at)
-    pg.evaluate("OCM.back()")
-    pg.evaluate("OCM.openAssistantSettings()")
-    pg.wait_for_selector('.sheet.full:has-text("Настройки ассистента")')
-    ast=pg.inner_text('.sheet.full')
-    chk('assistant settings wake phrase','Кодовая фраза' in ast)
-    chk('assistant settings permissions','Accessibility' in ast)
-    chk('assistant control center sections','Интеллект' in ast and 'Разрешения' in ast and 'Голос' in ast)
-    chk('assistant LLM setting','ИИ для непонятных фраз' in ast)
-    chk('assistant wake always-on','Всегда слушать кодовую фразу' in ast)
-    chk('assistant mini mode setting','Минимальная пилюля' in ast)
-    chk('assistant session helper',pg.evaluate("typeof OCM.assistantSession==='function'&&typeof OCM.assistantSend==='function'"))
-    pg.evaluate("OCM.back()")
-    pg.evaluate("OCM.openInstalledApps()")
-    pg.wait_for_selector('.sheet.full:has-text("Установленные приложения")')
-    ia=pg.inner_text('.sheet.full')
-    chk('installed apps listed','Telegram' in ia)
-    pg.evaluate("OCM.back()")
+    pg.wait_for_timeout(200)
+    chk('no quota alert during retry',pg.evaluate("window.__notified===null"))
+    pg.evaluate("__push({type:'session.status',properties:{sessionID:'ses_1',status:{type:'idle'}}})")
     # ---- settings ----
     pg.evaluate("OCM.openSettings()")
     pg.wait_for_selector('.sheet .settings-tabs')
@@ -488,7 +423,6 @@ try:
     chk('settings: key check row','Проверить все ключи' in st)
     chk('settings: quick chips',pg.locator('.settings-quick-chip').count()>=5)
     chk('settings: voice control near top','Настройки голосового управления' in st)
-    chk('settings: phone assistant row','Ассистент телефона' in st)
     pg.fill('.settings-search','бэкап')
     pg.wait_for_timeout(200)
     sf=pg.inner_text('.sheet')

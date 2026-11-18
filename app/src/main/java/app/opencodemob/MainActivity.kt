@@ -236,7 +236,6 @@ class MainActivity : ComponentActivity() {
             web.evaluateJavascript("(window.OCM&&OCM.back&&OCM.back())===true") { r -> if (r != "true") moveTaskToBack(true) }
         }
         watch()
-        bindAssistant()
         handleWidgetIntent(intent)
         handleShareIntent(intent)
     }
@@ -306,15 +305,6 @@ class MainActivity : ComponentActivity() {
         val act = intent?.getStringExtra("widget_action") ?: return
         val target = intent.getStringExtra("widget_target") ?: ""
         val sessionId = intent.getStringExtra("widget_session") ?: ""
-        if (act == "assistant") {
-            ui.postDelayed({ AssistantOverlayService.show(this@MainActivity) }, 200)
-            return
-        }
-        if (act == "assistant_agent") {
-            // overlay forwarded a non-phone phrase to the agent: put it in the composer and send
-            ui.postDelayed({ emit("assistantAgent", JSONObject().put("text", target)) }, 400)
-            return
-        }
         if (act == "voice") {
             ui.postDelayed({
                 try {
@@ -353,12 +343,6 @@ class MainActivity : ComponentActivity() {
     private fun startOverlay() {
         Prefs.putFlag(this, "overlay_enabled", true)
         OverlayService.start(this)
-    }
-
-    /** The assistant overlay forwards mic/queries through the same event bus as the main UI. */
-    private fun bindAssistant() {
-        AssistantOverlayService.instance?.emit = { n, d -> emit(n, d) }
-        ui.postDelayed({ bindAssistant() }, 1500)
     }
 
     private fun unlockHighRefreshRate() {
@@ -1606,7 +1590,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // ================= PHONE ASSISTANT (no ADB) =================
+        // ================= PHONE CONTROL (no ADB) =================
 
         @JavascriptInterface fun phoneStatus(): String = PhoneControl.status(this@MainActivity).toString()
 
@@ -1636,15 +1620,13 @@ class MainActivity : ComponentActivity() {
             return try {
                 when (cmd.lowercase()) {
                     "status" -> PhoneControl.status(this@MainActivity).toString()
-                    "open", "app" -> AssistantCore.openAppDetailed(this@MainActivity, a(0)).toString()
-                    "apps" -> JSONObject().put("ok", true).put("apps", AssistantCore.listApps(this@MainActivity)).toString()
+                    "open", "app" -> PhoneControl.openAppDetailed(this@MainActivity, a(0)).toString()
+                    "apps" -> JSONObject().put("ok", true).put("apps", PhoneControl.listApps(this@MainActivity)).toString()
                     "torch", "flashlight" -> JSONObject().put("ok", PhoneControl.flashlight(this@MainActivity, a(0) != "off")).toString()
                     "dnd" -> PhoneControl.dnd(this@MainActivity, a(0)).toString()
                     "volume" -> PhoneControl.volume(this@MainActivity, a(0), a(1).toIntOrNull()).toString()
                     "brightness" -> PhoneControl.brightness(this@MainActivity, a(0).toIntOrNull()).toString()
                     "settings" -> JSONObject().put("ok", PhoneControl.openSettingsPage(this@MainActivity, a(0))).toString()
-                    "assistant" -> { runOnUiThread { AssistantOverlayService.show(this@MainActivity) }; JSONObject().put("ok", true).toString() }
-                    "assistant_hide" -> { runOnUiThread { AssistantOverlayService.hide(this@MainActivity) }; JSONObject().put("ok", true).toString() }
                     "back", "home", "recents", "notifications", "quicksettings", "power", "lock", "split" -> {
                         val svc = PhoneAccessibilityService.instance
                         if (svc == null) JSONObject().put("ok", false).put("err", "accessibility_off").toString()
@@ -1655,7 +1637,7 @@ class MainActivity : ComponentActivity() {
                         if (svc == null) JSONObject().put("ok", false).put("err", "accessibility_off").toString()
                         else JSONObject().put("ok", svc.global("screenshot")).toString()
                     }
-                    "macro" -> AssistantCore.runStep(this@MainActivity, JSONObject().put("cmd", "macro").put("args", args)).toString()
+                    "macro" -> JSONObject().put("ok", false).put("err", "macros removed").toString()
                     else -> JSONObject().put("ok", false).put("err", "unknown cmd").toString()
                 }
             } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
@@ -1691,21 +1673,6 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed").toString() }
                 emit("phoneResult", JSONObject().put("id", id).put("result", result))
             }
-        }
-
-        @JavascriptInterface fun assistantResult(text: String, ok: Boolean) {
-            AssistantOverlayService.instance?.showResult(text, ok)
-        }
-        @JavascriptInterface fun assistantStatus(text: String) {
-            AssistantOverlayService.instance?.setStatusText(text)
-        }
-        @JavascriptInterface fun assistantPartial(text: String) {
-            AssistantOverlayService.instance?.setPartial(text)
-        }
-
-        /** Generic pref write for the assistant (macros shared with the native overlay). */
-        @JavascriptInterface fun setPref(key: String, value: String) {
-            if (key == "assistant_macros" || key.startsWith("assistant.")) Prefs.put(this@MainActivity, key, value)
         }
 
         @JavascriptInterface fun phoneServerStart() { runOnUiThread { PhoneServer.start(this@MainActivity) { n, d -> emit(n, d) } } }
