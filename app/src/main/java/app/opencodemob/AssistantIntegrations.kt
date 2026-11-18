@@ -35,7 +35,7 @@ object AssistantIntegrations {
             val results = Bundle()
             results.putCharSequence(remoteInput.resultKey, text)
             val intent = RemoteInput.addResultsToIntent(arrayOf(remoteInput), Intent(), results)
-            pi.send(c, 0, intent)
+            pi.send(c, 0, intent, null, null)
             JSONObject().put("ok", true)
         } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed") }
     }
