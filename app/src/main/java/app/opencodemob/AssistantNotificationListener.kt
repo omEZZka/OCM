@@ -1,6 +1,8 @@
 package app.opencodemob
 
 import android.app.Notification
+import android.app.PendingIntent
+import android.app.RemoteInput
 import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -18,7 +20,8 @@ class AssistantNotificationListener : NotificationListenerService() {
         val pkg: String,
         val title: String,
         val text: String,
-        val remoteInput: android.app.RemoteInput?,
+        val remoteInput: RemoteInput?,
+        val actionIntent: PendingIntent?,
         val actions: JSONArray
     )
 
@@ -34,15 +37,17 @@ class AssistantNotificationListener : NotificationListenerService() {
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: sbn.packageName
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
             ?: extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
-        var remoteInput: android.app.RemoteInput? = null
+        var remoteInput: RemoteInput? = null
+        var actionIntent: PendingIntent? = null
         val actions = JSONArray()
         n.actions?.forEach { a ->
             actions.put(a.title)
             if (a.remoteInputs?.isNotEmpty() == true && remoteInput == null) {
                 remoteInput = a.remoteInputs[0]
+                actionIntent = a.actionIntent
             }
         }
-        items.add(Item(sbn.packageName, title, text, remoteInput, actions))
+        items.add(Item(sbn.packageName, title, text, remoteInput, actionIntent, actions))
         if (items.size > 40) items.removeAt(0)
     }
 

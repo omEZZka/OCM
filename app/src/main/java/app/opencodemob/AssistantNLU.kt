@@ -53,7 +53,7 @@ object AssistantNLU {
     fun replaceNumbers(s: String): String = NUM_RE.replace(s) { (wordToNumber(it.value)?.toString() ?: it.value) }
 
     // ---- relative adjustments (idea 6) ----
-    fun relativeOf(s: String): Triple<String, Int, Int>? {
+    fun relativeOf(s: String): Triple<Int, Int, Int>? {
         // "ярче на 20%", "громче на 10", "тише на треть", "ярче в два раза"
         val m = Regex("(ярче|темнее|громче|тише|выше|ниже|больше|меньше)\\s+(?:на\\s+)?(\\d+)(?:\\s*(%|процента|процентов|пункта|пунктах|раза|раз|делен)?)?").find(s)
             ?: return null

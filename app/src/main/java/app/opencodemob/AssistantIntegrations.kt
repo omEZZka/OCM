@@ -1,6 +1,9 @@
 package app.opencodemob
 
+import android.app.RemoteInput
+import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -18,9 +21,9 @@ object AssistantIntegrations {
 
     // ---- (61) notification actions ----
     fun latestNotification(): JSONObject {
-        val list = AssistantNotificationListener.latest()
-        return if (list.isEmpty()) JSONObject().put("ok", false).put("err", "уведомлений нет (или нет доступа NotificationListener)")
-        else list[list.size - 1]
+        val n = AssistantNotificationListener.latest().lastOrNull()
+            ?: return JSONObject().put("ok", false).put("err", "уведомлений нет (или нет доступа NotificationListener)")
+        return JSONObject().put("ok", true).put("pkg", n.pkg).put("title", n.title).put("text", n.text).put("actions", n.actions)
     }
 
     fun replyLatest(c: Context, text: String): JSONObject {
@@ -28,12 +31,11 @@ object AssistantIntegrations {
             ?: return JSONObject().put("ok", false).put("err", "нет уведомления для ответа")
         return try {
             val remoteInput = n.remoteInput ?: return JSONObject().put("ok", false).put("err", "это уведомление не поддерживает быстрый ответ")
-            val reply = android.app.RemoteInput()
-            reply.addRemoteInput(remoteInput)
-            reply.putCharSequence("android.text", text)
-            val pi = reply.getFilledInIntent()
-            if (pi == null) return JSONObject().put("ok", false).put("err", "не удалось подготовить ответ")
-            pi.send(c, 0)
+            val pi = n.actionIntent ?: return JSONObject().put("ok", false).put("err", "нет действия для ответа")
+            val results = Bundle()
+            results.putCharSequence(remoteInput.resultKey, text)
+            val intent = RemoteInput.addResultsToIntent(arrayOf(remoteInput), Intent(), results)
+            pi.send(c, 0, intent)
             JSONObject().put("ok", true)
         } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: "failed") }
     }
@@ -94,7 +96,7 @@ object AssistantIntegrations {
     fun timer(c: Context, seconds: Int, label: String = "Таймер"): JSONObject = try {
         val i = Intent(AlarmClock.ACTION_SET_TIMER)
             .putExtra(AlarmClock.EXTRA_LENGTH, seconds)
-            .putExtra(AlarmClock.EXTRA_LABEL, label)
+            .putExtra(AlarmClock.EXTRA_MESSAGE, label)
             .putExtra(AlarmClock.EXTRA_SKIP_UI, false)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         c.startActivity(i)
