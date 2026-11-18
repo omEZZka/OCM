@@ -18,7 +18,9 @@ O.toggleWorkSession=id=>{
 };
 O.pinnedSessions=()=>O.store.get('pinned',[]);
 O.isPinned=id=>O.pinnedSessions().includes(id);
-O.togglePin=id=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i>=0)l.splice(i,1);else l.push(id);O.store.set('pinned',l);bus.emit('sessions');};
+O.togglePin=id=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i>=0)l.splice(i,1);else l.unshift(id);O.store.set('pinned',l);bus.emit('sessions');};
+// Priority inside the pinned block: array order = priority (new pins go on top).
+O.movePinned=(id,delta)=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i<0)return;const j=Math.max(0,Math.min(l.length-1,i+delta));if(i===j)return;const [x]=l.splice(i,1);l.splice(j,0,x);O.store.set('pinned',l);bus.emit('sessions');};
 O.openSessions=()=>{
   const list=h('div'),tagBar=h('div',{style:{display:'flex',gap:'6px',overflowX:'auto',marginBottom:'8px'}});
   const q=search(O.tr('Search sessions and messages...','Поиск по сессиям и сообщениям...'),()=>draw());
@@ -126,29 +128,40 @@ O.openSessions=()=>{
   };
   function draw(){list.textContent='';drawTags();runHitSearch();const f=q.value.toLowerCase();
     const items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f)&&(!activeTag||O.sessionTag(x.id)===activeTag));
-    items.sort((a,b)=>{const pa=O.isPinned(a.id)?0:1,pb=O.isPinned(b.id)?0:1;if(pa!==pb)return pa-pb;return (b.time&&b.time.updated||0)-(a.time&&a.time.updated||0)});
+    // Pinned: one flat block ordered by user priority (pin array order), never split by days.
+    const pinOrder=O.pinnedSessions();
+    const pinRank=id=>{const i=pinOrder.indexOf(id);return i<0?1e9:i};
+    items.sort((a,b)=>{const pa=O.isPinned(a.id),pb=O.isPinned(b.id);
+      if(pa&&pb)return pinRank(a.id)-pinRank(b.id);
+      if(pa!==pb)return pa?-1:1;
+      return (b.time&&b.time.updated||0)-(a.time&&a.time.updated||0)});
     if(!items.length)list.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('No sessions yet','Сессий пока нет')));
-    // grouping is applied only while browsing (no search); searching keeps the flat, ranked list
-    let lastGroup=null;
+    // grouping is applied only while browsing (no search) and never to pinned rows
+    let lastGroup=null,pinHeadShown=false;
     items.forEach(x=>{
-      if(!f){
+      const pin=O.isPinned(x.id);
+      if(!f&&!pin){
         const g=O.isWorkSession(x.id)?O.tr('Working set','Рабочие'):dayKey(x.time&&x.time.updated);
         if(g!==lastGroup){
           lastGroup=g;
-          list.append(h('div',{class:'grp',style:{marginTop:lastGroup===g?'0':'10px'}},g));
+          list.append(h('div',{class:'grp',style:{marginTop:'10px'}},g));
         }
+      }else if(!f&&pin&&!pinHeadShown){
+        pinHeadShown=true;lastGroup=null;
+        list.append(h('div',{class:'grp',style:{marginTop:'0'}},O.tr('Pinned','Закреплённые')));
       }
-      const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,pin=O.isPinned(x.id),tag=O.sessionTag(x.id);
+      const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,tag=O.sessionTag(x.id);
       const isWork=O.isWorkSession(x.id);
       const pend=O.sessionPending(x.id);
-      list.append(h('div',{class:'settings-row'+(x.id===S.sid?' on':'')},
+      list.append(h('div',{class:'settings-row sess-row'+(x.id===S.sid?' on':'')},
         h('button',{class:'settings-row-text',onclick:()=>{s.close();O.openSession(x.id)}},
-          h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},pin?O.icon('pin','pin-ic'):null,h('span',null,O.sessionTitle(x)),isWork?h('span',{class:'sess-badge work',title:O.tr('Working set','Рабочая сессия')},O.icon('star')):null,x.local?h('span',{class:'mut s'},'· offline'):null),
-          h('span',null,(tag?'#'+tag+'  ':'')+O.ago(x.time.updated)+(sm&&(sm.additions||sm.deletions)?'  +'+sm.additions+' -'+sm.deletions:'')+sessionStatBit(x))),
+          h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},pin?O.icon('pin','pin-ic'):null,h('span',{class:'sess-title'},O.sessionTitle(x)),isWork?h('span',{class:'sess-badge work',title:O.tr('Working set','Рабочая сессия')},O.icon('star')):null,x.local?h('span',{class:'mut s'},'· offline'):null),
+          h('span',{class:'sess-sub'},(tag?'#'+tag+'  ':'')+(sm&&(sm.additions||sm.deletions)?'+'+sm.additions+' -'+sm.deletions:'')+sessionStatBit(x))),
         pend.q?h('span',{class:'sess-badge q',title:O.tr('Question pending','Ждёт ответа на вопрос')},O.icon('at'),pend.q>1?h('i',null,pend.q):null):null,
         pend.p?h('span',{class:'sess-badge p',title:O.tr('Permission pending','Ждёт разрешения')},O.icon('excl'),pend.p>1?h('i',null,pend.p):null):null,
         b?h('span',{class:'spin',style:{flex:'none'}}):null,
         x.parentID?h('span',{class:'sess-badge sub',title:O.tr('Subagent session','Сессия субагента')},O.icon('bot')):null,
+        h('span',{class:'sess-time',title:O.tr('Last activity','Последняя активность')},O.ago(x.time&&x.time.updated)),
         h('button',{class:'ibtn s',style:{flex:'none'},onclick:()=>sessActions(x)},O.icon('dots'))))})}
   draw();offs.push(bus.on('sessions',()=>{if(s.root.isConnected)draw()}),bus.on('perm',()=>{if(s.root.isConnected)draw()}))};
 function importSessionFile(){
@@ -167,8 +180,11 @@ async function restartApp(){
   O.toast(O.tr('Restarting...','Перезапускаю...'),4000);
   try{OC.hardRestart()}catch(e){try{OC.restartServer()}catch(_){}}
 }
-function sessActions(x){O.actions(O.sessionTitle(x),[
-  {label:O.isPinned(x.id)?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'star',fn:()=>{O.togglePin(x.id)}},
+function sessActions(x){const pin=O.isPinned(x.id);const po=O.pinnedSessions();const pi=po.indexOf(x.id);
+  O.actions(O.sessionTitle(x),[
+  {label:pin?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'star',fn:()=>{O.togglePin(x.id)}},
+  pin&&pi>0?{label:O.tr('Move up (priority)','Выше (приоритет)'),icon:'up',fn:()=>O.movePinned(x.id,-1)}:null,
+  pin&&pi>=0&&pi<po.length-1?{label:O.tr('Move down (priority)','Ниже (приоритет)'),icon:'down',fn:()=>O.movePinned(x.id,1)}:null,
   {label:O.isWorkSession(x.id)?O.tr('Remove from working set','Убрать из рабочих'):O.tr('Mark as working','Отметить как рабочую'),icon:'zap',fn:()=>{O.toggleWorkSession(x.id)}},
   {label:O.sessionTag(x.id)?('#'+O.sessionTag(x.id)+' · '+O.tr('change folder/tag','сменить папку/тег')):O.tr('Folder / tag','Папка / тег'),icon:'folder',fn:async()=>{
     const cur=O.sessionTag(x.id);
@@ -337,18 +353,7 @@ O.openModels=()=>{
   }
   const folderBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelFolders(()=>draw())},O.icon('folder'),O.tr('Folders & profiles','Папки и профили'));
   const compareBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelCompare()},O.icon('branch'),O.tr('Compare models on one prompt','Сравнить модели на одном запросе'));
-  const taskInp=h('input',{placeholder:O.tr('Task for recommendations (optional)','Задача для рекомендаций (необязательно)'),style:{marginBottom:'8px'},onkeydown:e=>{if(e.key==='Enter'){e.preventDefault();recBtn.click()}}});
-  const recBox=h('div');
-  const recBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>{
-    recBox.textContent='';
-    const rec=O.recommendModels(taskInp.value,O.allModels());
-    if(!rec.length){recBox.append(h('div',{class:'note'},O.tr('No recommendations yet','Рекомендаций пока нет')));return}
-    recBox.append(h('div',{class:'grp'},O.tr('Recommended for this task','Подходят для этой задачи')));
-    const card=h('div',{class:'group-card'});
-    rec.forEach(r=>card.append(O.listRow('star',r.x.name||r.x.mid,(r.why||[]).join(' · '),O.icon('chevR'),()=>{O.setModel(r.x.pid,r.x.mid);s.close()})));
-    recBox.append(card);
-  }},O.icon('star'),O.tr('Recommend a model','Подобрать модель'));
-  const container=h('div',null,effortCard,selectBar,taskInp,recBtn,recBox,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
+  const container=h('div',null,effortCard,selectBar,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
   // Folder edits from the action sheet / folder manager must repaint the list live.
   const offFolders=bus.on('folders',()=>{if(s.root&&s.root.isConnected)draw()});
@@ -897,16 +902,7 @@ O.openModelCompare=()=>{
 
 O.openAllModelsCatalog=()=>O.openModels();
 
-O.openAgents=()=>{const ags=O.primaryAgents();
-  const card=h('div',{class:'group-card'},ags.map(a=>h('button',{class:'model-row',onclick:()=>{O.setAgent(a.name);s.close()}},
-    h('div',{class:'model-row-left'},
-      h('span',{class:'model-row-title'},a.name.charAt(0).toUpperCase()+a.name.slice(1)),
-      h('span',{class:'model-row-sub'},a.description||'')),
-    a.name===S.agent&&!O.mmActiveId()?O.icon('check','model-check'):null)));
-  const s=O.sheet(O.tr('Agents & Modes','Режимы и агенты'),h('div',null,
-    h('div',{class:'settings-section-title',style:{margin:'2px 8px 6px'}},O.tr('Standard agents','Обычные агенты')),
-    card,
-    h('div',{class:'model-disclaimer'},O.tr('Multimodal agents are switched with the MM chip in the chat input. Custom agents and rules — in Settings → Agents & Rules.','Мультимодальные агенты переключаются чипом MM в поле ввода чата. Своих агентов и правила — в Настройки → Агенты и правила.'))),{hud:true})};
+O.openAgents=()=>O.openAgentsPicker();
 
 // ---- connect providers (/connect) ----
 const POP=['opencode','anthropic','openai','github-copilot','google','openrouter','xai','deepseek','groq','mistral','together','fireworks','cerebras','nvidia','huggingface'];

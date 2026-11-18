@@ -139,7 +139,7 @@ try:
     chk('session diff rendered',pg.locator('.sheet .diff .a').count()>=1)
     pg.click('.sheet .sh-h button.ibtn:first-child')
     pg.evaluate("OCM.setTab('chat')")
-    # ---- model picker: long name fits, recommendations respect free-only ----
+    # ---- model picker: long name fits chip ----
     pg.click('#composer .model-pill')
     pg.wait_for_selector('.sheet .model-row')
     # paid models are hidden by the default free-only filter: turn it off to see GPT X
@@ -148,11 +148,6 @@ try:
     pg.wait_for_selector('.sheet .model-row')
     chk('model list','GPT X' in pg.inner_text('.sheet >> nth=-1'))
     chk('free badge shown','БЕСПЛАТНО' in pg.inner_text('.sheet >> nth=-1').upper())
-    pg.fill('.sheet >> nth=-1 >> input[placeholder*="Задача"]','исправь баг в коде')
-    pg.click('.sheet >> nth=-1 >> button:has-text("Подобрать модель")')
-    pg.wait_for_timeout(200)
-    recs=pg.evaluate("[...document.querySelectorAll('.sheet')].pop().textContent")
-    chk('recommendations rendered','Подходят' in recs or 'доступна' in recs)
     pg.click('.sheet .model-row:has-text("Claude Super Long")')
     pg.wait_for_timeout(300)
     chk('long model selected',pg.evaluate("OCM.S.model.modelID")=='claude-super-long-preview-ultra-experimental-context-window-1m')
@@ -439,6 +434,77 @@ try:
     chk('settings: git timeline row','История Git' in st2)
     pg.screenshot(path=os.environ.get('SHOTS','/tmp')+'/s7_settings.png')
     pg.evaluate("OCM.back()")
+    # ---- agents & rules redesign + AI editor ----
+    pg.evaluate("OCM.openAgentsRules()")
+    pg.wait_for_timeout(300)
+    ar=pg.inner_text('.sheet >> nth=-1').upper()
+    chk('agents&rules sections',all(x in ar for x in ['РЕЖИМЫ ЧАТА','СУБАГЕНТЫ','ПРАВИЛА (AGENTS.MD)','НАВЫКИ И КОМАНДЫ']))
+    chk('agents&rules create rows','Новый режим…' in pg.inner_text('.sheet >> nth=-1') and 'Новый субагент…' in pg.inner_text('.sheet >> nth=-1'))
+    pg.evaluate("OCM.back()")
+    pg.evaluate("OCM.openAgents()")
+    pg.wait_for_timeout(250)
+    chk('agent chip picker has create','Новый режим / агент' in pg.inner_text('.sheet >> nth=-1'))
+    pg.evaluate("OCM.back()")
+    pg.evaluate("OCM.openAgentEditor('subagent',null)")
+    pg.wait_for_timeout(500)
+    ae=pg.evaluate("document.querySelector('.sheet:last-child').textContent")
+    chk('agent editor AI block','Опишите результат' in ae and 'Системный промпт' in ae)
+    pg.evaluate("()=>{const sh=document.querySelector('.sheet:last-child');sh.querySelectorAll('input')[0].value='tester';sh.querySelectorAll('textarea')[1].value='Ты тестировщик. Пиши тесты.'}")
+    pg.evaluate("()=>{[...document.querySelector('.sheet:last-child').querySelectorAll('button')].find(b=>b.textContent.includes('Сохранить')).click()}")
+    pg.wait_for_timeout(300)
+    chk('agent editor saves','Сохранено: tester' in pg.evaluate("(document.querySelector('#toast')||{}).textContent||''"))
+    pg.evaluate("OCM.back()")
+    # ---- pinned sessions: flat priority block, time right of row ----
+    pg.evaluate("__push({type:'session.updated',properties:{info:{id:'ses_pin2',title:'Вторая закреплённая',time:{created:2,updated:Date.now()},directory:'/root'}}})")
+    pg.evaluate("()=>{OCM.togglePin('ses_1');OCM.togglePin('ses_pin2')}")
+    pg.evaluate("OCM.openSessions()")
+    pg.wait_for_selector('.sheet.drawer .sess-row .pin-ic')
+    pg.wait_for_timeout(250)
+    pin=pg.evaluate("""()=>{
+      const rows=[...document.querySelectorAll('.sheet.drawer .sess-row')];
+      const grps=[...document.querySelectorAll('.sheet.drawer .grp')].map(g=>g.textContent);
+      const first=rows[0];const t=first&&first.querySelector('.sess-time');const d=first&&first.querySelector('button.ibtn');
+      let aligned=false,left=false;
+      if(t&&d){const tb=t.getBoundingClientRect(),db=d.getBoundingClientRect();
+        aligned=Math.abs((tb.top+tb.bottom)/2-(db.top+db.bottom)/2)<8;left=tb.right<=db.left+1}
+      return {pinHead:grps[0]==='Закреплённые',twoPinned:rows[0].querySelector('.pin-ic')&&rows[1]&&rows[1].querySelector('.pin-ic'),aligned,left,
+        order:OCM.pinnedSessions()};
+    }""")
+    chk('pinned block first, no day split',pin['pinHead'] and pin['twoPinned'])
+    chk('pinned time centered next to dots',pin['aligned'] and pin['left'])
+    pg.evaluate("()=>{const po=OCM.pinnedSessions();if(po.length>1)OCM.movePinned(po[1],-1)}")
+    pg.wait_for_timeout(200)
+    chk('pinned priority move',pg.evaluate("OCM.pinnedSessions()[0]")=='ses_1' and pin['order'][0]=='ses_pin2')
+    pg.evaluate("()=>{OCM.pinnedSessions().slice().forEach(id=>OCM.togglePin(id))}")
+    pg.evaluate("OCM.back()")
+    # ---- MM: pipeline editor, judge merge, memory, resume ----
+    pg.evaluate("""()=>{
+      OCM.mmSave({id:'mm_t1',name:'Тест-команда',main:null,backup:null,mode:'sessions',pipeline:true,memory:true,
+        roles:[{name:'План',icon:'list',prompt:'план',kind:'worker'},
+               {name:'Код',icon:'code',prompt:'код',kind:'worker'},
+               {name:'Судья',icon:'shield',prompt:'проверка',kind:'judge',merge:true}]});
+      OCM.mmSetActive('mm_t1');
+      OCM.mmEditor(OCM.mmActive());
+    }""")
+    pg.wait_for_timeout(300)
+    mm=pg.evaluate("""()=>{
+      const sh=document.querySelector('.sheet:last-child');
+      return {cards:sh.querySelectorAll('.mm-role-card').length,ord:sh.querySelectorAll('.mm-role-ord').length,
+        text:sh.textContent};
+    }""")
+    chk('mm editor role cards',mm['cards']==3 and mm['ord']==3)
+    chk('mm pipeline + memory toggles','Конвейер' in mm['text'] and 'Память команды' in mm['text'])
+    chk('mm pipeline flow hint','получает результат' in mm['text'])
+    pg.evaluate("OCM.back()")
+    pg.evaluate("OCM.mmMemoryAppend(OCM.mmActive(),'проект на Kotlin')")
+    chk('mm memory stored','Kotlin' in pg.evaluate("OCM.mmMemory(OCM.mmActive())"))
+    pg.evaluate("OCM.store.set('mm.lastResumable',{mmId:'mm_t1',userText:'тест',at:Date.now(),jobs:[{role:{name:'Код'},task:'писать',result:'',state:'error'}]})")
+    chk('mm resumable detected',pg.evaluate("OCM.mmHasResumable()"))
+    pg.evaluate("OCM.openMultimodalPicker()")
+    pg.wait_for_timeout(250)
+    mmp=pg.inner_text('.sheet >> nth=-1')
+    chk('mm picker resume + memory','Возобновить прерванный прогон' in mmp and 'Память команды' in mmp)
+    pg.evaluate("OCM.back();OCM.mmSetActive(null);OCM.store.remove('mm.lastResumable')")
     # ---- sessions drawer ----
     pg.evaluate("__push({type:'session.updated',properties:{info:{id:'ses_9',title:'Очень длинное название сессии про рефакторинг системы аутентификации пользователей приложения и прочего',time:{created:1,updated:Date.now()},directory:'/root'}}})")
     pg.evaluate("OCM.openSessions()")

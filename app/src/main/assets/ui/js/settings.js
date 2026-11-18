@@ -208,7 +208,8 @@ O.openSettings=()=>{
   panes.agent.append(h('div',{class:'settings-section-title'},O.tr('Agents, MCP & Rules','Агенты, MCP и правила')));
   const agentCard=h('div',{class:'settings-card'});
   agentCard.append(
-    O.listRow('doc',O.tr('Agents & Rules','Агенты и правила'),O.tr('Upload or edit AGENTS.md, agents & commands','Загрузите AGENTS.md, агентов и команды'),O.icon('chevR'),()=>openAgents()),
+    O.listRow('doc',O.tr('Agents & Rules','Агенты и правила'),O.tr('Modes, subagents, AGENTS.md rules, skills — create with AI','Режимы, субагенты, правила AGENTS.md, навыки — создание с ИИ'),O.icon('chevR'),()=>O.openAgentsRules()),
+    O.listRow('plus',O.tr('New mode / agent','Новый режим / агент'),O.tr('Describe the result — AI writes the prompt','Опишите результат — ИИ напишет промпт'),O.icon('chevR'),()=>O.openAgentEditor('primary',null)),
     O.listRow('server',O.tr('MCP Servers','Серверы MCP'),O.tr('Configure tools and integrations','Добавить, изменить, подключить'),O.icon('chevR'),()=>O.openMcp()),
     O.listRow('plug',O.tr('Plugins','Плагины'),O.tr('npm packages and local scripts','npm-пакеты и локальные файлы'),O.icon('chevR'),()=>O.openPlugins()),
     O.listRow('code',O.tr('Configuration File','Файл конфигурации'),'opencode.json',O.icon('chevR'),()=>openConfig())
@@ -580,24 +581,6 @@ function openSettingsTransfer(){
     fileInp,info);
   sub(O.tr('Export / Import settings','Экспорт / импорт настроек'),body,{full:true});
 }
-
-// ---- agents / rules upload ----
-function openAgents(){
-  if(O.updateReadmeForModel) O.updateReadmeForModel();
-  const list=h('div');
-  const up=(t,sbt,kind,dir)=>O.listRow('up',t,sbt,null,()=>OC.pickFile(kind,dir||''));
-  const s=sub('Агенты и правила',h('div',null,
-    O.listRow('doc','Инструкции и README (AGENTS.md)','Текущие инструкции и джейлбрейк для активной модели',null,()=>editFile(CFG+'/AGENTS.md','Инструкции и README (AGENTS.md)')),
-    O.listRow('edit','Глобальный README.md','Текущие инструкции и джейлбрейк в README.md',null,()=>editFile(CFG+'/README.md','Глобальный README.md')),
-    up('Глобальные правила (AGENTS.md)','Выберите файл — действует для всех проектов','rules'),
-    up('Правила проекта (AGENTS.md)','Сохраняются в текущую папку','project',S.dir),
-    up('Файл навыка (.md)','Добавляет навык для агента','skill'),
-    up('Файл агента (.md)','Добавляется в список ваших агентов','agent'),up('Файл команды (.md)','Добавляет /команду','command'),list));
-  const draw=()=>{list.textContent='';[['skills','Навыки'],['agents','Агенты'],['commands','Команды']].forEach(([d,t])=>{const r=O.native.ls(CFG+'/'+d);if(r.items&&r.items.length){list.append(h('div',{class:'grp'},t));
-    r.items.filter(x=>!x.dir).forEach(x=>list.append(O.listRow('doc',x.name,'',h('button',{class:'ibtn s',onclick:async e=>{e.stopPropagation();if(await O.confirm('Удалить '+x.name+'?','','Удалить',true)){O.native.fs('delete',CFG+'/'+d+'/'+x.name);draw();O.loadMeta()}}},O.icon('trash')),()=>editFile(CFG+'/'+d+'/'+x.name,x.name))))}})};
-  draw();watchPicked(s,()=>draw())}
-function editFile(path,title){const r=O.native.readText(path);const ta=h('textarea',{class:'mono',rows:18});ta.value=r.ok?r.text:'';
-  const s=O.sheet(title,h('div',null,ta,h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:()=>{const w=O.native.fs('mkdir',O.dirname(path));const x=O.native.writeText(path,ta.value);if(x.ok){O.toastQuiet('Сохранено');s.close();O.loadMeta()}else O.toast(x.err||'Не удалось')}},'Сохранить')),{full:true})}
 
 // ---- MCP ----
 O.openMcp=async()=>{const body=h('div');const s=sub('Серверы MCP',body,{actions:h('div',{style:{display:'flex',gap:'4px'}},h('button',{class:'ibtn',onclick:()=>draw()},O.icon('refresh')),h('button',{class:'ibtn',onclick:()=>edit(null)},O.icon('plus')))});

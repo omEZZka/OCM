@@ -158,6 +158,9 @@ O.openMultimodalPicker=()=>{
     body.append(card);
   }
   body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{s.close();O.openMultimodal()}},O.icon('sliders'),O.tr('Manage agents','Управление агентами')));
+  if(O.mmHasResumable&&O.mmHasResumable())body.append(h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:()=>{s.close();O.mmResume()}},O.icon('play'),O.tr('Resume interrupted run','Возобновить прерванный прогон')));
+  const actMm=O.mmActive();
+  if(actMm)body.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{s.close();O.mmMemoryView(actMm)}},O.icon('memory'),O.tr('Team memory','Память команды')));
 };
 
 // ---- settings: list of multimodal agents ----
@@ -209,13 +212,14 @@ const MM_TEMPLATES=[
     {name:'Translator',icon:'globe',prompt:'Переведи текст, сохраняя термины и форматирование.'},
     {name:'Editor',icon:'edit',prompt:'Вычитай перевод: естественность, тон, единообразие терминов.'}]}
 ];
-// ---- editor ----
+// ---- editor: role cards with order controls, pipeline toggle, team memory ----
 O.mmEditor=(a,done)=>{
   const isNew=!a;
-  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,backup:null,roles:[],mode:'subagents'};
+  a=a?JSON.parse(JSON.stringify(a)):{id:uid(),name:'',main:null,backup:null,roles:[],mode:'subagents',pipeline:false,memory:true};
   a.roles=Array.isArray(a.roles)?a.roles:[];
   if(!a.backup)a.backup=null;
   if(!a.mode)a.mode='sessions';
+  if(a.memory===undefined)a.memory=true;
   const pickOpts=()=>({});
   const body=h('div');
   const s=O.sheet(isNew?O.tr('New multimodal agent','Новый мультимодальный агент'):O.tr('Edit multimodal agent','Редактирование агента'),body,{full:true});
@@ -234,24 +238,46 @@ O.mmEditor=(a,done)=>{
   const modeSeg=h('div',{class:'seg',style:{margin:'0 0 10px'}},
     h('button',{class:a.mode==='sessions'?'on':'',onclick:e=>{a.mode='sessions';modeSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===e.currentTarget));draw()}},O.tr('Sessions','Сессии')),
     h('button',{class:a.mode==='subagents'?'on':'',onclick:e=>{a.mode='subagents';modeSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===e.currentTarget));draw()}},O.tr('Subagents','Субагенты')));
+  const pipeRow=O.toggleRow('branch',O.tr('Pipeline (chain)','Конвейер (цепочка)'),
+    O.tr('Each role receives the previous role\u2019s output. Off = all roles work in parallel.','Каждая роль получает результат предыдущей. Выкл = все роли работают параллельно.'),
+    !!a.pipeline,v=>{a.pipeline=v;draw()});
+  const memRow=O.toggleRow('memory',O.tr('Team memory','Память команды'),
+    O.tr('Durable facts from past runs are injected into every role; updated after each run.','Факты из прошлых прогонов добавляются в промпт каждой роли; обновляются после прогона.'),
+    a.memory!==false,v=>{a.memory=v});
+  const memViewRow=h('button',{class:'settings-row',onclick:()=>{
+      // persist current name first so memory view/edit works for a new team too
+      a.name=nameInp.value.trim()||a.name;O.mmSave(a);O.mmMemoryView(a);
+    }},
+    h('div',{class:'settings-row-icon'},O.icon('doc')),
+    h('div',{class:'settings-row-text'},h('b',null,O.tr('View / edit memory','Просмотр / правка памяти')),
+      h('span',null,(O.mmMemory(a)||'').length?O.fmtK((O.mmMemory(a)||'').length)+' '+O.tr('chars','симв.'):O.tr('Empty','Пусто'))),
+    O.icon('chevR'));
   const rolesEl=h('div');
+  const moveRole=(i,d)=>{const j=i+d;if(j<0||j>=a.roles.length)return;const [x]=a.roles.splice(i,1);a.roles.splice(j,0,x);draw()};
   const draw=()=>{
     const sub=mainRow.querySelector('#mm-main-sub');if(sub)sub.textContent=a.main?mName(a.main):O.tr('Empty — uses the active session model','Пусто — берётся модель активной сессии');
     const bsub=backupRow.querySelector('#mm-backup-sub');if(bsub)bsub.textContent=a.backup?mName(a.backup):O.tr('Not set','Не задана');
+    pipeRow.classList.toggle('hide',a.mode!=='sessions');
     rolesEl.textContent='';
-    const card=h('div',{class:'settings-card'});
-    if(!a.roles.length)card.append(h('div',{class:'mut',style:{padding:'14px 16px'}},O.tr('No roles yet. Add as many as you need — each role can use its own model and backups.','Ролей пока нет. Добавляйте сколько нужно — у каждой роли своя модель и запасные.')));
+    if(!a.roles.length)rolesEl.append(h('div',{class:'mut',style:{padding:'12px 4px'}},O.tr('No roles yet. Add as many as you need — each role can use its own model and backups.','Ролей пока нет. Добавляйте сколько нужно — у каждой роли своя модель и запасные.')));
     a.roles.forEach((r,i)=>{
       const linked=r.subagent||O.mmRoleSubagent(r);
       const sg=linked?O.mmAgentInfo(linked):null;
-      card.append(h('div',{class:'settings-row'},
-        h('div',{class:'settings-row-icon blue',style:r.color?{background:r.color+'33',color:r.color}:null},O.icon(r.icon||'bot')),
-         h('button',{class:'settings-row-text',style:{textAlign:'left'},onclick:()=>O.mmRoleEditor(r,(ok,next)=>{if(ok&&next){a.roles[i]=next;draw()}},pickOpts())},
-          h('b',null,r.name||O.tr('Unnamed role','Роль без названия')),
-          h('span',null,linked?('@'+linked+(sg?'':' '+O.tr('(missing)','(нет)'))):(r.model?mName(r.model):O.tr('Lead model will be used','Будет использована главная модель')))),
-        h('button',{class:'ibtn s',onclick:()=>{a.roles.splice(i,1);draw()}},O.icon('trash'))));
+      const kind=r.kind||'worker';
+      const card=h('div',{class:'mm-role-card',style:r.color?{borderLeftColor:r.color}:null},
+        h('div',{class:'mm-role-head'},
+          h('div',{class:'mm-role-ic',style:r.color?{background:r.color+'33',color:r.color}:null},O.icon(r.icon||'bot')),
+          h('button',{class:'mm-role-title',onclick:()=>O.mmRoleEditor(r,(ok,next)=>{if(ok&&next){a.roles[i]=next;draw()}},pickOpts())},
+            h('b',null,(i+1)+'. '+(r.name||O.tr('Unnamed role','Роль без названия'))),
+            h('span',{class:'mut s'},kind==='judge'?O.tr('Judge','Судья'):kind==='router'?O.tr('Router','Роутер'):(linked?('@'+linked+(sg?'':' '+O.tr('(missing)','(нет)'))):(r.model?mName(r.model):O.tr('Lead model','Главная модель'))))),
+          h('div',{class:'mm-role-ord'},
+            h('button',{class:'ibtn s',disabled:i===0,title:O.tr('Up','Выше'),onclick:()=>moveRole(i,-1)},O.icon('up')),
+            h('button',{class:'ibtn s',disabled:i===a.roles.length-1,title:O.tr('Down','Ниже'),onclick:()=>moveRole(i,1)},O.icon('down'))),
+          h('button',{class:'ibtn s',title:O.tr('Delete role','Удалить роль'),onclick:()=>{a.roles.splice(i,1);draw()}},O.icon('trash'))));
+      if(r.prompt)card.append(h('div',{class:'mm-role-prompt mut s'},String(r.prompt).slice(0,140)+(r.prompt.length>140?'…':'')));
+      if(a.pipeline&&a.mode==='sessions'&&i>0&&kind==='worker')card.append(h('div',{class:'mm-role-flow mut s'},O.icon('chevD'),' ',O.tr('receives output of ','получает результат «')+(a.roles[i-1].name||'role '+(i))+'»'));
+      rolesEl.append(card);
     });
-    rolesEl.append(card);
     rolesEl.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{
       O.mmRoleEditor({},(ok,next)=>{if(ok&&next){a.roles.push(next);draw()}},pickOpts());
     }},O.icon('plus'),O.tr('Add role','Добавить роль')));
@@ -272,9 +298,12 @@ O.mmEditor=(a,done)=>{
     modeSeg,
     h('div',{class:'note',style:{margin:'0 2px 10px'}},a.mode==='subagents'
       ?O.tr('The lead model delegates tasks to real subagents inside the same session. Roles map to subagents of your team.','Главная модель распределяет задачи между настоящими субагентами в той же сессии. Роли соответствуют субагентам вашей команды.')
-      :O.tr('Each role gets its own child session. Independent, but creates extra sessions.','Каждой роли выделяется своя дочерняя сессия. Независимо, но создаёт лишние сессии.')),
+      :O.tr('Each role gets its own child session. Pipeline chains them; parallel runs them at once.','Каждой роли выделяется своя дочерняя сессия. Конвейер соединяет их в цепочку; параллельно — запускает сразу.')),
+    h('div',{class:'settings-card'},pipeRow),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Lead model','Главная модель')),
     h('div',{class:'settings-card'},mainRow,backupRow,freeRow),
+    h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Team memory','Память команды')),
+    h('div',{class:'settings-card'},memRow,memViewRow),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Roles','Роли')),
     rolesEl,
     h('button',{class:'btn pri wide',style:{marginTop:'14px'},onclick:()=>{
@@ -325,11 +354,19 @@ O.mmRoleEditor=(r,done,opts)=>{
       h('button',{class:(r.kind||'worker')===k?'on':'',onclick:e=>{
         r.kind=k;
         kindSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===e.currentTarget));
+        kindNote.textContent=kindText();mergeRow.classList.toggle('hide',k!=='judge');
       }},label)));
-  const kindNote=h('div',{class:'note',style:{margin:'0 2px 10px'}},
-    (r.kind==='judge')?O.tr('The judge receives every role result and returns a verdict with fixes. It does not edit files.','Судья получает результаты всех ролей и возвращает вердикт с замечаниями. Файлы не правит.')
+  const kindText=()=>(r.kind==='judge')?O.tr('The judge receives every role result and returns a verdict with fixes. It does not edit files.','Судья получает результаты всех ролей и возвращает вердикт с замечаниями. Файлы не правит.')
     :(r.kind==='router')?O.tr('The router only decides who does what; it produces the task plan instead of doing work.','Роутер только решает, кому что делать: выдаёт план задач вместо выполнения работы.')
-    :O.tr('A normal role: does its task and returns a result.','Обычная роль: выполняет задачу и возвращает результат.'));
+    :O.tr('A normal role: does its task and returns a result.','Обычная роль: выполняет задачу и возвращает результат.');
+  const kindNote=h('div',{class:'note',style:{margin:'0 2px 10px'}},kindText());
+  const mergeRow=O.toggleRow('branch',O.tr('Merge into the best result','Сводить в лучший результат'),
+    O.tr('The judge combines the strongest parts of every role into one final result (not just a verdict).','Судья объединяет сильное из каждой роли в единый итог (не только вердикт).'),
+    r.merge!==false,v=>{r.merge=v});
+  mergeRow.classList.toggle('hide',(r.kind||'worker')!=='judge');
+  const askRow=O.toggleRow('at',O.tr('May ask the user','Может спрашивать пользователя'),
+    O.tr('The role can pause and ask you one question mid-task via a chat card.','Роль может паузой задать вам один вопрос посреди задачи через карточку в чате.'),
+    r.ask!==false,v=>{r.ask=v});
   const modelRow=h('button',{class:'settings-row',onclick:()=>O.mmPickModel(r.model,m=>{r.model=m;draw()},opts)},
     h('div',{class:'settings-row-icon purple'},O.icon('cpu')),
     h('div',{class:'settings-row-text'},h('b',null,O.tr('Role model','Модель роли')),
@@ -360,6 +397,7 @@ O.mmRoleEditor=(r,done,opts)=>{
     h('div',{class:'settings-card'},subRow),
     h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Role kind','Тип роли')),
     kindSeg,kindNote,
+    h('div',{class:'settings-card'},mergeRow,askRow),
     h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Appearance','Внешний вид')),
     h('div',{class:'settings-card'},colorRow,iconRow),
     h('div',{class:'settings-section-title',style:{margin:'10px 0 6px'}},O.tr('Role model','Модель роли')),
@@ -380,13 +418,15 @@ O.mmRoleEditor=(r,done,opts)=>{
 async function mmRunJudge(mm,run,role,userText,results,parentSid,leadMain,onPhase){
   if(!role)return '';
   const model=O.mmRoleModels(role).model||leadMain;
+  const merge=role.merge!==false;
   try{
     onPhase&&onPhase(O.tr('Judge: ','Судья: ')+role.name);
     const cs=await api('POST','/session',{parentID:parentSid,title:mm.name+' · '+role.name});
-    const rtext='Ты — «'+(role.name||'Judge')+'», судья команды «'+mm.name+'».\n'+(role.prompt||'')+
-      '\n\nПроверь результаты остальных ролей: что сделано верно, что пропущено, что сломано. '+
-      'Верни вердикт списком с конкретными правками. Файлы не меняй.\n\n'+
-      'Исходный запрос пользователя: «'+userText+'»\n\nРезультаты ролей:\n\n'+results;
+    const rtext='Ты — «'+(role.name||'Judge')+'», судья команды «'+mm.name+'».\n'+(role.prompt||'')+memBlock(mm)+
+      (merge
+        ?'\n\nСравни результаты ролей: что верно, что пропущено, что сломано. Затем СВЕДИ их в единый лучший итоговый результат: возьми сильное из каждого, исправь ошибки, убери дубли. Верни сначала краткий вердикт (список замечаний), затем блок «ИТОГ:» со сведённым результатом. Файлы не меняй.'
+        :'\n\nПроверь результаты остальных ролей: что сделано верно, что пропущено, что сломано. Верни вердикт списком с конкретными правками. Файлы не меняй.')+
+      '\n\nИсходный запрос пользователя: «'+userText+'»\n\nРезультаты ролей:\n\n'+results;
     await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model,parts:[{type:'text',text:rtext}]},{timeout:30000});
     run.jobs.push({sid:cs.id,role,task:O.tr('Review all role results','Проверить результаты ролей'),started:Date.now(),state:'running'});
     onPhase&&onPhase(O.tr('Judge: ','Судья: ')+role.name);
@@ -410,6 +450,96 @@ const statusType=x=>typeof x==='string'?x:(x&&x.type)||'';
 const statusIs=(x,t)=>statusType(x)===t;
 const PLAN_TAG='[МУЛЬТИМОДАЛЬНЫЙ РЕЖИМ]';
 const fmtClock=ms=>{const d=new Date(ms);const p=n=>String(n).padStart(2,'0');return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())};
+
+// ---- shared team memory: survives between runs, injected into every role ----
+const memKey=mm=>'mm.memory.'+(mm&&mm.id||'x');
+O.mmMemory=mm=>O.store.get(memKey(mm),'');
+O.mmMemoryAppend=(mm,text)=>{
+  if(!mm||!text)return;
+  const cur=O.mmMemory(mm);
+  const entry='['+new Date().toLocaleString()+']\n'+String(text).trim();
+  O.store.set(memKey(mm),(cur?cur+'\n\n':'')+entry.slice(0,4000));
+  // hard cap: keep the newest ~12k chars so prompts never explode
+  const full=O.store.get(memKey(mm),'');
+  if(full.length>12000)O.store.set(memKey(mm),full.slice(-12000));
+};
+O.mmMemoryClear=mm=>{O.store.set(memKey(mm),'');O.toast(O.tr('Team memory cleared','Память команды очищена'),1500)};
+O.mmMemoryView=mm=>{
+  mm=mm||O.mmActive();if(!mm)return;
+  const ta=h('textarea',{class:'mono',rows:14});ta.value=O.mmMemory(mm);
+  const s=O.sheet(O.tr('Team memory','Память команды')+' · '+mm.name,h('div',null,
+    h('div',{class:'note',style:{margin:'0 0 8px'}},O.tr('Facts the team learned in previous runs. Injected into every role prompt. Editable.','Факты, которые команда узнала в прошлых прогонах. Добавляются в промпт каждой роли. Можно править.')),
+    ta,
+    h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
+      h('button',{class:'btn wide',onclick:()=>{O.mmMemoryClear(mm);ta.value=''}},O.icon('trash'),O.tr('Clear','Очистить')),
+      h('button',{class:'btn pri',style:{flex:1},onclick:()=>{O.store.set(memKey(mm),ta.value);O.toast(O.tr('Saved','Сохранено'),1200);s.close()}},O.tr('Save','Сохранить')))),{full:true});
+};
+const memBlock=mm=>{
+  if(!mm||mm.memory===false)return '';
+  const mem=O.mmMemory(mm);
+  return mem?'\n\nПамять команды (факты из прошлых прогонов, используй если релевантно):\n'+mem.slice(-6000):'';
+};
+// After a run: the lead distils durable facts into the team memory (one short call).
+async function mmMemoryUpdate(mm,sid,lead,userText,finalText){
+  if(!mm||mm.memory===false||!finalText)return;
+  try{
+    const instr=PLAN_TAG+'\nИзвлеки из результата 3–7 коротких фактов, полезных для будущих задач этой команды (решения, соглашения, структура проекта, грабли). Только факты, строками, без вступлений. Если полезных фактов нет — ответь ровно: NONE';
+    await api('POST','/session/'+sid+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:lead,parts:[{type:'text',text:instr,synthetic:true},{type:'text',text:'Запрос: '+userText+'\n\nИтог:\n'+finalText.slice(0,6000)}]},{timeout:30000});
+    await mmWaitIdle([sid],{abort:false},180000);
+    const t=await mmLastAssistant(sid).catch(()=>'');
+    if(t&&t.trim()&&t.trim()!=='NONE'&&!/^NONE$/m.test(t.trim()))O.mmMemoryAppend(mm,t.trim());
+  }catch(_){}
+}
+
+// ---- role → human questions: a role can ask the user mid-run via a JSON block ----
+// Protocol: the role prints ```json {"ask":"question"}``` and stops; the orchestrator shows a dock
+// card, waits for the answer, then continues the same session with the reply.
+function mmExtractAsk(text){
+  if(!text)return '';
+  const blocks=[...String(text).matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
+  for(const b of blocks){
+    try{const j=JSON.parse(b[1].trim());if(j&&typeof j.ask==='string'&&j.ask.trim())return j.ask.trim()}catch(_){}
+  }
+  const m=String(text).match(/\{\s*"ask"\s*:\s*"([^"]+)"\s*\}/);
+  return m?m[1]:'';
+}
+function mmAskHuman(roleName,question){
+  return new Promise(res=>{
+    let done=false;
+    const finish=v=>{if(done)return;done=true;try{s.close()}catch(_){}res(v)};
+    const ta=h('textarea',{rows:3,placeholder:O.tr('Your answer…','Ваш ответ…')});
+    const body=h('div',null,
+      h('div',{class:'note',style:{margin:'0 0 8px'}},O.tr('Role ','Роль «')+roleName+O.tr(' asks:','» спрашивает:')),
+      h('b',{style:{display:'block',margin:'0 2px 10px',fontSize:'15px'}},question),
+      ta,
+      h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
+        h('button',{class:'btn wide',onclick:()=>finish('')},O.tr('Skip','Пропустить')),
+        h('button',{class:'btn pri',style:{flex:1},onclick:()=>{const v=ta.value.trim();if(!v)return O.toast(O.tr('Write an answer','Напишите ответ'),1500);finish(v)}},O.icon('send'),O.tr('Answer','Ответить'))));
+    const s=O.sheet(O.tr('Team question','Вопрос команды'),body,{hud:true,onClose:()=>finish('')});
+    try{if(O.native&&O.native.notify)O.native.notify('action',O.tr('MM: role asks','MM: роль спрашивает'),roleName+': '+question.slice(0,120))}catch(_){}
+    setTimeout(()=>{try{ta.focus()}catch(_){}},350);
+  });
+}
+// Waits for a role session; if it finished with an "ask" block, asks the user and continues (max 3 rounds).
+async function mmWaitRole(sid,run,roleName,timeoutMs){
+  for(let round=0;round<3;round++){
+    await mmWaitIdle([sid],run,timeoutMs);
+    if(run.abort)return '';
+    const t=await mmLastAssistant(sid).catch(()=>'');
+    const ask=mmExtractAsk(t);
+    if(!ask)return t;
+    run.currentRole=O.tr('Question: ','Вопрос: ')+roleName;bus.emit('mm:progress');
+    const answer=await mmAskHuman(roleName,ask);
+    if(run.abort)return t;
+    const reply=answer?O.tr('User answer: ','Ответ пользователя: ')+answer:O.tr('The user skipped the question — decide yourself and state the assumption.','Пользователь пропустил вопрос — реши сам и укажи допущение.');
+    await api('POST','/session/'+sid+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:undefined,parts:[{type:'text',text:reply}]},{timeout:30000}).catch(async()=>{
+      // some builds require the model on continue: retry with the session model
+      await api('POST','/session/'+sid+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:S.model,parts:[{type:'text',text:reply}]},{timeout:30000});
+    });
+  }
+  return await mmLastAssistant(sid).catch(()=>'');
+}
+const ASK_HINT='\n\nЕсли тебе критически не хватает данных от пользователя, можешь ОДИН раз спросить: верни блок ```json {"ask":"короткий вопрос"}``` и остановись. Ответ придёт следующим сообщением. Не спрашивай о том, что можешь решить сам.';
 
 async function mmWaitIdle(sids,run,timeoutMs){
   const end=Date.now()+(timeoutMs||600000);
@@ -503,16 +633,80 @@ O.mmPause=()=>{const r=O.mm.run;if(!r)return;r.paused=!r.paused;bus.emit('mm:pro
   if(r.sid)api('POST','/session/'+r.sid+'/abort',{}).catch(()=>{});
   (r.jobs||[]).forEach(j=>{if(j.sid)api('POST','/session/'+j.sid+'/abort',{}).catch(()=>{})});
   // remember what was in flight so the run can be resumed where it stopped
-  r.resumable={phase:r.phase,jobs:(r.jobs||[]).map(j=>({role:j.role,task:j.task,subagent:j.subagent,result:j.result||'',state:j.state||''}))};
+  r.resumable={phase:r.phase,jobs:(r.jobs||[]).map(j=>({role:j.role,task:j.task,subagent:j.subagent,sid:j.sid||null,result:j.result||'',state:j.state||''}))};
   bus.emit('mm:progress')};
-// Resume a stopped/timed-out MM run: re-runs only the roles that produced no result, then synthesises.
+// Resume a stopped/timed-out MM run: re-runs ONLY the roles that produced no result, keeps the
+// finished ones, then judges (if configured) and synthesises the final answer in the main chat.
 O.mmResume=async()=>{
   const r=O.mm.run;
   if(r){O.toast(O.tr('Stop the current run first','Сначала остановите текущий запуск'),2500);return}
-  const last=O.mm.last;
-  if(!last||!last.resumable){O.toast(O.tr('Nothing to resume','Нечего возобновлять'),2000);return}
-  const sess=S.sid;if(!sess)return;
-  O.continueGeneration(sess,{custom:O.tr('Continue the multimodal run: finish the remaining roles and produce the final answer.','Продолжи мультимодальный запуск: заверши оставшиеся роли и дай финальный ответ.')});
+  const saved=(O.mm.last&&O.mm.last.resumable)?O.mm.last:O.store.get('mm.lastResumable',null);
+  if(!saved||!saved.resumable&&!saved.jobs){O.toast(O.tr('Nothing to resume','Нечего возобновлять'),2000);return}
+  const res=saved.resumable||{jobs:saved.jobs};
+  const mm=O.mmList().find(x=>x.id===saved.mmId)||O.mmActive();
+  if(!mm){O.toast(O.tr('The team no longer exists','Команда больше не существует'),2500);return}
+  const sess=S.sid;if(!sess){O.toast(O.tr('Open a chat first','Сначала откройте чат'),2000);return}
+  const lead=mm.main||S.model;
+  if(!lead){O.toast(O.tr('No model selected','Модель не выбрана'),2500);return}
+  const userText=saved.userText||O.tr('(original request unavailable)','(исходный запрос недоступен)');
+  const doneJobs=(res.jobs||[]).filter(j=>j.result&&j.result.trim());
+  const todoJobs=(res.jobs||[]).filter(j=>!(j.result&&j.result.trim()));
+  if(!todoJobs.length&&doneJobs.length){
+    // everything finished — only the synthesis was lost
+    O.continueGeneration(sess,{custom:O.tr('Finish the multimodal run: synthesise the final answer from the role results.','Заверши мультимодальный прогон: синтезируй финальный ответ из результатов ролей.')});
+    return;
+  }
+  const run=O.mm.run={sid:sess,abort:false,paused:false,roleAborts:new Set(),jobs:[],started:Date.now(),phase:'role',phaseStart:Date.now(),leadModel:lead.modelID||''};
+  const emit=()=>bus.emit('mm:progress');
+  O.toast(O.tr('Resuming: ','Возобновляю: ')+todoJobs.length+' '+O.tr('role(s)','рол(ей)'),2500);
+  try{
+    const jobs=doneJobs.map(j=>({sid:j.sid||null,role:j.role,task:j.task,result:j.result,state:'done',started:0,finished:0}));
+    run.jobs=jobs.slice();emit();
+    for(const t of todoJobs){
+      if(run.abort)break;
+      const role=(mm.roles||[]).find(x=>x.name===(t.role&&t.role.name))||t.role;
+      if(!role)continue;
+      run.currentRole=role.name;emit();
+      const cs=await api('POST','/session',{parentID:sess,title:mm.name+' · '+role.name+' · '+O.tr('resume','возобновление')});
+      const prev=jobs.filter(j=>j.result).map(j=>'['+(j.role&&j.role.name)+']:\n'+j.result).join('\n\n');
+      const rtext='Ты — «'+role.name+'» в команде «'+mm.name+'».\n'+(role.prompt||'')+memBlock(mm)+
+        '\n\nЗадача: '+t.task+'\nИсходный запрос пользователя: «'+userText+'»'+
+        (prev?'\n\nУже готовые результаты других ролей:\n'+prev.slice(-8000):'')+
+        '\n\nВыполни свою часть и дай конкретный результат.'+(role.ask!==false?ASK_HINT:'');
+      await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:O.mmRoleModels(role).model||lead,parts:[{type:'text',text:rtext}]},{timeout:30000});
+      const job={sid:cs.id,role,task:t.task,started:Date.now(),state:'running'};
+      jobs.push(job);run.jobs=jobs.slice();emit();
+      const out=await mmWaitRole(cs.id,run,role.name,900000);
+      job.result=out||'';job.state=out?'done':'error';job.finished=Date.now();emit();
+    }
+    if(run.abort)throw new Error('aborted');
+    const results=jobs.map(j=>'['+(j.role&&j.role.name||'?')+']:\n'+(j.result||'(нет ответа)')).join('\n\n');
+    const judgeRole=(mm.roles||[]).find(x=>(x.kind||'worker')==='judge');
+    let verdict='';
+    if(judgeRole){verdict=await mmRunJudge(mm,run,judgeRole,userText,results,sess,lead,ph=>{run.currentRole=ph;emit()});if(run.abort)throw new Error('aborted')}
+    run.phase='synth';run.phaseStart=Date.now();run.currentRole=O.tr('Synthesis','Синтез');emit();
+    const finInstr=PLAN_TAG+' — ФИНАЛ (возобновлённый прогон)\nРезультаты ролей команды «'+mm.name+'»:\n\n'+results+
+      (verdict?'\n\n[Судья]:\n'+verdict:'')+
+      '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ. Без служебных пометок.';
+    await api('POST','/session/'+sess+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:lead,parts:[{type:'text',text:finInstr}]},{timeout:30000});
+    mmWaitIdle([sess],{abort:false},300000).then(async()=>{
+      const fin=await mmLastAssistant(sess).catch(()=>'');
+      await mmMemoryUpdate(mm,sess,lead,userText,fin);
+    }).catch(()=>{});
+    O.mm.last=null;O.store.remove('mm.lastResumable');
+    O.mm.run=null;emit();
+  }catch(e){
+    O.mm.last={mmId:mm.id,userText,resumable:{phase:'role',jobs:(run.jobs||[]).map(j=>({role:j.role,task:j.task,sid:j.sid||null,result:j.result||'',state:j.state||''}))}};
+    try{O.store.set('mm.lastResumable',{mmId:mm.id,userText,at:Date.now(),jobs:O.mm.last.resumable.jobs})}catch(_){}
+    O.mm.run=null;emit();
+    if(!/aborted/i.test(e.message||''))O.toast(e.message||String(e),4000);
+  }
+};
+O.mmHasResumable=()=>{
+  if(O.mm.run)return false;
+  if(O.mm.last&&O.mm.last.resumable)return true;
+  const s=O.store.get('mm.lastResumable',null);
+  return !!(s&&s.jobs&&s.jobs.length);
 };
 O.mmStopRole=name=>{const r=O.mm.run;if(!r)return;r.roleAborts=r.roleAborts||new Set();r.roleNames=r.roleNames||new Set();r.roleNames.add(name);
   const j=(r.jobs||[]).find(x=>x.role&&x.role.name===name);
@@ -886,7 +1080,7 @@ O.mmSend=async(text,parts)=>{
       const delegation='Список задач по субагентам (используй инструмент task с параметром subagent_type):\n'+
         tasks.map((t,i)=>(i+1)+'. '+t.subagent+' → '+t.task).join('\n')+
         '\n\nВызови task для КАЖДОЙ задачи (несколько вызовов подряд). В description пиши краткое описание, в prompt — полное задание для субагента. '+
-        'В исходном запросе пользователя: «'+userText+'». Дождись результатов и затем дай сводный ответ.';
+        'В исходном запросе пользователя: «'+userText+'». Дождись результатов и затем дай сводный ответ.'+memBlock(mm);
       const delegInstr=PLAN_TAG+'\n'+delegation;
       await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:delegInstr}]});
       // live tracking of the running subagent while the lead works
@@ -930,33 +1124,56 @@ O.mmSend=async(text,parts)=>{
       }
       // final synthesis
       run.phase='synth';run.phaseStart=Date.now();run.currentRole=O.tr('Synthesis','Синтез');emit();
+      const mergeJ=judgeRole&&judgeRole.merge!==false;
       const results=run.jobs.map(j=>'['+(j.role&&j.role.name||'?')+']:\n'+(j.result||O.tr('(no result)','(нет ответа)'))).join('\n\n')+
-        (verdict?('\n\n[Вердикт судьи]:\n'+verdict):'');
+        (verdict?('\n\n['+(mergeJ?'Судья — сведённый лучший результат':'Вердикт судьи')+']:\n'+verdict):'');
       const finInstr=PLAN_TAG+' — ФИНАЛ\nСубагенты команды «'+mm.name+'» отработали задачи. Их результаты:\n\n'+results+
-        '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ: что сделано и итог. Без служебных пометок.';
+        '\n\nИсходный запрос пользователя: «'+userText+'»\n\n'+
+        (mergeJ&&verdict?'Судья свёл результаты в единый лучший вариант. Оформи его как финальный ответ: убери служебные пометки, исправь замечания, не выдумывай лишнего.':'Синтезируй единый финальный ответ: что сделано и итог. Без служебных пометок.');
       await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:finInstr}]});
+      mmWaitIdle([sid],{abort:false},300000).then(async()=>{
+        const fin=await mmLastAssistant(sid).catch(()=>'');
+        await mmMemoryUpdate(mm,sid,leadUsed||leadMain,userText,fin);
+      }).catch(()=>{});
       O.mm.run=null;
       emit();
       return true;
     }
-    // ---- session mode (legacy): every role gets its own child session ----
+    // ---- session mode: roles run as a pipeline when mm.pipeline is on ----
+    // Pipeline: each role receives the previous role's output as its input (chain of handoffs).
+    // Parallel (default): all roles get the original task at once.
+    const pipeline=!!mm.pipeline;
     const jobs=[];
+    let prevResult='';
     for(const t of plan){
       if(run.abort)break;
       try{
         const cs=await api('POST','/session',{parentID:sid,title:mm.name+' · '+t.role.name});
-        const rtext='Ты — «'+t.role.name+'» в команде «'+mm.name+'».\n'+(t.role.prompt||'')+
-          '\n\nЗадача от координатора: '+t.task+'\nИсходный запрос пользователя: «'+userText+'»\n\nВыполни свою часть и дай конкретный результат.';
+        const handoff=pipeline&&prevResult?'\n\nРезультат предыдущей роли (твой вход, продолжай с него, не начинай заново):\n'+prevResult.slice(-8000):'';
+        const rtext='Ты — «'+t.role.name+'» в команде «'+mm.name+'».\n'+(t.role.prompt||'')+memBlock(mm)+
+          '\n\nЗадача от координатора: '+t.task+'\nИсходный запрос пользователя: «'+userText+'»'+handoff+
+          '\n\nВыполни свою часть и дай конкретный результат.'+(t.role.ask!==false?ASK_HINT:'');
         await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:O.mmRoleModels(t.role).model||leadMain,parts:[{type:'text',text:rtext}]},{timeout:30000});
-        jobs.push({sid:cs.id,role:t.role,task:t.task,started:Date.now(),prompt:rtext});
-        O.toast(O.tr('Role started: ','Роль запущена: ')+t.role.name,1800);
+        const job={sid:cs.id,role:t.role,task:t.task,started:Date.now(),prompt:rtext};
+        jobs.push(job);run.jobs=jobs;
+        if(pipeline){
+          run.phase='role';run.phaseStart=Date.now();run.currentRole=t.role.name;emit();
+          const out=await mmWaitRole(cs.id,run,t.role.name,900000);
+          job.result=out||'';job.finished=Date.now();job.state=out?'done':'error';
+          prevResult=out||prevResult;
+          emit();
+        }else{
+          O.toast(O.tr('Role started: ','Роль запущена: ')+t.role.name,1800);
+        }
       }catch(e){jobs.push({sid:null,role:t.role,task:t.task,err:e.message||String(e)})}
     }
     run.jobs=jobs;emit();
-    // step 3: wait for all roles
-    run.phase='role';run.phaseStart=Date.now();emit();
-    await mmWaitIdle(jobs.filter(j=>j.sid).map(j=>j.sid),run);
-    jobs.forEach(j=>{if(!j.finished)j.finished=Date.now()});
+    // step 3: wait for all roles (parallel mode; pipeline already waited per role)
+    if(!pipeline){
+      run.phase='role';run.phaseStart=Date.now();emit();
+      await mmWaitIdle(jobs.filter(j=>j.sid).map(j=>j.sid),run);
+      jobs.forEach(j=>{if(!j.finished)j.finished=Date.now()});
+    }
     if(run.abort)throw new Error('aborted');
     // step 3.5: fallback per failed role — up to 3 backup models each (sequentially)
     for(let x=0;x<jobs.length;x++){
@@ -989,10 +1206,13 @@ O.mmSend=async(text,parts)=>{
     const results=[];
     for(const j of jobs){
       if(!j.sid){results.push('['+j.role.name+']: (ошибка запуска: '+(j.err||'нет ответа')+')');continue}
-      let t='';try{t=await mmLastAssistant(j.sid)}catch(e){}
+      let t=j.result||'';
+      if(!t){try{t=await mmWaitRole(j.sid,run,j.role.name,60000)}catch(e){t=''}}
+      j.result=t;
       results.push('['+j.role.name+']:\n'+(t||'(нет ответа)'));
     }
-    // judge pass before the lead writes the final answer
+    // judge pass before the lead writes the final answer; merge mode asks the judge to produce
+    // the single best combined result instead of only a verdict.
     const judgeRole=(mm.roles||[]).find(r=>(r.kind||'worker')==='judge');
     let verdict='';
     if(judgeRole){
@@ -1002,20 +1222,30 @@ O.mmSend=async(text,parts)=>{
     }
     // step 4: final synthesis by the lead model
     run.phase='synth';run.phaseStart=Date.now();run.currentRole='Синтез';emit();
+    const merge=judgeRole&&judgeRole.merge!==false;
     const finInstr=PLAN_TAG+' — ФИНАЛ\nРоли команды «'+mm.name+'» завершили подзадачи. Их результаты:\n\n'+results.join('\n\n')+
-      (verdict?('\n\n[Вердикт судьи]:\n'+verdict):'')+
-      '\n\nИсходный запрос пользователя: «'+userText+'»\n\nСинтезируй единый финальный ответ для пользователя: что сделано и итог. Без служебных пометок.';
+      (verdict?('\n\n['+(merge?'Судья — сведённый лучший результат':'Вердикт судьи')+']:\n'+verdict):'')+
+      '\n\nИсходный запрос пользователя: «'+userText+'»\n\n'+
+      (merge&&verdict
+        ?'Судья уже свёл результаты в единый лучший вариант. Оформи его как финальный ответ пользователю: убери служебные пометки, исправь замечания судьи, ничего не выдумывай сверх результатов.'
+        :'Синтезируй единый финальный ответ для пользователя: что сделано и итог. Без служебных пометок.');
     await post({messageID:O.mid(),model:leadUsed||leadMain,parts:[{type:'text',text:finInstr}]});
+    // distil durable facts into the team memory (background, does not block the UI)
+    mmWaitIdle([sid],{abort:false},300000).then(async()=>{
+      const fin=await mmLastAssistant(sid).catch(()=>'');
+      await mmMemoryUpdate(mm,sid,leadUsed||leadMain,userText,fin);
+    }).catch(()=>{});
     O.mm.last={run,resumable:null};
     O.mm.run=null;
     emit();
   }catch(e){
     // keep the run in `O.mm.last` so the user can resume it after an abort, quota error or timeout
-    O.mm.last={run,resumable:run.resumable||{phase:run.phase,jobs:(run.jobs||[]).map(j=>({role:j.role,task:j.task,result:j.result||'',state:j.state||''}))}};
+    O.mm.last={run,mmId:mm.id,userText,resumable:run.resumable||{phase:run.phase,jobs:(run.jobs||[]).map(j=>({role:j.role,task:j.task,sid:j.sid||null,result:j.result||'',state:j.state||''}))}};
+    try{O.store.set('mm.lastResumable',{mmId:mm.id,userText,at:Date.now(),jobs:O.mm.last.resumable.jobs})}catch(_){}
     O.mm.run=null;
     emit();
     if(!/aborted/i.test(e.message||''))O.toast(O.tr('Multimodal agent: ','Мультимодальный агент: ')+(e.message||e),4000);
-    if(O.canContinue&&O.canContinue(S.sid))O.toast(O.tr('You can continue the generation from the chat','Генерацию можно продолжить из чата'),3000);
+    O.toast(O.tr('Run can be resumed: MM menu → Resume','Прогон можно возобновить: меню MM → Возобновить'),3500);
   }
   return true;
 };

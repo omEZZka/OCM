@@ -810,15 +810,18 @@ function renderContinue(){
     contEl=h('div',{class:'continue-bar hide',style:{padding:'0 10px 6px'}});
     host.insertBefore(contEl,statusEl);
   }
-  const show=!!S.sid&&O.canContinue(S.sid);
+  const mmRes=!O.mm.run&&O.mmHasResumable&&O.mmHasResumable();
+  const show=!!S.sid&&(O.canContinue(S.sid)||mmRes);
   if(!show){contEl.classList.add('hide');contEl.textContent='';contEl._sig='';return}
   // Rebuild only when the underlying state changed: renderStatus runs on every status tick.
   const last=O.lastAssistant(S.sid);
-  const sig=S.sid+'|'+(last?last.msg.info.id:'')+'|'+(last&&last.text.length)+'|'+(last&&last.msg.info.error?1:0);
+  const sig=S.sid+'|'+(last?last.msg.info.id:'')+'|'+(last&&last.text.length)+'|'+(last&&last.msg.info.error?1:0)+'|'+(mmRes?1:0);
   if(contEl._sig===sig)return;
   contEl._sig=sig;
   contEl.textContent='';
   contEl.classList.remove('hide');
+  if(mmRes)contEl.append(h('button',{class:'btn sm pri',style:{marginRight:'6px'},onclick:()=>O.mmResume()},O.icon('play'),O.tr('Resume MM run','Возобновить MM-прогон')));
+  if(!O.canContinue(S.sid))return;
   contEl.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'8px',padding:'8px 12px'}},
     O.icon('play'),
     h('span',{class:'grow',style:{fontSize:'13px'}},O.tr('Generation was interrupted','Генерация прервана')),

@@ -870,34 +870,6 @@ O.openPlan=()=>{
   goal.addEventListener('input',persist);draw();
 };
 
-// ---- model recommendations ----
-O.recommendModels=(task,items)=>{
-  const q=String(task||'').toLowerCase();
-  const long=/больш|длинн|проект|репозит|context|document|документ|много файлов/i.test(q);
-  const code=/код|баг|фикс|тест|функци|api|ошибк|refactor|build|debug|программ/i.test(q);
-  const fast=/быстр|коротк|перевед|суммар|summary|translate|кратко/i.test(q);
-  const reason=/почему|сложн|архитект|анализ|рассуж|plan|план|security|безопас/i.test(q);
-  const score=x=>{
-    const id=(x.mid+' '+x.name).toLowerCase(),m=x.m||{};
-    let n=0,why=[];
-    const ctx=m.limit&&m.limit.context||0;
-    if(long){n+=Math.min(35,ctx/5000);if(ctx>=100000)why.push(O.tr('large context','большой контекст'))}
-    if(code&&/(code|coder|codex|claude|gpt|deepseek|qwen|devstral)/i.test(id)){n+=25;why.push(O.tr('coding','код'))}
-    if(reason&&(m.reasoning||m.variants||/(reason|think|r1|o[134]|opus)/i.test(id))){n+=25;why.push(O.tr('reasoning','рассуждения'))}
-    if(fast&&/(mini|small|flash|lite|haiku|instant|nano)/i.test(id)){n+=25;why.push(O.tr('fast','быстрая'))}
-    if(O.isModelFree(x)){n+=8;why.push(O.tr('free','бесплатно'))}
-    if(O.isModelPinned(x.pid+'/'+x.mid))n+=6;
-    if(S.model&&S.model.providerID===x.pid&&S.model.modelID===x.mid)n+=4;
-    if(m.cost&&m.cost.input>0)n-=Math.min(8,m.cost.input/5);
-    if(!why.length)why.push(O.tr('available and reliable','доступна и надёжна'));
-    return {x,score:n,why};
-  };
-  const onlyFree=O.store.get('onlyFreeModels',true);
-  let pool=(items||O.allModels()).filter(x=>!O.isModelHidden(x.pid+'/'+x.mid));
-  if(onlyFree){const free=pool.filter(x=>O.isModelFree(x));if(free.length)pool=free}
-  return pool.map(score).sort((a,b)=>b.score-a.score).slice(0,3).filter(r=>r.score>0);
-};
-
 O.allModels=()=>{
   return S.providers.flatMap(p=>Object.values(p.models||{}).map(m=>({pid:p.id,pname:p.name,mid:m.id,name:m.name||m.id,m})));
 };
