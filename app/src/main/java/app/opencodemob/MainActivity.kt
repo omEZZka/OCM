@@ -1283,10 +1283,10 @@ class MainActivity : ComponentActivity() {
 
         /** Inline MM reply delivered by ActionReceiver through Prefs (one-shot). */
         @JavascriptInterface fun mmReplyQid(): String {
-            val q = Prefs.get(this, "mm_reply_qid"); Prefs.put(this, "mm_reply_qid", ""); return q
+            val q = Prefs.get(this@MainActivity, "mm_reply_qid"); Prefs.put(this@MainActivity, "mm_reply_qid", ""); return q
         }
         @JavascriptInterface fun mmReplyText(): String {
-            val t = Prefs.get(this, "mm_reply_text"); Prefs.put(this, "mm_reply_text", ""); return t
+            val t = Prefs.get(this@MainActivity, "mm_reply_text"); Prefs.put(this@MainActivity, "mm_reply_text", ""); return t
         }
 
         // --- continuous speech input (call mode) ---
