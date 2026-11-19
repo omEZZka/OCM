@@ -1,6 +1,6 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
-let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn;
+let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn,stickyEl,agentAvatar,lampBtn;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
 // Parts the user expanded/collapsed by hand: survives re-renders, never auto-collapsed.
 const manualParts=new Set();
@@ -26,11 +26,13 @@ O.chatInit=root=>{
     else if(nb&&!stick)stick=true;
     jumpEl.classList.toggle('hide',stick);
     maybeLoadOlder();
+    scheduleSticky();saveReadPos();
   }});
   // Any real touch inside the list cancels bottom-pinning immediately: the finger wins.
   msgsEl.addEventListener('touchstart',()=>{if(pinT){clearInterval(pinT);pinT=null}},{passive:true});
   msgsEl.addEventListener('wheel',()=>{if(pinT){clearInterval(pinT);pinT=null}},{passive:true});
   jumpEl=h('button',{id:'jump',class:'hide',onclick:()=>scrollEnd(true)},O.icon('chevD'));
+  stickyEl=h('div',{id:'chat-sticky',class:'hide'});
   revEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
   todoEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});
   dockEl=h('div',{id:'dock'});statusEl=h('div',{class:'status-line hide'});
@@ -64,6 +66,12 @@ O.chatInit=root=>{
   bus.on('planMode',syncPlanBtn);syncPlanBtn();
   agentChip=h('button',{class:'hud-pill agent-pill',onclick:()=>O.openAgents()},h('span',null,'Build'),O.icon('chevD'));
   if(agentChip._mmWatch===undefined){agentChip._mmWatch=1;bus.on('mm',updateChips)}
+  // Agent avatar with pulse (06) + who-is-answering card (43); long-press switches mode fast.
+  agentAvatar=h('button',{class:'agent-avatar',title:O.tr('Who is answering','Кто отвечает'),onclick:agentCard},O.icon('bot'));
+  O.longPress(agentAvatar,()=>O.openAgents(),500);
+  // Night lamp toggle (45)
+  lampBtn=h('button',{class:'hud-icon-btn lamp-btn'+(O.nightLamp()?' on':''),title:O.tr('Night lamp','Ночная лампа'),onclick:()=>O.setNightLamp(!O.nightLamp())},O.icon('bulb'));
+  if(O.nightLamp())document.documentElement.classList.add('night-lamp');
   modelChip=h('button',{class:'hud-pill model-pill',onclick:()=>O.openModels()},h('span',null,O.tr('Select model','Выбрать модель')),O.icon('chevD'));
   // Tap: while a call runs it ends it, otherwise a sheet asks what the user wants.
   // Long-press: straight to dictation, the fastest path for a single phrase.
@@ -74,11 +82,29 @@ O.chatInit=root=>{
   O.longPress(micBtn,()=>{if(O.voiceDictate)O.voiceDictate();else onMic();},450);
   bus.on('call',()=>micBtn.classList.toggle('on-call',!!(O.callActive&&O.callActive())));
   sendBtn=h('button',{id:'send',onclick:onSend},O.icon('send'));
-  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,outlineBtn,ctxBtn,planBtn,agentChip,modelChip);
-  const cbarRight=h('div',{class:'cbar-right'},micBtn,sendBtn);
+  // Send-to-another-model (20): long-press on send picks a model for THIS message.
+  O.longPress(sendBtn,()=>{
+    const text=ta.value.trim();
+    if(!text&&!atts.length){O.openModels();return}
+    const curKey=S.model?S.model.providerID+'/'+S.model.modelID:'';
+    const others=O.allModels().filter(x=>!O.isModelHidden(x.pid+'/'+x.mid)).slice(0,14);
+    O.actions(O.tr('Send with model…','Отправить моделью…'),others.map(x=>{
+      const key=x.pid+'/'+x.mid;
+      return{label:x.name||x.mid,sub:key===curKey?O.tr('current','текущая'):x.pid,icon:key===curKey?'check':'cpu',fn:()=>{
+        const prev=S.model;
+        S.model={providerID:x.pid,modelID:x.mid};
+        bus.emit('meta');
+        onSend();
+        // one-shot override: the session model is restored right after the send
+        setTimeout(()=>{S.model=prev;bus.emit('meta')},600);
+      }};
+    }));
+  },500);
+  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentAvatar,outlineBtn,ctxBtn,planBtn,agentChip,modelChip);
+  const cbarRight=h('div',{class:'cbar-right'},lampBtn,micBtn,sendBtn);
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
-  const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,jumpEl);
+  const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,stickyEl,jumpEl);
   root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,mmFloatBtn,comp);
   bus.on('open',()=>{renderAll()});
   // Live-resync snapshot: merge into the DOM incrementally. NEVER force-scroll here — the user
@@ -100,7 +126,11 @@ O.chatInit=root=>{
     if(was&&!partRaf)partRaf=requestAnimationFrame(()=>{partRaf=0;scrollEnd()})});
   bus.on('msg-removed',(sid,id)=>{const e=msgEls.get(id);if(e){e.remove();msgEls.delete(id)}});
   bus.on('part-removed',(sid,m,pid)=>{dropTimer(pid);const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
-  bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend()}if(O.mm.run)renderMmProgress()});
+  bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend();syncAgentPulse();
+    // status flips can change placeholders / auto-fold state without any part change
+    const last=O.lastAssistant&&O.lastAssistant(sid);
+    if(last){const el=msgEls.get(last.msg.info.id);if(el){el._sig='';ensureMsg(last.msg)}}
+  }if(O.mm.run)renderMmProgress()});
   bus.on('perm',renderDock);bus.on('todo',sid=>{if(sid===S.sid)renderTodos()});
   bus.on('queue',sid=>{if(sid===S.sid)renderQueueBar()});
   bus.on('session',()=>{const k=revisionKey();if(k!==revKey)renderAll();else renderRevert()});
@@ -166,6 +196,9 @@ O.chatInit=root=>{
     }
     else O.toast(t,4000)}}});
   O.on('voice',d=>{if(d&&d.text){ta.value=(ta.value?ta.value+' ':'')+d.text;onInput();ta.focus()}});
+  fsTip=h('div',{id:'fs-tip'});document.body.append(fsTip);
+  initPinch();initSelectionThreads();initVoiceWave(micBtn);
+  bus.on('perm',syncAgentPulse);
   updateChips();renderAll();
 };
 O.notifyLimit=(title,text)=>{
@@ -207,10 +240,15 @@ const scrollEnd=f=>{requestAnimationFrame(()=>{
   // yank the reader down after they already scrolled away.
   if(!f&&!stick)return;
   suppressScroll=true;
-  msgsEl.scrollTop=msgsEl.scrollHeight;
+  const target=msgsEl.scrollHeight-msgsEl.clientHeight;
+  const cur=msgsEl.scrollTop;
+  // Cinematic follow: short smooth glide when close, instant jump for big gaps (session open).
+  if(f||target-cur>msgsEl.clientHeight*1.5||!O.chatAnim||!O.chatAnim()){msgsEl.scrollTop=target}
+  else{try{msgsEl.scrollTo({top:target,behavior:'smooth'})}catch(_){msgsEl.scrollTop=target}}
   requestAnimationFrame(()=>{suppressScroll=false});
   if(f){stick=true;jumpEl.classList.add('hide')}
 })};
+O.chatAnim=()=>O.store.get('chatAnim',true);
 // Keep the chat pinned to the bottom for a short while after an open/render:
 // images, code blocks and markdown inflate the height asynchronously, which
 // otherwise leaves the view stranded in the middle of the conversation.
@@ -230,6 +268,175 @@ const pinBottom=ms=>{
   },100);
 };
 const revisionKey=()=>{const s=cur();return s&&s.revert?s.revert.messageID:''};
+
+// ---- sticky date headers (39) ----
+let stickyRaf=0;
+function scheduleSticky(){if(stickyRaf)return;stickyRaf=requestAnimationFrame(()=>{stickyRaf=0;paintSticky()})}
+function dayLabel(ts){
+  const d=new Date(ts),now=new Date();
+  const day=x=>x.getFullYear()+'-'+x.getMonth()+'-'+x.getDate();
+  if(day(d)===day(now))return O.tr('Today','Сегодня');
+  const y=new Date(now);y.setDate(now.getDate()-1);
+  if(day(d)===day(y))return O.tr('Yesterday','Вчера');
+  return d.toLocaleDateString(O.store.get('lang','ru')==='en'?'en':'ru',{day:'numeric',month:'long'})+(d.getFullYear()!==now.getFullYear()?' '+d.getFullYear():'');
+}
+function paintSticky(){
+  if(!stickyEl||!msgsEl)return;
+  if(!S.sid||!msgEls.size){stickyEl.classList.add('hide');return}
+  const top=msgsEl.scrollTop+8;
+  let label='',found=null;
+  for(const c of msgsEl.children){
+    if(!c.dataset||!c.dataset.id)continue;
+    if(c.offsetTop<=top)found=c;else break;
+  }
+  if(found){
+    const m=O.msgs(S.sid).idx.get(found.dataset.id);
+    const ts=m&&m.info.time&&m.info.time.created;
+    if(ts)label=dayLabel(ts);
+  }
+  if(!label){stickyEl.classList.add('hide');return}
+  if(stickyEl._t!==label){stickyEl._t=label;stickyEl.textContent=label}
+  stickyEl.classList.remove('hide');
+}
+// ---- reading position memory (26) ----
+let readPosT=null;
+function saveReadPos(){
+  if(!S.sid||readPosT)return;
+  readPosT=setTimeout(()=>{readPosT=null;
+    if(!S.sid)return;
+    if(stick){O.store.set('readPos.'+S.sid,0);return}
+    // anchor: id of the first visible message + offset inside it
+    const top=msgsEl.scrollTop;
+    for(const c of msgsEl.children){
+      if(!c.dataset||!c.dataset.id)continue;
+      if(c.offsetTop+c.offsetHeight>top){O.store.set('readPos.'+S.sid,{id:c.dataset.id,off:top-c.offsetTop});return}
+    }
+  },400);
+}
+function restoreReadPos(){
+  const rp=S.sid&&O.store.get('readPos.'+S.sid,null);
+  if(!rp||!rp.id)return false;
+  const el=msgEls.get(rp.id);
+  if(!el)return false;
+  stick=false;jumpEl.classList.remove('hide');
+  suppressScroll=true;
+  msgsEl.scrollTop=el.offsetTop+(rp.off||0);
+  requestAnimationFrame(()=>{suppressScroll=false});
+  el.classList.add('msg-flash');setTimeout(()=>el.classList.remove('msg-flash'),1200);
+  return true;
+}
+// ---- agent pulse + avatar card (06, 43) ----
+function syncAgentPulse(){
+  if(!agentAvatar)return;
+  const st=S.status[S.sid];
+  const busyNow=!!st&&st.type!=='idle';
+  agentAvatar.classList.toggle('pulsing',busyNow);
+  agentAvatar.classList.toggle('waiting',S.perms.some(p=>p.sessionID===S.sid)||S.questions.some(q=>q.sessionID===S.sid));
+}
+function agentCard(){
+  const ag=S.agents.find(a=>a.name===S.agent);
+  const mmA=O.mmActive&&O.mmActive();
+  const mi=S.model&&O.modelInfo(S.model.providerID,S.model.modelID);
+  const caps=S.model&&O.modelCapsOf?O.modelCapsOf(S.model.providerID,S.model.modelID):null;
+  const st=S.status[S.sid];
+  const rows=[];
+  const row=(icon,label,val)=>h('div',{class:'settings-row'},h('div',{class:'settings-row-icon'},O.icon(icon)),h('div',{class:'settings-row-text'},h('b',null,label),h('span',{style:{whiteSpace:'normal'}},val)));
+  rows.push(row('bot',O.tr('Mode','Режим'),mmA?(O.tr('Team: ','Команда: ')+mmA.name):(ag?ag.name:S.agent)));
+  rows.push(row('cpu',O.tr('Model','Модель'),mi?(mi.name||mi.modelID):(S.model?S.model.modelID:O.tr('not selected','не выбрана'))));
+  if(caps)rows.push(row('image',O.tr('Capabilities','Возможности'),[caps.images?O.tr('images','картинки'):null,caps.tools?O.tr('tools','инструменты'):null,caps.reasoning?O.tr('reasoning','рассуждения'):null].filter(Boolean).join(' · ')||'—'));
+  rows.push(row('zap',O.tr('State','Состояние'),st&&st.type!=='idle'?O.tr('working','работает'):O.tr('idle','простой')));
+  const u=S.sid&&O.contextUsage(S.sid);
+  if(u&&u.pct!=null)rows.push(row('memory',O.tr('Context','Контекст'),u.pct+'% '+O.tr('used','занято')));
+  const body=h('div',null,h('div',{class:'settings-card'},rows),
+    h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
+      h('button',{class:'btn sm grow',onclick:()=>{O.back();O.openAgents()}},O.icon('bot'),O.tr('Change mode','Сменить режим')),
+      h('button',{class:'btn sm grow',onclick:()=>{O.back();O.openModels()}},O.icon('cpu'),O.tr('Model','Модель'))));
+  O.sheet(O.tr('Who is answering','Кто отвечает'),body,{hud:true});
+}
+// ---- pinch-to-zoom font size (44) ----
+function initPinch(){
+  let d0=0,fs0=0,pinching=false;
+  msgsEl.addEventListener('touchstart',e=>{
+    if(e.touches.length===2){
+      pinching=true;
+      const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;
+      d0=Math.hypot(dx,dy);fs0=S.opts.fs||14;
+    }
+  },{passive:true});
+  msgsEl.addEventListener('touchmove',e=>{
+    if(!pinching||e.touches.length!==2)return;
+    const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;
+    const d=Math.hypot(dx,dy);
+    if(!d0)return;
+    const fs=Math.max(11,Math.min(24,Math.round(fs0*d/d0)));
+    if(fs!==S.opts.fs){S.opts.fs=fs;document.documentElement.style.setProperty('--fs',fs+'px');
+      if(fsTip)fsTip.textContent=fs+'px';}
+    if(e.cancelable)e.preventDefault();
+  },{passive:false});
+  const end=()=>{if(!pinching)return;pinching=false;O.saveOpts();
+    if(fsTip){fsTip.classList.add('show');clearTimeout(fsTip._t);fsTip._t=setTimeout(()=>fsTip.classList.remove('show'),900)}};
+  msgsEl.addEventListener('touchend',end);
+  msgsEl.addEventListener('touchcancel',end);
+}
+let fsTip=null;
+// ---- night lamp (45) ----
+O.nightLamp=()=>O.store.get('nightLamp',false);
+O.setNightLamp=on=>{
+  O.store.set('nightLamp',!!on);
+  document.documentElement.classList.toggle('night-lamp',!!on);
+  if(lampBtn)lampBtn.classList.toggle('on',!!on);
+  O.toast(on?O.tr('Night lamp on','Ночная лампа включена'):O.tr('Night lamp off','Ночная лампа выключена'),1400);
+};
+// ---- selection threads (34): select a fragment of an answer → ask about exactly it ----
+function initSelectionThreads(){
+  let selBtn=null;
+  const hide=()=>{if(selBtn){selBtn.remove();selBtn=null}};
+  document.addEventListener('selectionchange',O.debounce(()=>{
+    const sel=document.getSelection();
+    if(!sel||sel.isCollapsed||!sel.rangeCount){hide();return}
+    const txt=String(sel.toString()).trim();
+    if(txt.length<8||txt.length>4000){hide();return}
+    const node=sel.anchorNode&&(sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement);
+    if(!node||!node.closest||!node.closest('#msgs .p-text')){hide();return}
+    const r=sel.getRangeAt(0).getBoundingClientRect();
+    if(!r.width&&!r.height){hide();return}
+    hide();
+    selBtn=h('button',{class:'sel-ask',style:{left:Math.max(8,Math.min(innerWidth-170,r.left+r.width/2-80))+'px',top:Math.max(8,r.top-44)+'px'},
+      onclick:()=>{
+        const quote=txt;hide();sel.removeAllRanges();
+        O.insertPrompt('> '+quote.split('\n').join('\n> ')+'\n\n');
+        O.toast(O.tr('Fragment quoted — add your question','Фрагмент процитирован — добавьте вопрос'),2000);
+      }},O.icon('at'),O.tr('Ask about this','Спросить об этом'));
+    document.body.append(selBtn);
+  },250));
+  msgsEl.addEventListener('scroll',hide,{passive:true});
+  msgsEl.addEventListener('touchstart',e=>{if(selBtn&&!selBtn.contains(e.target))hide()},{passive:true});
+}
+// ---- live voice wave in the mic button (17, 41) ----
+function initVoiceWave(micBtn){
+  const wave=h('span',{class:'mic-wave'},[0,1,2,3,4].map(()=>h('i')));
+  micBtn.append(wave);
+  let level=0,active=false,raf=0;
+  const paint=()=>{
+    raf=0;
+    if(!active)return;
+    const bars=wave.children;
+    for(let i=0;i<bars.length;i++){
+      const v=Math.max(0.12,Math.min(1,(level/12)*(0.5+0.5*Math.sin(Date.now()/90+i*1.7))));
+      bars[i].style.transform='scaleY('+v.toFixed(2)+')';
+    }
+    raf=requestAnimationFrame(paint);
+  };
+  const on=()=>{if(active)return;active=true;micBtn.classList.add('listening');if(!raf)raf=requestAnimationFrame(paint)};
+  const off=()=>{active=false;micBtn.classList.remove('listening');if(raf){cancelAnimationFrame(raf);raf=0}};
+  O.on('stt',d=>{
+    if(!d)return;
+    if(d.t==='level'){level=d.v||0;on();return}
+    if(d.t==='begin'||d.t==='partial'){on();return}
+    if(d.t==='final'||d.t==='empty'||d.t==='error')off();
+  });
+  O.on('voiceWave',d=>{if(d&&d.on){level=d.level||4;on()}else off()});
+}
 
 function renderAll(){
   // drop pending per-part render jobs: their DOM nodes are about to be replaced anyway
@@ -267,7 +474,11 @@ function renderAll(){
     for(let i=start;i<list.length;i++)fr.append(buildMsg(list[i]));
     msgsEl.append(fr);
   }
-  scrollEnd(true);pinBottom(list.length>60?6000:4000);renderDock();renderStatus();renderContinue();renderRecovery();renderRevert();renderTodos();updateSend();updateChips()}
+  // Reading-position memory (26): reopen where the user left off instead of always the bottom.
+  const restored=restoreReadPos();
+  if(!restored){scrollEnd(true);pinBottom(list.length>60?6000:4000)}
+  scheduleSticky();syncAgentPulse();
+  renderDock();renderStatus();renderContinue();renderRecovery();renderRevert();renderTodos();updateSend();updateChips()}
 
 function maybeLoadOlder(){
   if(loadingOlder||!pendingHead.length)return;
@@ -313,30 +524,54 @@ function ensureMsg(m){
   if(!el){const e=msgsEl.querySelector('.empty');if(e)e.remove();if(chatRoot)chatRoot.classList.remove('is-empty');el=buildMsg(m);
     let before=null;for(const c of msgsEl.children){if(c.dataset.id&&c.dataset.id>m.info.id){before=c;break}}
     if(stick)msgsEl.insertBefore(el,before);
-    else keepAnchor(()=>msgsEl.insertBefore(el,before));}
+    else keepAnchor(()=>msgsEl.insertBefore(el,before));
+    return}
+  // PERF: an event about a message whose content did not change must not touch the DOM at all.
+  // msgSig covers every visible field; unchanged → zero work (this was the >1s tap lag: every SSE
+  // status tick re-rendered every visible message, rebuilt metas and re-ran markdown).
+  const sig=msgSig(m);
+  if(el._sig===sig)return;
+  el._sig=sig;
   // Updating a message above the viewport must not move what the user is reading.
-  else if(stick){syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m)}
+  if(stick){syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m)}
   else keepAnchor(()=>{syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m)})}
+function msgSig(m){
+  const i=m.info;
+  let s=i.role+'|'+(i.time&&i.time.completed||0)+'|'+(i.time&&i.time.end||0)+'|'+(i.error?i.error.name||'err':'')+'|'+(i.modelID||'')+'|'+(i.tokens&&(i.tokens.input||0)+(i.tokens.output||0)||0)+'|'+(i.cost||0);
+  for(const p of m.parts){
+    if(p.type==='text'||p.type==='reasoning')s+='|'+p.id+':'+String(p.text||p.reasoning||'').length+':'+(p.time&&p.time.end?1:0);
+    else if(p.type==='tool'){const st=p.state||{};s+='|'+p.id+':'+(st.status||'')+':'+String(st.output!=null?st.output:'').length+':'+((st.metadata&&st.metadata.diff)||'').length}
+    else s+='|'+p.id+':'+p.type;
+  }
+  return s;
+}
 function buildMsg(m){
   const el=h('div',{class:'msg '+m.info.role,'data-id':m.info.id},h('div',{class:'m-body'}),h('div',{class:'m-meta'}));
+  el._sig=msgSig(m);
   O.longPress(el,()=>{if(O.native.haptic)O.native.haptic('tick');msgMenu(m)},520);
   msgEls.set(m.info.id,el);syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m);return el}
 // An assistant message whose parts are all hidden (synthetic prompt, no answer yet) rendered as a
 // blank card. Show an explicit state instead: working spinner, or "no visible content".
 function msgPlaceholder(el,m){
-  const old=el.firstChild.querySelector('.msg-placeholder');if(old)old.remove();
-  if(m.info.role!=='assistant')return;
-  if(m.parts.some(p=>showPart(m,p)))return;
-  if(m.info.error)return; // the error box explains the empty body
+  const old=el.firstChild.querySelector('.msg-placeholder');
+  if(m.info.role!=='assistant'){if(old)old.remove();return}
+  if(m.parts.some(p=>showPart(m,p))||m.info.error){if(old)old.remove();return}
   const st=S.status[m.info.sessionID];
   const working=(st&&st.type!=='idle')||m.parts.some(p=>p.type==='tool'&&p.state&&(p.state.status==='running'||p.state.status==='pending'));
-  el.firstChild.append(h('div',{class:'msg-placeholder mut s'},
+  if(old&&old._w===working)return;
+  if(old)old.remove();
+  const ph=h('div',{class:'msg-placeholder mut s'},
     working?h('span',{class:'spin'}):O.icon('info'),
-    working?O.tr('Working — no visible output yet','Работает — видимого ответа пока нет'):O.tr('No visible content in this message','В этом сообщении нет видимого содержимого')));
+    working?O.tr('Working — no visible output yet','Работает — видимого ответа пока нет'):O.tr('No visible content in this message','В этом сообщении нет видимого содержимого'));
+  ph._w=working;
+  el.firstChild.append(ph);
 }
 function showPart(m,p){
   if(m.info.role==='user')return(p.type==='text'&&!p.synthetic&&!p.ignored)||p.type==='file'||p.type==='agent';
   switch(p.type){case'text':return typeof p.text==='string'&&(p.text.trim()!==''||!(p.time&&p.time.end));case'reasoning':{if(!S.opts.thinking)return false;const t=p.text||p.reasoning||p.thinking||'';return String(t).trim()!==''||!(p.time&&p.time.end)}case'tool':case'patch':case'retry':case'compaction':return true}return false}
+// A text part that only carries the mandatory "+N -M" footer is not prose: it must not split a
+// run of commands into two arrows.
+const isStatsText=p=>p.type==='text'&&typeof p.text==='string'&&/^\s*[+]\d+\s+[-]\d+\s*$/.test(p.text);
 function syncParts(el,m){
   if(m.info.role==='assistant'&&toolView()!=='cards'){syncGrouped(el,m);return}
   const body=el.firstChild;const keep=new Set();let prev=null;
@@ -360,6 +595,9 @@ function toolView(){
 }
 O.toolView=toolView;
 const GROUPABLE=p=>p.type==='tool'||p.type==='patch'||p.type==='retry';
+// Anything that is not plain visible text/reasoning keeps consecutive commands in ONE pack:
+// hidden parts (thinking off, empty text, compaction markers) must not split the arrow.
+const isTextish=p=>p.type==='text'||p.type==='reasoning';
 function grpKey(m,parts){return m.info.id+'#'+parts[0].id}
 function groupOutline(parts){
   const counts={},files=new Set();let edits=0,run=0,err=0,desc='',cmd='';
@@ -419,8 +657,14 @@ function syncGrouped(el,m){
   const used=new Set();
   const seq=[];let run=[];
   for(const p of m.parts){
-    if(!showPart(m,p))continue;
     if(GROUPABLE(p)){run.push(p);continue}
+    if(isStatsText(p))continue; // "+N -M" footer lives in the badge, never breaks a pack
+    // Non-text parts (reasoning with thinking off, compaction, hidden/empty text) never break a
+    // run of commands: ALL consecutive tools live under one arrow.
+    if(!showPart(m,p)){continue}
+    if(!isTextish(p)){
+      // compaction is a system marker, invisible glue: it never breaks a command pack
+      if(run.length)run.push(p);else seq.push({t:'p',p});continue}
     if(run.length){seq.push({t:'g',parts:run});run=[]}
     seq.push({t:'p',p});
   }
@@ -505,8 +749,10 @@ function fillGroupHead(g,m){
   const meta=[];
   if(parts.length>1)meta.push(parts.length+' шт.');
   if(dur)meta.push(dur);
+  // AI stage title (15): a human phrase instead of "3 commands · 2 reads" when available
+  const ai=!running&&O.stageTitleFor?O.stageTitleFor(g.dataset.gkey,parts):null;
   g._head.append(ic,
-    h('span',{class:'cg-titles'},h('b',{class:'cg-title'},o.title),o.sub?h('span',{class:'cg-sub'},o.sub):null),
+    h('span',{class:'cg-titles'},h('b',{class:'cg-title'},ai||o.title),ai?h('span',{class:'cg-sub'},o.title+(o.sub?' · '+o.sub:'')):(o.sub?h('span',{class:'cg-sub'},o.sub):null)),
     o.err?h('span',{class:'cg-err'},o.err+' ош.'):null,
     (d.added||d.deleted)?h('span',{class:'cg-diff'},h('i',{class:'add'},'+'+d.added),h('i',{class:'del'},'-'+d.deleted)):null,
     meta.length?h('span',{class:'cg-meta'},meta.join(' · ')):null,
@@ -689,10 +935,21 @@ function render(el){
   // Streaming parts render on a short cadence; the completed message is rendered once, exactly.
   const done=!!(p.time&&p.time.end);
   O.mdInto(el,cleanText,{final:done});
-  if(O.initCustomWidgets)O.initCustomWidgets(el);
+  // Live typing cursor (01): a glowing caret at the end of the streaming answer.
+  if(!done&&O.chatAnim&&O.chatAnim()){
+    const last=el.lastElementChild;
+    if(last&&!last.querySelector('.type-caret'))last.append(h('span',{class:'type-caret'}));
+  }
+  if(O.initCustomWidgets&&!el.classList.contains('streaming'))O.initCustomWidgets(el);
 }
-function renderR(el,b){const p=el._p;const t=p.text||p.reasoning||p.thinking||'';if(b._t===t)return;b._t=t;O.mdInto(b,t);
-  const run=!(p.time&&p.time.end);el._d.firstChild.textContent=run?'Думает…':'Размышления'}
+function renderR(el,b){const p=el._p;const t=p.text||p.reasoning||p.thinking||'';if(b._t===t)return;b._t=t;
+  const run=!(p.time&&p.time.end);
+  // Live reasoning (38): while thinking, the block opens itself and streams; folds when done.
+  O.mdInto(b,t,{final:!run});
+  el._d.firstChild.textContent=run?'Думает…':'Размышления';
+  el.classList.toggle('thinking-live',run);
+  if(run&&!manualParts.has(p.id)){el._d.open=true;el._autoOpen=true}
+  else if(!run&&el._autoOpen&&!manualParts.has(p.id)){el._d.open=false;el._autoOpen=false}}
 function sched(id,fn){if(timers.has(id))return;timers.set(id,setTimeout(()=>{
   timers.delete(id);
   if(stick){fn();scrollEnd()}
@@ -765,7 +1022,13 @@ O.secondOpinion=async m=>{
   })));
 };
 function metaUpdate(el,m){
-  const meta=el.lastChild;const i=m.info;meta.textContent='';
+  const meta=el.lastChild;const i=m.info;
+  // PERF: rebuilding meta (tokens, actions, diff badge) on every delta burned main-thread time.
+  const msig=i.role+'|'+(i.time&&i.time.completed||0)+'|'+(i.tokens&&(i.tokens.input||0)+(i.tokens.output||0)||0)+'|'+(i.cost||0)+'|'+(i.error?i.error.name||'e':'')+'|'+(i.modelID||'');
+  const partsSig=m.parts.map(p=>p.type==='patch'?'P'+((p.files||[]).length):p.type==='tool'&&p.state&&p.state.metadata&&p.state.metadata.diff?'D'+p.state.metadata.diff.length:'').join('');
+  if(el._msig===msig+'|'+partsSig)return;
+  el._msig=msig+'|'+partsSig;
+  meta.textContent='';
   if(i.role==='user'){meta.append(h('span',null,i.time&&i.time.created?(O.mmFmtClock?O.mmFmtClock(i.time.created):new Date(i.time.created).toTimeString().slice(0,8)):''));meta.append(msgActions(m));return}
   if(i.role==='assistant'){
     const t=[];if(i.modelID)t.push(i.modelID);
@@ -1408,10 +1671,13 @@ function updateChips(){
 }
 function updateSend(){
   const b=busy(),has=!!ta.value.trim()||!!atts.length;
-  sendBtn.className=b&&!has?'stop':(has?'ready':'');
+  // Smart stop (47): after an abort the empty send button becomes "continue" in one tap.
+  const canCont=!b&&!has&&S.sid&&O.canContinue&&O.canContinue(S.sid);
+  sendBtn.className=b&&!has?'stop':(has?'ready':(canCont?'resume':''));
   sendBtn.textContent='';
-  sendBtn.append(O.icon(b&&!has?'stop':(b&&has?'plus':'send')));
-  sendBtn.disabled=!b&&!has;
+  sendBtn.append(O.icon(b&&!has?'stop':(b&&has?'plus':(canCont?'play':'send'))));
+  sendBtn.disabled=!b&&!has&&!canCont;
+  sendBtn.title=canCont?O.tr('Continue from the cut','Продолжить с места обрыва'):'';
   renderQueueBar();
 }
 function renderQueueBar(){
@@ -1457,6 +1723,10 @@ const BUILTINS=[
  {n:'audit',d:'Аудит действий агента',i:'list',run:()=>O.openAgentAudit()},
  {n:'env',d:'.env менеджер',i:'key',run:()=>O.openEnvManager()},
  {n:'gallery',d:'Галерея медиа',i:'image',run:()=>O.openMediaGallery()},
+ {n:'ribbon',d:'Лента медиа этой сессии',i:'film',run:()=>O.openSessionRibbon&&O.openSessionRibbon()},
+ {n:'lamp',d:'Ночная лампа: тёплый фильтр для чтения',i:'bulb',run:()=>O.setNightLamp(!O.nightLamp())},
+ {n:'toc',d:'ИИ-оглавление сессии с якорями',i:'list',run:()=>O.openAiToc&&O.openAiToc()},
+ {n:'summary',d:'Саммари длинной сессии',i:'doc',run:()=>O.openSessionSummary&&O.openSessionSummary()},
  {n:'branches',d:'Ветки диалога',i:'branch',run:()=>O.openBranchTree()},
  {n:'share',d:'Поделиться сессией',i:'share',run:()=>doShare()},
  {n:'unshare',d:'Отключить шаринг',i:'share',run:()=>doUnshare()},
@@ -1531,10 +1801,21 @@ O.chatAttach=list=>{
 };
 function renderAtts(){attsEl.textContent='';attsEl.classList.toggle('hide',!atts.length);
   atts.forEach((a,i)=>attsEl.append(h('span',{class:'chip'},a.mime.startsWith('image/')?h('img',{src:a.url,style:{height:'22px',borderRadius:'4px'}}):O.fileIcon(a.filename),h('span',null,a.filename),h('button',{onclick:()=>{atts.splice(i,1);renderAtts();updateSend();saveDraftNow()}},O.icon('x')))));updateSend();saveDraftNow()}
+let sending=false;
 async function onSend(){
-  if(busy()&&!ta.value.trim()&&!atts.length){try{await api('POST','/session/'+S.sid+'/abort',{})}catch(e){O.toast(e.message)}return}
-  const text=ta.value.trim();if(!text&&!atts.length)return;
+  // A double tap (or a queued click after a slow frame) must never send the prompt twice.
+  if(sending)return;
+  if(busy()&&!ta.value.trim()&&!atts.length){
+    // Smart stop (47): abort, then the same button becomes "continue from the cut" via the bar.
+    try{await api('POST','/session/'+S.sid+'/abort',{});O.toast(O.tr('Stopped — «Continue» resumes from the cut','Остановлено — «Продолжить» доскажет с места обрыва'),2600)}catch(e){O.toast(e.message)}
+    return}
+  const text=ta.value.trim();
+  if(!text&&!atts.length){
+    if(S.sid&&O.canContinue&&O.canContinue(S.sid)){O.continueGeneration();return}
+    return}
+  sending=true;setTimeout(()=>{sending=false},800);
   if(O.native.haptic)O.native.haptic('light');
+  flyBubble(text);
   const cm=/^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text);
   if(cm){const b=BUILTINS.find(x=>x.n===cm[1]);if(b){clear();b.run(cm[2]);return}
     const sc=(S.commands||[]).find(c=>c.name===cm[1]);
@@ -1621,6 +1902,18 @@ async function onSend(){
     ta.value=text;onInput();
   }}
 function clear(){histIdx=-1;clearTimeout(draftTimer);draftRestoring=false;if(S.sid)O.clearDraft(S.sid);draftSid=S.sid;ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
+// Send animation (42): a ghost of the bubble lifts off the composer into the feed.
+function flyBubble(text){
+  if(!O.chatAnim||!O.chatAnim()||!text||!comp)return;
+  try{
+    const r=comp.getBoundingClientRect();
+    const ghost=h('div',{class:'fly-bubble'},text.length>90?text.slice(0,90)+'…':text);
+    ghost.style.left=(r.left+14)+'px';ghost.style.top=(r.top+8)+'px';ghost.style.maxWidth=(r.width-28)+'px';
+    document.body.append(ghost);
+    requestAnimationFrame(()=>{ghost.classList.add('go')});
+    setTimeout(()=>ghost.remove(),480);
+  }catch(_){}
+}
 // Programmatic send used by call mode, widgets and the queue: same pipeline as a tapped message.
 O.chatSendText=(text,ex)=>{
   const t=String(text||'').trim();

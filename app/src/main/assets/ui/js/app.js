@@ -28,6 +28,8 @@ function build(){
   T.more=h('button',{class:'top-status-btn',title:O.tr('Menu','Меню'),onclick:()=>topMenu()},O.icon('dots'));
   const topRight=h('div',{class:'top-right-box'},T.title,T.more);
   const top=h('div',{id:'top'},topLeft,topRight);
+  // Agent pulse in the header (06): the title dot breathes while the agent works.
+  bus.on('status',()=>{const d=T.title&&T.title.querySelector('.top-title-dot');if(d){const st=S.status[S.sid];d.classList.toggle('busy-pulse',!!st&&st.type!=='idle')}});
 
   T.banner=h('div',{id:'banner',class:'hide'});
 
@@ -189,21 +191,31 @@ O.setTab=t=>{
   if(t==='changes')O.refreshChanges();
 };
 
+// PERF: token totals were recomputed by walking EVERY message on every status/msg tick
+// (O(n) over 1000+ messages several times per second). Incremental cache keyed by message count
+// plus the last message's token fingerprint; full walks only when history actually changed.
+const tokCache=new Map();
 O.calcSessionTokens=sid=>{
-  const msgs=O.visibleMsgs(sid||S.sid);
-  let input=0,output=0,reasoning=0,total=0,cost=0;
-  for(const m of msgs){
-    const info=m.info;
-    if(info&&info.tokens){
-      input+=(info.tokens.input||0);
-      output+=(info.tokens.output||0);
-      reasoning+=(info.tokens.reasoning||0);
+  sid=sid||S.sid;
+  const msgs=O.visibleMsgs(sid);
+  // fingerprint covers every message's tokens/cost, not just the last one: a resync can update
+  // an older message's accounting without changing the count. Cheap loop, no object churn.
+  let fp=msgs.length+'|';
+  for(const m of msgs){const i=m.info;fp+=(i.tokens?(i.tokens.input||0)+(i.tokens.output||0)+(i.tokens.reasoning||0):0)+','+(i.cost||0)+';'}
+  let c=tokCache.get(sid);
+  if(!c||c.fp!==fp){
+    let input=0,output=0,reasoning=0,cost=0;
+    for(const m of msgs){
+      const info=m.info;
+      if(info&&info.tokens){input+=(info.tokens.input||0);output+=(info.tokens.output||0);reasoning+=(info.tokens.reasoning||0)}
+      if(info&&typeof info.cost==='number')cost+=info.cost;
     }
-    if(info&&typeof info.cost==='number')cost+=info.cost;
+    c={fp,input,output,reasoning,cost,total:input+output+reasoning};
+    if(tokCache.size>40)tokCache.clear();
+    tokCache.set(sid,c);
   }
-  total=input+output+reasoning;
-  const usage=O.contextUsage(sid||S.sid);
-  return{input,output,reasoning,total,cost,pct:usage?usage.pct:null,lim:usage?usage.lim:null};
+  const usage=O.contextUsage(sid);
+  return{input:c.input,output:c.output,reasoning:c.reasoning,total:c.total,cost:c.cost,pct:usage?usage.pct:null,lim:usage?usage.lim:null};
 };
 
 O.openTokensModal=()=>{

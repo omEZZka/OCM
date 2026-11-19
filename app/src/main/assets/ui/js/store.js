@@ -121,13 +121,24 @@ const pageKey=(sid,page)=>'msgs:'+sid+':p'+page;
 const writeMsgs=sid=>{
   const list=O.msgs(sid).list;
   const hot=list.slice(-HOT).map(m=>({info:m.info,parts:m.parts}));
-  // archive everything that just fell out of the hot window, one page per 300 messages
+  // PERF: archive pages are immutable once written — only re-put a page when its boundary moved.
+  // Re-serializing every 300-message page on each save froze the UI for seconds on long sessions.
   const older=list.slice(0,Math.max(0,list.length-HOT));
   const pages=Math.ceil(older.length/ARCH);
+  const prevSig=writeMsgs._sig||(writeMsgs._sig=new Map());
+  // The last archive page grows while messages 251-550 stream in: its content signature must be
+  // part of the key, or the growth would never be persisted.
+  const lastPage=pages?older.slice((pages-1)*ARCH):[];
+  const sig=pages+':'+(older.length?older[older.length-1].info.id:'')+':'+lastPage.length+':'+(lastPage.length&&lastPage[lastPage.length-1].parts?lastPage[lastPage.length-1].parts.length:0);
+  const unchanged=prevSig.get(sid)===sig;
   return tx('readwrite',(s,res,t)=>{
     t.oncomplete=()=>res(true);t.onabort=t.onerror=()=>res(false);
-    for(let p=0;p<pages;p++)s.put(older.slice(p*ARCH,(p+1)*ARCH).map(m=>({info:m.info,parts:m.parts})),pageKey(sid,p));
-    s.put(pages,'msgs:'+sid+':pages');s.put(hot,'msgs:'+sid);
+    if(!unchanged){
+      for(let p=0;p<pages;p++)s.put(older.slice(p*ARCH,(p+1)*ARCH).map(m=>({info:m.info,parts:m.parts})),pageKey(sid,p));
+      s.put(pages,'msgs:'+sid+':pages');
+      prevSig.set(sid,sig);
+    }
+    s.put(hot,'msgs:'+sid);
   }).catch(()=>false);
 };
 // Loads hot window plus every archive page, oldest first, and prunes duplicates.

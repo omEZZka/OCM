@@ -122,10 +122,12 @@ O.voiceDictate=()=>{
   const off=O.on('stt',d=>{
     if(done)return;
     if(d.t==='partial'&&ta&&!ta.value.trim())ta.placeholder=d.text||'';
+    // live wave in the composer (17): partials keep the mic bars dancing even without levels
+    if(d.t==='partial'||d.t==='begin')O.emit('voiceWave',{on:true,level:5});
     // 'final' may arrive after the recogniser already stopped on its own
-    if(d.t==='final'){commit(d.text);return}
-    if(d.t==='empty'){done=true;stop();restore();O.toast(O.tr('No speech detected','Речь не распознана'),2200,'error');return}
-    if(d.t==='error'){done=true;stop();restore();O.toast(O.tr('Voice input error','Ошибка голосового ввода'),2500,'error')}
+    if(d.t==='final'){O.emit('voiceWave',{on:false});commit(d.text);return}
+    if(d.t==='empty'){O.emit('voiceWave',{on:false});done=true;stop();restore();O.toast(O.tr('No speech detected','Речь не распознана'),2200,'error');return}
+    if(d.t==='error'){O.emit('voiceWave',{on:false});done=true;stop();restore();O.toast(O.tr('Voice input error','Ошибка голосового ввода'),2500,'error')}
   });
   O.toast(O.tr('Listening... speak now','Слушаю... говорите'),2000);
   // one-shot: the native side delivers exactly one phrase and stops by itself

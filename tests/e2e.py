@@ -15,7 +15,7 @@ try:
     pg.on('pageerror',lambda e:errs.append('pageerror: '+str(e)))
     pg.on('console',lambda m:errs.append('console.'+m.type+': '+m.text) if m.type=='error' else None)
     pg.add_init_script(mock)
-    pg.add_init_script("try{localStorage.setItem('ocm.tourSeen','true')}catch(e){}")
+    pg.add_init_script("try{localStorage.setItem('ocm.tourSeen','true');localStorage.setItem('ocm.aiStageTitles','false')}catch(e){}")
     pg.goto('http://127.0.0.1:8765/index.html')
     pg.wait_for_selector('#top',timeout=8000)
     pg.wait_for_function("document.querySelector('#top .top-title-txt')&&document.querySelector('#top .top-title-txt').textContent!==''",timeout=5000)
@@ -460,6 +460,180 @@ try:
     chk('switch back to packs restores groups',cards['backToPacks']==1)
     pg.evaluate("OCM.S.sid='ses_1';OCM.chat.renderAll()")
     pg.wait_for_timeout(200)
+    # ---- 2.21: ALL consecutive commands under ONE arrow, even across hidden parts ----
+    one=pg.evaluate("""()=>{
+      const sid='ses_one';OCM.S.sessions.unshift({id:sid,title:'one',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;const mid='mo1';
+      const mk=(id,type,extra)=>Object.assign({id,sessionID:sid,messageID:mid,type},extra||{});
+      OCM.upsertMsg({id:mid,sessionID:sid,role:'assistant',time:{created:Date.now(),completed:Date.now()}});
+      OCM.upsertPart(mk('r01','text',{text:'Начинаю.',time:{end:1}}));
+      OCM.upsertPart(mk('r02','tool',{tool:'bash',state:{status:'completed',input:{command:'ls',description:'Шаг 1'},output:'a',time:{start:1,end:2}}}));
+      // hidden reasoning (thinking off) + stats-only text + compaction must NOT split the pack
+      OCM.upsertPart(mk('r03','reasoning',{text:'hidden thoughts',time:{end:1}}));
+      OCM.upsertPart(mk('r04','tool',{tool:'read',state:{status:'completed',input:{filePath:'/root/a.py'},output:'x',time:{start:2,end:3}}}));
+      OCM.upsertPart(mk('r05','text',{text:'+3 -1',time:{end:1}}));
+      OCM.upsertPart(mk('r06','tool',{tool:'edit',state:{status:'completed',input:{filePath:'/root/a.py'},metadata:{diff:'--- a\\n+++ b\\n@@\\n-x\\n+y'},time:{start:3,end:4}}}));
+      OCM.upsertPart(mk('r07','compaction',{}));
+      OCM.upsertPart(mk('r08','tool',{tool:'bash',state:{status:'completed',input:{command:'pytest',description:'Тесты'},output:'ok',time:{start:4,end:5}}}));
+      OCM.upsertPart(mk('r09','text',{text:'Готово.',time:{end:1}}));
+      const think=OCM.S.opts.thinking;OCM.S.opts.thinking=false;
+      OCM.chat.renderAll();
+      const body=document.querySelector('.msg.assistant .m-body');
+      const groups=body.querySelectorAll('.cmd-group').length;
+      const tools=body.querySelector('.cmd-group')._parts.filter(p=>p.type==='tool').length;
+      OCM.S.opts.thinking=think;
+      return {groups,tools};
+    }""")
+    chk('one arrow for all consecutive commands',one['groups']==1)
+    chk('hidden parts do not split the pack',one['tools']==4)
+    # ---- 2.21 perf: unchanged message events do zero DOM work ----
+    perf=pg.evaluate("""()=>{
+      const sid=OCM.S.sid;const m=OCM.visibleMsgs(sid).find(x=>x.info.role==='assistant');
+      const el=document.querySelector('.msg.assistant');
+      const body=el.querySelector('.m-body');
+      const before=body.innerHTML;
+      let mutations=0;
+      const mo=new MutationObserver(rs=>mutations+=rs.length);
+      mo.observe(body,{childList:true,subtree:true,characterData:true,attributes:true});
+      for(let i=0;i<30;i++)OCM.bus.emit('part',sid,m,m.parts[0]);
+      return new Promise(res=>setTimeout(()=>{mo.disconnect();res({mutations,same:body.innerHTML===before})},400));
+    }""")
+    chk('perf: 30 duplicate events -> 0 DOM mutations',perf['mutations']==0 and perf['same'])
+    # ---- 2.21: sticky date header + reading position memory ----
+    pg.evaluate("OCM.S.sid='ses_1';OCM.chat.renderAll()")
+    pg.wait_for_timeout(500)
+    sticky=pg.evaluate("""()=>{
+      const msgs=document.querySelector('#msgs');
+      const first=msgs.querySelector('.msg');
+      msgs.scrollTop=first?first.offsetTop+4:0;
+      msgs.dispatchEvent(new Event('scroll'));
+      return new Promise(res=>setTimeout(()=>{
+        const el=document.querySelector('#chat-sticky');
+        res({visible:!el.classList.contains('hide'),text:el.textContent,h:msgs.scrollHeight,ch:msgs.clientHeight});
+      },300));
+    }""")
+    chk('sticky date header shows',sticky['visible'] and len(sticky['text'])>0)
+    readpos=pg.evaluate("""()=>{
+      const msgs=document.querySelector('#msgs');
+      const first=msgs.querySelector('.msg');
+      msgs.scrollTop=first?first.offsetTop+4:0;
+      msgs.dispatchEvent(new Event('scroll'));
+      return new Promise(res=>setTimeout(()=>{
+        const rp=OCM.store.get('readPos.'+OCM.S.sid,null);
+        OCM.chat.renderAll();
+        setTimeout(()=>res({saved:!!rp,restored:!document.querySelector('#jump').classList.contains('hide')}),300);
+      },600));
+    }""")
+    chk('reading position saved',readpos['saved'])
+    chk('reading position restored on reopen',readpos['restored'])
+    pg.evaluate("OCM.store.remove('readPos.'+OCM.S.sid)")
+    # ---- 2.21: agent avatar pulse + card ----
+    pulse=pg.evaluate("""()=>{
+      const av=document.querySelector('.agent-avatar');
+      OCM.S.status[OCM.S.sid]={type:'busy'};OCM.bus.emit('status',OCM.S.sid);
+      const on=av.classList.contains('pulsing');
+      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
+      const off=!av.classList.contains('pulsing');
+      av.click();
+      const sheet=[...document.querySelectorAll('.sheet')].some(s=>s.textContent.includes('Кто отвечает'));
+      OCM.back();
+      return {on,off,sheet};
+    }""")
+    chk('agent avatar pulses while busy',pulse['on'] and pulse['off'])
+    chk('agent card opens on avatar tap',pulse['sheet'])
+    # ---- 2.21: night lamp ----
+    lamp=pg.evaluate("""()=>{
+      OCM.setNightLamp(true);
+      const on=document.documentElement.classList.contains('night-lamp');
+      OCM.setNightLamp(false);
+      return {on,off:!document.documentElement.classList.contains('night-lamp'),btn:!!document.querySelector('.lamp-btn')};
+    }""")
+    chk('night lamp toggles',lamp['on'] and lamp['off'] and lamp['btn'])
+    # ---- 2.21: smart stop -> resume button ----
+    resume=pg.evaluate("""()=>{
+      const sid='ses_res';OCM.S.sessions.unshift({id:sid,title:'res',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;OCM.S.status[sid]={type:'idle'};
+      OCM.upsertMsg({id:'mres1',sessionID:sid,role:'assistant',time:{created:Date.now()}});
+      OCM.upsertPart({id:'pres1',sessionID:sid,messageID:'mres1',type:'text',text:'Оборванный ответ'});
+      OCM.chat.renderAll();
+      const btn=document.querySelector('#send');
+      const cls=btn.className,enabled=!btn.disabled;
+      OCM.S.sid='ses_1';OCM.chat.renderAll();
+      return {cls,enabled};
+    }""")
+    chk('send becomes resume after a cut',resume['cls']=='resume' and resume['enabled'])
+    # ---- 2.21: diagrams render offline ----
+    diag=pg.evaluate("""()=>{
+      const sid='ses_diag';OCM.S.sessions.unshift({id:sid,title:'diag',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;
+      OCM.upsertMsg({id:'md1',sessionID:sid,role:'assistant',time:{created:Date.now(),completed:Date.now()}});
+      OCM.upsertPart({id:'pd1',sessionID:sid,messageID:'md1',type:'text',text:'Схема:\\n```mermaid\\ngraph TD\\nA[Старт] --> B{Готово?}\\nB -->|да| C[Конец]\\nB -->|нет| A\\n```',time:{end:1}});
+      OCM.upsertPart({id:'pd2',sessionID:sid,messageID:'md1',type:'text',text:'```chart\\nЯнв: 12\\nФев: 25\\nМар: 18\\n```',time:{end:1}});
+      OCM.chat.renderAll();
+      const svgs=document.querySelectorAll('.diagram-box svg').length;
+      const nodes=document.querySelectorAll('.diagram-box svg rect,.diagram-box svg path').length;
+      OCM.S.sid='ses_1';OCM.chat.renderAll();
+      return {svgs,nodes};
+    }""")
+    chk('mermaid + chart render as SVG',diag['svgs']==2 and diag['nodes']>=6)
+    # ---- 2.21: session media ribbon ----
+    ribbon=pg.evaluate("""()=>{
+      const sid='ses_rib';OCM.S.sessions.unshift({id:sid,title:'rib',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;
+      OCM.upsertMsg({id:'mr1',sessionID:sid,role:'assistant',time:{created:Date.now()}});
+      OCM.upsertPart({id:'pr1',sessionID:sid,messageID:'mr1',type:'file',mime:'image/png',filename:'fox.png',url:'data:image/png;base64,aGk='});
+      OCM.upsertPart({id:'pr2',sessionID:sid,messageID:'mr1',type:'text',text:'Смотри /root/media/wolf.png и ![cat](https://x.test/cat.png)'});
+      const items=OCM.sessionMedia(sid);
+      OCM.openSessionRibbon();
+      const cells=document.querySelectorAll('.sheet .ribbon-cell').length;
+      OCM.back();OCM.S.sid='ses_1';OCM.chat.renderAll();
+      return {items:items.length,cells};
+    }""")
+    chk('ribbon collects attachments + md + paths',ribbon['items']==3 and ribbon['cells']==3)
+    # ---- 2.21: selection thread button ----
+    selthread=pg.evaluate("""()=>{
+      const p=document.querySelector('.msg.assistant .p-text');
+      if(!p)return {ok:false};
+      const range=document.createRange();
+      const tn=[...p.querySelectorAll('*')].find(x=>x.textContent.includes('world'))||p;
+      range.selectNodeContents(tn);
+      const sel=getSelection();sel.removeAllRanges();sel.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+      return new Promise(res=>setTimeout(()=>{
+        const btn=document.querySelector('.sel-ask');
+        const ok=!!btn;
+        if(btn)btn.click();
+        const quoted=document.querySelector('#composer textarea').value.startsWith('>');
+        sel.removeAllRanges();
+        document.querySelector('#composer textarea').value='';
+        res({ok,quoted});
+      },500));
+    }""")
+    chk('selection ask button appears',selthread.get('ok'))
+    chk('fragment quoted into composer',selthread.get('quoted'))
+    # ---- 2.21: voice wave reacts to stt events ----
+    wave=pg.evaluate("""()=>{
+      const mic=document.querySelector('.mic-btn');
+      OCEvent('stt',{t:'level',v:8});
+      const on=mic.classList.contains('listening');
+      OCEvent('stt',{t:'final',text:''});
+      return {on,off:!mic.classList.contains('listening'),bars:mic.querySelectorAll('.mic-wave i').length};
+    }""")
+    chk('mic wave dances on level',wave['on'] and wave['off'] and wave['bars']==5)
+    # ---- 2.21: send fly bubble ----
+    fly=pg.evaluate("""()=>{
+      OCM.S.sid='ses_1';OCM.chat.renderAll();
+      document.querySelector('#composer textarea').value='анимация отправки';
+      document.querySelector('#composer textarea').dispatchEvent(new Event('input'));
+      document.querySelector('#send').click();
+      const ghost=!!document.querySelector('.fly-bubble');
+      return new Promise(res=>setTimeout(()=>res({ghost,gone:!document.querySelector('.fly-bubble')}),700));
+    }""")
+    chk('send ghost bubble flies',fly['ghost'] and fly['gone'])
+    pg.wait_for_timeout(400)
+    # the fly-bubble send started a mock turn: dismiss its permission so dock-active releases the composer
+    pg.evaluate("__push({type:'permission.replied',properties:{requestID:'per_1',sessionID:'ses_1'}});__push({type:'session.idle',properties:{sessionID:'ses_1'}})")
+    pg.wait_for_timeout(250)
     # ---- focus ring must not overflow the composer ----
     pg.click('#composer textarea')
     pg.wait_for_timeout(200)

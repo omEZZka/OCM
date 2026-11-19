@@ -2,12 +2,15 @@
 const O=window.OCM,h=O.h;
 // ---- markdown ----
 O.md=t=>{try{return DOMPurify.sanitize(marked.parse(t||'',{gfm:true}),{USE_PROFILES:{html:true},FORBID_TAGS:['style','form','textarea','select'],FORBID_ATTR:['onerror','onload'],ADD_TAGS:['button','action','openapp'],ADD_ATTR:['data-action','data-target','data-path','type','target']})}catch{return'<pre>'+O.esc(t)+'</pre>'}};
-O.enhance=el=>{
+O.enhance=(el,opts)=>{
+  const lite=opts&&opts.lite;
   el.querySelectorAll('pre').forEach(pre=>{if(pre.dataset.e||pre.closest('.codeblock'))return;pre.dataset.e='1';
     const code=pre.querySelector('code');const lang=((code&&code.className.match(/language-([\w+#-]+)/))||[])[1]||'';
-    if(code&&window.hljs){try{hljs.highlightElement(code)}catch{}}
+    if(code&&window.hljs&&!lite){try{hljs.highlightElement(code)}catch{}}
     const wrap=h('div',{class:'codeblock'},h('div',{class:'code-bar'},h('span',null,lang||'текст'),h('button',{class:'ibtn s','data-copy':'1'},O.icon('copy'))));
     pre.replaceWith(wrap);wrap.append(pre)});
+  // Mermaid diagrams (```mermaid blocks) render offline once the part is final
+  if(!lite&&O.renderDiagrams)O.renderDiagrams(el);
 
   // Connect interactive buttons created in markdown
   el.querySelectorAll('button[data-action]').forEach(btn=>{
@@ -69,6 +72,7 @@ O.enhance=el=>{
   });
 
   // Auto-detect project HTML files mentioned in text (like site/index.html or /root/site/index.html)
+  if(lite)return;
   el.querySelectorAll('code').forEach(c=>{
     const txt=c.textContent.trim();
     if(/\b(?:site\/index\.html|\/root\/.*\.html|[a-zA-Z0-9_.-]+\.html)\b/i.test(txt)){
@@ -82,24 +86,23 @@ O.enhance=el=>{
   });
 };
 // Rendering markdown on every streamed delta is what made the UI freeze: `marked` + DOMPurify +
-// highlight.js reparse the whole answer dozens of times per second while the user is tapping. Cap
-// the work with a per-element throttle, and while streaming only re-render if the text actually
-// grew by a meaningful amount. The final state is always rendered exactly, once streaming stops.
+// highlight.js reparse the whole answer dozens of times per second while the user is tapping.
+// 2.21 perf: while streaming we render markdown WITHOUT highlight.js (plain escaped code) and with
+// a coarser cadence; the final pass highlights once. getComputedStyle walks are cached per apply.
 O.mdInto=(el,t,opts)=>{
   const o=opts||{};
-  el._md=el._md||{txt:'',at:0,timer:null};
+  el._md=el._md||{txt:'',at:0,timer:null,sc:null};
   const st=el._md;
   // Never let the rendered text shrink while unfinished: a late snapshot arriving after newer
   // deltas would otherwise blink the answer backwards.
   if(!o.final&&st.txt&&typeof t==='string'&&st.txt.length>t.length&&st.txt.startsWith(t))return;
-  // Replacing innerHTML changes the element height. If that element sits above the viewport,
-  // the browser keeps scrollTop and the user's reading position jumps. Measuring the distance to
-  // the bottom of the nearest scroll container and restoring it keeps the text visually still.
   const scrollParent=()=>{
+    if(st.sc&&st.sc.isConnected)return st.sc;
     let n=el.parentNode;
     while(n&&n!==document.body){
+      if(n.id==='msgs'||n.classList&&n.classList.contains('sh-b')){st.sc=n;return n}
       const cs=getComputedStyle(n);
-      if((cs.overflowY==='auto'||cs.overflowY==='scroll')&&n.scrollHeight>n.clientHeight)return n;
+      if((cs.overflowY==='auto'||cs.overflowY==='scroll')&&n.scrollHeight>n.clientHeight){st.sc=n;return n}
       n=n.parentNode;
     }
     return null;
@@ -110,7 +113,12 @@ O.mdInto=(el,t,opts)=>{
     const sc=scrollParent();
     const before=sc?sc.scrollHeight-sc.scrollTop:0;
     const nearBottom=sc?before<120:true;
-    try{el.innerHTML=O.md(st.txt);O.enhance(el)}catch(e){}
+    try{
+      el.innerHTML=O.md(st.txt);
+      // highlight.js on every delta was the main freeze: skip it until the part is final
+      O.enhance(el,{lite:!o.final});
+      if(!o.final)el.classList.add('streaming');else el.classList.remove('streaming');
+    }catch(e){}
     if(sc&&!nearBottom){
       const after=sc.scrollHeight-sc.scrollTop;
       if(after!==before)sc.scrollTop=sc.scrollHeight-before;
@@ -124,9 +132,10 @@ O.mdInto=(el,t,opts)=>{
   }
   const now=Date.now();
   const gap=now-st.at;
-  if(gap>=90){apply();return}
+  const cadence=O.fastMode&&O.fastMode()?120:160;
+  if(gap>=cadence){apply();return}
   if(st.timer)return; // a render is already scheduled; it will pick up st.txt
-  st.timer=setTimeout(apply,90-gap);
+  st.timer=setTimeout(apply,cadence-gap);
 };
 
 // ---- diff ----

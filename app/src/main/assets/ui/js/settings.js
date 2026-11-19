@@ -195,10 +195,12 @@ O.openSettings=()=>{
   const tilesRow=O.listRow('sliders',O.tr('Home tiles','Плитки главного экрана'),O.tr('Choose shortcuts for the empty chat screen','Ярлыки на пустом экране чата'),O.icon('chevR'),()=>O.openHomeTiles());
   const navRow=O.listRow('layout',O.tr('Bottom bar','Нижний бар'),O.tr('Choose your one-tap tabs','Свои вкладки в один тап'),O.icon('chevR'),()=>O.openNavSettings&&O.openNavSettings());
   const hapticRow=O.toggleRow('zap',O.tr('Haptic feedback','Тактильный отклик'),O.tr('Vibrate on send, toggles and long-press','Вибрация при отправке, переключении и долгом нажатии'),O.store.get('haptics',true),v=>O.store.set('haptics',v));
+  const animRow=O.toggleRow('play',O.tr('Chat animations','Анимации чата'),O.tr('Typing caret, smooth follow, fly-away send bubble','Курсор печати, плавный скролл, улетающий пузырь отправки'),O.store.get('chatAnim',true),v=>O.store.set('chatAnim',v));
+  const stageRow=O.toggleRow('bulb',O.tr('AI stage titles','ИИ-заголовки этапов'),O.tr('The model names each command pack in human words','Модель называет каждую пачку команд человеческими словами'),O.store.get('aiStageTitles',true),v=>O.store.set('aiStageTitles',v));
   const focusRow=O.toggleRow('eye',O.tr('Focus mode','Фокус-режим'),O.tr('Hide panels — only the conversation','Скрыть панели — только переписка'),O.focusMode(),v=>O.setFocusMode(v));
   const dryRow=O.toggleRow('shield',O.tr('Dry-run mode','Режим Dry-run'),O.tr('Agent proposes commands and diffs without executing','Агент предлагает команды и diff без выполнения'),O.dryRun(),v=>O.setDryRun(v));
   const tourRow=O.listRow('info',O.tr('Feature tour','Обучающий тур'),O.tr('Show the welcome guide again','Показать приветственный гид ещё раз'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openTour(),200)});
-  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,fastRow,autoCompactRow,hapticRow,focusRow,dryRow,tilesRow,navRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
+  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,fastRow,autoCompactRow,hapticRow,animRow,stageRow,focusRow,dryRow,tilesRow,navRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
   panes.main.append(appCard);
 
   // 4. Notifications & Sounds

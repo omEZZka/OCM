@@ -3,6 +3,7 @@ const O=window.OCM;
 const pend=new Map();let seq=0;const mediaPend=new Map();let mediaSeq=0;const L={};
 O.on=(n,f)=>{(L[n]=L[n]||[]).push(f);return()=>O.off(n,f)};
 O.off=(n,f)=>{const a=L[n];if(!a)return;const i=a.indexOf(f);if(i>=0)a.splice(i,1)};
+O.emit=(n,d)=>{(L[n]||[]).slice().forEach(f=>{try{f(d)}catch(e){console.error(n,e)}})};
 window.OCEvent=(n,d)=>{if(n==='http'){finishHttp(d);return}
   if(n==='mediaNet'){finishMediaNet(d);return}
   (L[n]||[]).forEach(f=>{try{f(d)}catch(e){console.error(n,e)}})};
