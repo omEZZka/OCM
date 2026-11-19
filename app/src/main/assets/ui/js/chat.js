@@ -338,7 +338,10 @@ function showPart(m,p){
   if(m.info.role==='user')return(p.type==='text'&&!p.synthetic&&!p.ignored)||p.type==='file'||p.type==='agent';
   switch(p.type){case'text':return typeof p.text==='string'&&(p.text.trim()!==''||!(p.time&&p.time.end));case'reasoning':{if(!S.opts.thinking)return false;const t=p.text||p.reasoning||p.thinking||'';return String(t).trim()!==''||!(p.time&&p.time.end)}case'tool':case'patch':case'retry':case'compaction':return true}return false}
 function syncParts(el,m){
+  if(m.info.role==='assistant'&&toolView()!=='cards'){syncGrouped(el,m);return}
   const body=el.firstChild;const keep=new Set();let prev=null;
+  const olds=[...body.querySelectorAll('.cmd-group')];
+  olds.forEach(g=>{(g._kids||[]).forEach(pe=>{if(pe.parentNode===g)body.insertBefore(pe,g)});g.remove()});
   for(const p of m.parts){if(!showPart(m,p))continue;keep.add(p.id);
     let pe=partEls.get(p.id);const fresh=!pe;
     if(fresh){pe=h('div',{class:'part','data-pid':p.id});partEls.set(p.id,pe)}
@@ -347,6 +350,204 @@ function syncParts(el,m){
     fillPart(pe,p,m,fresh);prev=pe}
   for(const c of [...body.children]){if(!keep.has(c.dataset.pid)){partEls.delete(c.dataset.pid);c.remove()}}
   collapseErrors(body)}
+// ---- inline command groups: Claude-style one-button packs woven into the answer text ----
+// text → [↓ pack of tools] → text → [↓ next pack] → conclusion. Every pack gets an auto outline
+// (what it was for), live progress while running, and per-tool cards inside.
+const openGroups=new Set(),manualGroups=new Set();
+function toolView(){
+  const v=S.opts.toolView||(S.opts.details===false?'cards':'fold');
+  return v==='cards'?'cards':v==='auto'?'auto':'fold';
+}
+O.toolView=toolView;
+const GROUPABLE=p=>p.type==='tool'||p.type==='patch'||p.type==='retry';
+function grpKey(m,parts){return m.info.id+'#'+parts[0].id}
+function groupOutline(parts){
+  const counts={},files=new Set();let edits=0,run=0,err=0,desc='',cmd='';
+  for(const p of parts){
+    if(p.type==='patch'){edits++;(p.files||[]).forEach(f=>files.add(O.basename(f.file||f.path||f.filename||'')));continue}
+    if(p.type==='retry')continue;
+    const st=p.state||{},i=st.input||{};
+    counts[p.tool]=(counts[p.tool]||0)+1;
+    if(st.status==='running'||st.status==='pending')run++;
+    if(st.status==='error')err++;
+    if(p.tool==='edit'||p.tool==='write'||p.tool==='patch'||p.tool==='apply_patch'){edits++;if(i.filePath)files.add(O.basename(i.filePath))}
+    if(p.tool==='bash'){if(!desc&&i.description)desc=String(i.description);if(!cmd)cmd=String(i.command||'').split('\n')[0]}
+    if(p.tool==='task'&&!desc&&i.description)desc=String(i.description);
+  }
+  let title=desc;
+  if(!title){
+    const seg=[];
+    const push=(n,one,many)=>{if(n)seg.push(n+' '+(n===1?one:many))};
+    push(counts.bash,'команда','команд');
+    push((counts.read||0)+(counts.list||0)+(counts.glob||0)+(counts.grep||0),'чтение','чтений');
+    push(edits,'правка','правок');
+    push((counts.webfetch||0)+(counts.websearch||0)+(counts.codesearch||0),'запрос в сеть','запросов в сеть');
+    push(counts.task,'субагент','субагентов');
+    const known=['bash','read','list','glob','grep','edit','write','patch','apply_patch','webfetch','websearch','codesearch','task'];
+    const other=Object.keys(counts).filter(k=>!known.includes(k)).reduce((a,k)=>a+counts[k],0);
+    push(other,'инструмент','инструментов');
+    title=seg.slice(0,3).join(' · ')||'Действия';
+  }
+  const sub=[...files].slice(0,2).join(', ')+([...files].length>2?' +'+([...files].length-2):'')||cmd.slice(0,80);
+  return{title:title.slice(0,90),sub,run,err,edits};
+}
+function groupDiff(parts){
+  let added=0,deleted=0;
+  const eat=d=>String(d).split('\n').forEach(l=>{
+    if(l.startsWith('+')&&!l.startsWith('+++'))added++;
+    else if(l.startsWith('-')&&!l.startsWith('---'))deleted++});
+  for(const p of parts){
+    if(p.type==='patch'){
+      (p.files||[]).forEach(f=>{if(typeof f.additions==='number')added+=f.additions;if(typeof f.deletions==='number')deleted+=f.deletions});
+      if(p.diff)eat(p.diff);
+    }
+    if(p.type==='tool'&&p.state&&p.state.metadata&&p.state.metadata.diff)eat(p.state.metadata.diff);
+  }
+  return{added,deleted};
+}
+function groupDuration(parts){
+  let s=Infinity,e=0;
+  for(const p of parts){const t=p.state&&p.state.time;if(!t)continue;
+    if(t.start)s=Math.min(s,t.start);if(t.end)e=Math.max(e,t.end)}
+  if(!isFinite(s)||!e||e<=s)return'';
+  const sec=(e-s)/1000;return sec<1?'':(sec<60?sec.toFixed(sec<10?1:0)+'s':Math.floor(sec/60)+'m '+Math.round(sec%60)+'s');
+}
+function syncGrouped(el,m){
+  const body=el.firstChild;
+  const olds=[...body.querySelectorAll('.cmd-group')];
+  const oldMap=new Map(olds.map(g=>[g.dataset.gkey,g]));
+  const used=new Set();
+  const seq=[];let run=[];
+  for(const p of m.parts){
+    if(!showPart(m,p))continue;
+    if(GROUPABLE(p)){run.push(p);continue}
+    if(run.length){seq.push({t:'g',parts:run});run=[]}
+    seq.push({t:'p',p});
+  }
+  if(run.length)seq.push({t:'g',parts:run});
+  let anchor=body.firstChild;
+  const put=node=>{
+    while(anchor&&(anchor.classList&&(anchor.classList.contains('errbox')||anchor.classList.contains('msg-diff-line')||anchor.classList.contains('msg-diff-badge')||anchor.classList.contains('msg-placeholder'))))anchor=anchor.nextSibling;
+    if(anchor===node){anchor=node.nextSibling;return}
+    body.insertBefore(node,anchor);
+  };
+  for(const it of seq){
+    if(it.t==='p'){
+      const p=it.p;let pe=partEls.get(p.id);const fresh=!pe;
+      if(fresh){pe=h('div',{class:'part','data-pid':p.id});partEls.set(p.id,pe)}
+      put(pe);fillPart(pe,p,m,fresh);
+    }else{
+      const parts=it.parts,key=grpKey(m,parts);
+      let g=oldMap.get(key);
+      if(!g||used.has(key)){
+        g=h('div',{class:'part cmd-group','data-gkey':key});
+        g._head=h('button',{class:'cg-head',onclick:()=>toggleGroup(g)});
+        g._list=h('div',{class:'cg-list'});
+        g.append(g._head,g._list);
+      }
+      used.add(key);g._parts=parts;g._mid=m.info.id;g._info=m.info;g._kids=[];
+      const st0=S.status[m.info.sessionID];
+      const busy0=!!st0&&st0.type!=='idle';
+      const sig=parts.map(p=>{const st=p.state||{};
+        return p.id+':'+(st.status||'')+':'+String(st.output!=null?st.output:'').length+':'+((st.metadata&&st.metadata.diff)||'').length}).join('|');
+      if(sig!==g._sig){g._sig=sig;fillGroupHead(g,m)}
+      const isOpen=openGroups.has(key);
+      if(isOpen!==g._open){
+        g._open=isOpen;
+        g.classList.toggle('open',isOpen);
+        if(isOpen)fillGroupList(g,m);
+        else if(g._list.childNodes.length)g._list.textContent='';
+      }else if(isOpen&&(sig!==g._listSig)){fillGroupList(g,m)}
+      if(isOpen)g._listSig=sig;
+      // auto mode: the pack being worked on right now stays open; when it settles, it folds away
+      if(toolView()==='auto'&&!manualGroups.has(key)){
+        const gs=[...body.querySelectorAll('.cmd-group')];
+        const isLast=gs[gs.length-1]===g||!gs.includes(g);
+        const running=parts.some(p=>p.state&&(p.state.status==='running'||p.state.status==='pending'));
+        const want=running||(busy0&&isLast&&!(m.info.time&&m.info.time.completed));
+        if(want!==isOpen){
+          want?openGroups.add(key):openGroups.delete(key);
+          g._open=want;g.classList.toggle('open',want);
+          if(want){fillGroupList(g,m);g._listSig=sig}
+          else g._list.textContent='';
+        }
+      }
+      put(g);
+    }
+  }
+  for(const g of olds){if(!used.has(g.dataset.gkey))g.remove()}
+  const keepIds=new Set(seq.filter(x=>x.t==='p').map(x=>x.p.id));
+  for(const c of [...body.children]){
+    if(c.classList&&c.classList.contains('cmd-group'))continue;
+    if(c.dataset.pid){if(!keepIds.has(c.dataset.pid)){partEls.delete(c.dataset.pid);c.remove()}continue}
+    if(c.classList&&(c.classList.contains('errbox')||c.classList.contains('msg-diff-line')||c.classList.contains('msg-diff-badge')||c.classList.contains('msg-placeholder')))continue;
+    c.remove();
+  }
+}
+function toggleGroup(g){
+  const key=g.dataset.gkey;
+  manualGroups.add(key);
+  const on=!openGroups.has(key);
+  on?openGroups.add(key):openGroups.delete(key);
+  g._open=on;g.classList.toggle('open',on);
+  if(O.native.haptic)O.native.haptic('tick');
+  const m=(g._info&&O.msgs(g._info.sessionID).idx.get(g._mid))||{parts:g._parts,info:g._info||{sessionID:S.sid}};
+  if(on)fillGroupList(g,m);
+  else g._list.textContent='';
+}
+function fillGroupHead(g,m){
+  const parts=g._parts,o=groupOutline(parts),d=groupDiff(parts),dur=groupDuration(parts);
+  const running=o.run>0;
+  g.classList.toggle('running',running);
+  g.classList.toggle('has-err',o.err>0&&!running);
+  g._head.textContent='';
+  const ic=running?h('span',{class:'spin'}):o.err?O.icon('alert','err'):O.icon('terminal','cg-ic');
+  const meta=[];
+  if(parts.length>1)meta.push(parts.length+' шт.');
+  if(dur)meta.push(dur);
+  g._head.append(ic,
+    h('span',{class:'cg-titles'},h('b',{class:'cg-title'},o.title),o.sub?h('span',{class:'cg-sub'},o.sub):null),
+    o.err?h('span',{class:'cg-err'},o.err+' ош.'):null,
+    (d.added||d.deleted)?h('span',{class:'cg-diff'},h('i',{class:'add'},'+'+d.added),h('i',{class:'del'},'-'+d.deleted)):null,
+    meta.length?h('span',{class:'cg-meta'},meta.join(' · ')):null,
+    O.icon('chevD','cg-chev'));
+}
+function fillGroupList(g,m){
+  const list=g._list;
+  const want=new Set(g._parts.map(p=>p.id));
+  for(const c of [...list.children]){if(c.dataset.pid&&!want.has(c.dataset.pid))c.remove()}
+  let outline=list.querySelector('.cg-outline');
+  if(!outline){outline=h('div',{class:'cg-outline'});list.prepend(outline)}
+  outline.textContent='';
+  const files=new Map();
+  let bashCnt=0,readCnt=0,taskCnt=0;
+  for(const p of g._parts){
+    const i=(p.state&&p.state.input)||{};
+    if(p.type==='patch'){(p.files||[]).forEach(f=>{const fp=f.file||f.path||f.filename;if(fp)files.set(fp,'patch')});continue}
+    if(p.tool==='bash')bashCnt++;
+    if(p.tool==='read'||p.tool==='list'||p.tool==='glob'||p.tool==='grep')readCnt++;
+    if(p.tool==='task')taskCnt++;
+    if((p.tool==='edit'||p.tool==='write')&&i.filePath)files.set(i.filePath,p.tool);
+  }
+  const chips=[];
+  if(bashCnt)chips.push(h('span',{class:'cg-chip'},O.icon('terminal'),bashCnt+' '+O.tr('commands','команд')));
+  if(readCnt)chips.push(h('span',{class:'cg-chip'},O.icon('search'),readCnt+' '+O.tr('reads','чтений')));
+  if(taskCnt)chips.push(h('span',{class:'cg-chip'},O.icon('bot'),taskCnt+' '+O.tr('subagents','субагентов')));
+  [...files.entries()].slice(0,6).forEach(([fp,kind])=>chips.push(h('span',{class:'cg-chip file',title:fp},O.fileIcon(O.basename(fp)),O.basename(fp))));
+  if(files.size>6)chips.push(h('span',{class:'cg-chip'},'+'+(files.size-6)));
+  outline.append(h('span',{class:'cg-outline-t'},O.icon('list'),O.tr('Pack contents','Состав пачки')),chips.length?h('span',{class:'cg-chips'},chips):h('span',{class:'mut s'},O.tr('actions','действия')));
+  let prev=outline;
+  for(const p of g._parts){
+    let pe=partEls.get(p.id);
+    if(!pe){pe=h('div',{class:'part','data-pid':p.id});partEls.set(p.id,pe)}
+    const wantPos=prev?prev.nextSibling:list.firstChild;
+    if(pe.parentNode!==list||wantPos!==pe)list.insertBefore(pe,wantPos);
+    fillPart(pe,p,m,false);
+    if(pe.parentNode===list)g._kids.push(pe);
+    prev=pe;
+  }
+  collapseErrors(list);
+}
 // Consecutive failed tool calls are noise; show them as one row with the count.
 function collapseErrors(body){
   const olds=body.querySelectorAll('.tool-errors');
@@ -458,9 +659,10 @@ function getMsgDiff(m){
         });
       }
     }
-    if(p.type==='tool'&&p.metadata&&p.metadata.diff){
+    const tmd=p.type==='tool'&&p.state&&p.state.metadata;
+    if(tmd&&tmd.diff){
       found=true;
-      String(p.metadata.diff).split('\n').forEach(l=>{
+      String(tmd.diff).split('\n').forEach(l=>{
         if(l.startsWith('+')&&!l.startsWith('+++'))added++;
         else if(l.startsWith('-')&&!l.startsWith('---'))deleted++;
       });
@@ -590,7 +792,7 @@ function metaUpdate(el,m){
           const files=[];
           for(const p of m.parts){
             if(p.type==='patch'&&Array.isArray(p.files))p.files.forEach(f=>files.push(f));
-            if(p.type==='tool'&&p.metadata&&p.metadata.diff)files.push({file:(p.state&&p.state.input&&(p.state.input.filePath||p.state.input.path))||'',diff:p.metadata.diff});
+            if(p.type==='tool'&&p.state&&p.state.metadata&&p.state.metadata.diff)files.push({file:(p.state.input&&(p.state.input.filePath||p.state.input.path))||'',diff:p.state.metadata.diff});
           }
           if(!files.length){O.setTab('changes');return}
           const body=h('div');
@@ -638,6 +840,7 @@ function metaUpdate(el,m){
     else if(i.error)meta.append(h('span',{class:'warn'},'прервано'))}
   meta.append(h('span',{class:'grow'}),h('button',{class:'ibtn s',title:O.tr('More actions','Все действия'),onclick:()=>msgMenu(m)},O.icon('dots')))}
 function msgText(m){return m.parts.filter(p=>p.type==='text'&&!p.synthetic).map(p=>p.text).join('\n')}
+O.msgPlainText=msgText;
 function msgMenu(m){O.actions(m.info.role==='user'?'Сообщение':'Ответ',[
   {label:'Копировать текст',icon:'copy',fn:()=>O.native.copy(msgText(m))},
   {label:'Экспорт сессии в Markdown',icon:'doc',fn:()=>exportSessionMd()},
@@ -1260,7 +1463,7 @@ const BUILTINS=[
  {n:'export',d:'Экспорт диалога в Markdown',i:'down',run:()=>doExport()},
  {n:'themes',d:'Сменить тему',i:'palette',run:()=>O.openThemes()},
  {n:'thinking',d:'Показать или скрыть размышления',i:'bulb',run:()=>{S.opts.thinking=!S.opts.thinking;O.saveOpts();renderAll()}},
- {n:'details',d:'Раскрыть или закрепить детали инструментов',i:'code',run:()=>{S.opts.details=!S.opts.details;O.saveOpts();renderAll()}},
+ {n:'details',d:'Вид команд: свёрнутые пачки → авто → карточки',i:'code',run:()=>{const order=['fold','auto','cards'];const nxt=order[(order.indexOf(toolView())+1)%order.length];S.opts.toolView=nxt;O.saveOpts();O.toast(nxt==='fold'?O.tr('Commands: folded packs','Команды: свёрнутые пачки'):nxt==='auto'?O.tr('Commands: live pack opens itself','Команды: активная пачка раскрывается сама'):O.tr('Commands: classic cards','Команды: классические карточки'),1800);renderAll()}},
  {n:'status',d:'Серверы MCP, LSP и плагины',i:'server',run:()=>O.openStatus()},
  {n:'files',d:'Файлы проекта',i:'folder',run:()=>O.setTab('files')},
  {n:'terminal',d:'Терминал',i:'terminal',run:()=>O.setTab('term')},

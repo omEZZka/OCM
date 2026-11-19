@@ -14,8 +14,12 @@ O.applyAutoTheme=()=>{
   try{
     const dark=matchMedia('(prefers-color-scheme: dark)').matches;
     const manual=O.store.get('themeManual',null)||S.opts.theme;
-    const want=dark?(manual==='light'?'opencode':manual):'light';
+    const t=O.themeById?O.themeById(manual):null;
+    let want;
+    if(dark)want=(t&&t.light)?'opencode':manual;
+    else want=(t&&!t.light)?'light':manual;
     document.documentElement.dataset.theme=want;
+    if(O.applyTheme)O.applyTheme(want);
   }catch(_){}
 };
 try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>O.applyAutoTheme())}catch(_){}

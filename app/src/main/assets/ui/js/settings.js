@@ -143,7 +143,7 @@ O.openSettings=()=>{
     s.close();
     setTimeout(()=>location.reload(),400);
   });
-  const themeName={opencode:'OpenCode (Dark)',light:'Light',tokyonight:'Tokyo Night',gruvbox:'Gruvbox'}[S.opts.theme]||S.opts.theme;
+  const themeName=(O.themeById&&O.themeById(S.opts.theme).name)||S.opts.theme;
   const themeRow=O.listRow('palette',O.tr('Theme & Font Size','Тема и размер текста'),themeName+', '+S.opts.fs+'px',O.icon('chevR'),()=>O.openThemes());
   const thinkRow=O.toggleRow('bulb',O.tr('Show Reasoning / Thinking','Показывать размышления'),O.tr('Display model thought process in responses','Блоки размышлений в ответах'),S.opts.thinking,v=>{S.opts.thinking=v;O.saveOpts();O.chat.renderAll()});
   const ov=O.native.overlayState?O.native.overlayState():{};
@@ -170,7 +170,15 @@ O.openSettings=()=>{
       // the service reads this flag from Prefs through the bridge
       try{if(window.OC&&OC.setFlag)OC.setFlag('overlay_only_busy',v)}catch(_){}
     });
-  const detailRow=O.toggleRow('code',O.tr('Expand Tool Details','Детали инструментов'),O.tr('Show commands, output and file diffs','Команды, вывод терминала и правки'),S.opts.details,v=>{S.opts.details=v;O.saveOpts();O.chat.renderAll()});
+  const detailRow=O.listRow('code',O.tr('Agent commands view','Вид команд агента'),
+    {fold:O.tr('Folded packs with outline','Свёрнутые пачки с оглавлением'),auto:O.tr('Live pack opens itself','Активная пачка раскрывается сама'),cards:O.tr('Classic cards','Классические карточки')}[O.toolView?O.toolView():'fold'],
+    O.icon('chevR'),()=>{
+      O.actions(O.tr('Agent commands view','Вид команд агента'),[
+        {label:O.tr('Folded packs','Свёрнутые пачки'),sub:O.tr('One button between texts, tap to expand','Одна кнопка между текстами, тап раскрывает'),icon:O.toolView&&O.toolView()==='fold'?'check':'down',fn:()=>{S.opts.toolView='fold';O.saveOpts();O.chat.renderAll();detailRow.querySelector('.settings-row-text span').textContent=O.tr('Folded packs with outline','Свёрнутые пачки с оглавлением')}},
+        {label:O.tr('Auto','Авто'),sub:O.tr('The pack being executed stays open, finished ones fold','Рабочая пачка открыта, завершённые сворачиваются'),icon:O.toolView&&O.toolView()==='auto'?'check':'zap',fn:()=>{S.opts.toolView='auto';O.saveOpts();O.chat.renderAll();detailRow.querySelector('.settings-row-text span').textContent=O.tr('Live pack opens itself','Активная пачка раскрывается сама')}},
+        {label:O.tr('Classic cards','Классические карточки'),sub:O.tr('Every command as a separate card','Каждая команда отдельной карточкой'),icon:O.toolView&&O.toolView()==='cards'?'check':'list',fn:()=>{S.opts.toolView='cards';O.saveOpts();O.chat.renderAll();detailRow.querySelector('.settings-row-text span').textContent=O.tr('Classic cards','Классические карточки')}}
+      ]);
+    });
   const planRow=O.toggleRow('list',O.tr('Step-by-step task plans','Пошаговые планы задач'),
     O.tr('Show a plan button in the composer. Edit steps and send them when ready.','Кнопка плана в поле ввода. Редактируйте шаги и отправляйте их, когда будете готовы.'),
     O.planMode(),v=>{O.setPlanMode(v);bus.emit('planMode')});

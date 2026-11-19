@@ -55,7 +55,7 @@ try:
     pg.fill('#composer textarea','refactor main.py')
     pg.click('#send')
     pg.wait_for_selector('.msg.assistant .part.p-text',timeout=5000)
-    pg.wait_for_selector('.tool.completed',timeout=5000)
+    pg.wait_for_selector('.cmd-group:not(.running)',timeout=5000)
     pg.wait_for_selector('#dock .hud-dock-card',timeout=5000)
     pg.wait_for_timeout(500)
     sent=[c for c in pg.evaluate("__srv.calls") if c['p'].endswith('prompt_async')]
@@ -72,7 +72,27 @@ try:
     chk('streamed text with delta','Hello' in txt and 'world' in txt)
     chk('code block copy bar',pg.query_selector('.codeblock .code-bar')!=None)
     chk('reasoning shown',pg.query_selector('.think summary')!=None)
-    chk('two tool cards',pg.locator('.tool').count()==2)
+    # 2.20: consecutive tools fold into ONE inline pack between texts (Claude-style)
+    chk('command pack rendered',pg.locator('.cmd-group').count()==1)
+    chk('pack holds both tool cards',pg.evaluate("document.querySelector('.cmd-group')._parts.length")==2)
+    chk('pack head has outline title',len(pg.inner_text('.cmd-group .cg-title'))>0)
+    chk('pack diff stats on head','+1' in pg.inner_text('.cmd-group .cg-diff') and '-1' in pg.inner_text('.cmd-group .cg-diff'))
+    chk('pack folded after finish',not pg.evaluate("document.querySelector('.cmd-group').classList.contains('open')"))
+    # expand the pack: outline of contents + the two familiar tool cards inside
+    pg.click('.cmd-group .cg-head')
+    pg.wait_for_timeout(200)
+    chk('pack opens on tap',pg.evaluate("document.querySelector('.cmd-group').classList.contains('open')"))
+    chk('pack outline lists contents',pg.locator('.cmd-group .cg-outline .cg-chip').count()>=2)
+    chk('two tool cards inside pack',pg.locator('.cmd-group .tool').count()==2)
+    chk('text stays above the pack',pg.evaluate("""()=>{
+      const b=document.querySelector('.msg.assistant .m-body');
+      const t=b.querySelector('.p-text'),g=b.querySelector('.cmd-group');
+      return !!(t&&g&&(t.compareDocumentPosition(g)&Node.DOCUMENT_POSITION_FOLLOWING));
+    }"""))
+    pg.screenshot(path=os.environ.get('SHOTS','/tmp')+'/s2b_pack.png')
+    pg.click('.cmd-group .cg-head')
+    pg.wait_for_timeout(150)
+    chk('pack folds back',not pg.evaluate("document.querySelector('.cmd-group').classList.contains('open')"))
     chk('permission card patterns','rm -rf build' in pg.inner_text('#dock'))
     # the mock finishes the turn (idle) 60ms after the permission arrives, so force busy to test the dot
     pg.evaluate("__push({type:'session.status',properties:{sessionID:'ses_1',status:{type:'busy'}}})")
@@ -317,13 +337,51 @@ try:
     pg.click('.focus-exit')
     pg.wait_for_timeout(150)
     chk('focus mode exits',pg.locator('#top').is_visible())
-    # themes
+    # themes: 24 built-ins + custom editor + import/export
     chk('amoled theme applies',pg.evaluate("OCM.S.opts.theme='amoled';OCM.saveOpts();document.documentElement.dataset.theme")=='amoled')
+    chk('24 built-in themes',pg.evaluate("OCM.themeList().filter(t=>!t.custom).length")==24)
+    pg.evaluate("OCM.S.opts.theme='dracula';OCM.saveOpts()")
+    pg.wait_for_timeout(100)
+    drac=pg.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()")
+    chk('new theme drives CSS vars',drac=='#bd93f9')
+    pg.evaluate("OCM.openThemes()")
+    pg.wait_for_timeout(300)
+    chk('theme grid rendered',pg.locator('.sheet >> nth=-1 >> .theme-card').count()>=24)
+    chk('create custom button','Создать свою тему' in pg.inner_text('.sheet >> nth=-1'))
+    pg.click('.sheet >> nth=-1 >> .theme-card:has-text("Nord")')
+    pg.wait_for_timeout(150)
+    chk('theme applied from grid',pg.evaluate("OCM.S.opts.theme")=='nord')
+    pg.evaluate("OCM.back()")
+    # custom theme: save via editor API path (import), apply, verify vars, export round-trip
+    ct=pg.evaluate("""()=>{
+      const r=OCM.importThemeJson(JSON.stringify({format:'ocm-theme',version:1,theme:{name:'Test Custom',light:false,bg:'#101820',fg:'#eeeeee',acc:'#ff5577',acc2:'#55ddff'}}));
+      if(!r.ok)return r;
+      OCM.S.opts.theme=r.theme.id;OCM.saveOpts();
+      const acc=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim();
+      const bg=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+      const json=OCM.exportThemeJson(r.theme,'Test Custom');
+      const back=OCM.importThemeJson(json);
+      OCM.S.opts.theme='opencode';OCM.saveOpts();
+      return {ok:true,acc,bg,roundtrip:back.ok&&back.theme.acc==='#ff5577'};
+    }""")
+    chk('custom theme import+apply',ct.get('ok') and ct.get('acc')=='#ff5577' and ct.get('bg')=='#101820')
+    chk('custom theme export round-trip',ct.get('roundtrip'))
+    chk('bad theme json rejected',pg.evaluate("OCM.importThemeJson('{oops').ok")==False)
+    chk('incomplete theme rejected',pg.evaluate("OCM.importThemeJson('{\"bg\":\"#000000\"}').ok")==False)
+    pg.evaluate("OCM.openThemeEditor(null)")
+    pg.wait_for_timeout(250)
+    chk('theme editor opens with palette',pg.locator('.sheet >> nth=-1 >> .theme-field').count()>=10)
+    chk('theme editor live preview',pg.query_selector('.sheet >> nth=-1 >> .theme-preview')!=None)
+    pg.evaluate("OCM.back()")
+    pg.wait_for_timeout(150)
+    chk('cancel restores theme',pg.evaluate("document.documentElement.dataset.theme")=='opencode')
     pg.evaluate("OCM.S.opts.theme='opencode';OCM.saveOpts()")
     # second opinion + regenerate helpers exist
     chk('regenerate helper',pg.evaluate("typeof OCM.regenerateFrom")=='function')
     chk('second opinion helper',pg.evaluate("typeof OCM.secondOpinion")=='function')
     # ---- manually opened tool output must never auto-collapse ----
+    pg.click('.cmd-group .cg-head')
+    pg.wait_for_timeout(200)
     pg.evaluate("""() => {
       // open the first tool by hand while it is still 'completed' in the mock
       const t=document.querySelector('.tool');
@@ -340,6 +398,68 @@ try:
     pg.wait_for_timeout(300)
     still=pg.evaluate("document.querySelector('.tool').classList.contains('open')")
     chk('manually opened tool stays open after update',still)
+    # ---- 2.20: multiple packs woven between texts: T G T G T ----
+    packs=pg.evaluate("""()=>{
+      const sid='ses_packs';
+      OCM.S.sessions.unshift({id:sid,title:'packs',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;
+      const mid='mp1';
+      const mk=(id,type,extra)=>Object.assign({id,sessionID:sid,messageID:mid,type},extra||{});
+      OCM.upsertMsg({id:mid,sessionID:sid,role:'assistant',time:{created:Date.now()}});
+      OCM.upsertPart(mk('p01','text',{text:'Сначала посмотрю проект.'}));
+      OCM.upsertPart(mk('p02','tool',{tool:'bash',state:{status:'completed',input:{command:'ls',description:'List project files'},output:'a',metadata:{exit:0},time:{start:1000,end:3000}}}));
+      OCM.upsertPart(mk('p03','tool',{tool:'read',state:{status:'completed',input:{filePath:'/root/main.py'},output:'x',time:{start:3000,end:4000}}}));
+      OCM.upsertPart(mk('p04','text',{text:'Теперь исправлю файл.'}));
+      OCM.upsertPart(mk('p05','tool',{tool:'edit',state:{status:'completed',input:{filePath:'/root/main.py'},metadata:{diff:'--- a\\n+++ b\\n@@\\n-x\\n+y\\n+z'},time:{start:5000,end:6000}}}));
+      OCM.upsertPart(mk('p06','tool',{tool:'bash',state:{status:'completed',input:{command:'python3 tests/run.sh',description:'Run tests'},output:'ok',metadata:{exit:0},time:{start:6000,end:9000}}}));
+      OCM.upsertPart(mk('p07','text',{text:'Готово: тесты зелёные.'}));
+      OCM.chat.renderAll();
+      const body=document.querySelector('.msg.assistant .m-body');
+      const seq=[...body.children].filter(c=>c.classList.contains('p-text')||c.classList.contains('cmd-group')).map(c=>c.classList.contains('cmd-group')?'G':'T');
+      const groups=[...body.querySelectorAll('.cmd-group')];
+      return {seq,heads:groups.map(g=>({t:g.querySelector('.cg-title').textContent,diff:g.querySelector('.cg-diff')?g.querySelector('.cg-diff').textContent:'',meta:g.querySelector('.cg-meta')?g.querySelector('.cg-meta').textContent:''}))};
+    }""")
+    chk('packs: text-pack-text-pack-text order',packs['seq']==['T','G','T','G','T'])
+    chk('packs: outline titles from descriptions',packs['heads'][0]['t']=='List project files' and packs['heads'][1]['t']=='Run tests')
+    chk('packs: per-pack diff stats','+2' in packs['heads'][1]['diff'] and '-1' in packs['heads'][1]['diff'])
+    chk('packs: duration in meta','s' in packs['heads'][0]['meta'])
+    # ---- auto mode: live pack opens itself and folds when finished ----
+    auto=pg.evaluate("""()=>{
+      OCM.S.opts.toolView='auto';OCM.saveOpts();
+      const sid='ses_auto';OCM.S.sessions.unshift({id:sid,title:'auto',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;OCM.S.status[sid]={type:'busy'};
+      const mid='ma1';
+      OCM.upsertMsg({id:mid,sessionID:sid,role:'assistant',time:{created:Date.now()}});
+      OCM.upsertPart({id:'q01',sessionID:sid,messageID:mid,type:'text',text:'Работаю…'});
+      OCM.upsertPart({id:'q02',sessionID:sid,messageID:mid,type:'tool',tool:'bash',state:{status:'running',input:{command:'sleep 5',description:'Long task'},metadata:{output:'.'}}});
+      OCM.chat.renderAll();
+      const openedWhileRunning=document.querySelector('.cmd-group').classList.contains('open');
+      OCM.upsertPart({id:'q02',sessionID:sid,messageID:mid,type:'tool',tool:'bash',state:{status:'completed',input:{command:'sleep 5',description:'Long task'},output:'done',metadata:{exit:0},time:{start:1,end:2}}});
+      OCM.S.status[sid]={type:'idle'};
+      OCM.msgs(sid).idx.get(mid).info.time.completed=Date.now();
+      OCM.chat.renderAll();
+      const foldedAfter=!document.querySelector('.cmd-group').classList.contains('open');
+      document.querySelector('.cmd-group .cg-head').click();
+      OCM.chat.renderAll();
+      const manualStays=document.querySelector('.cmd-group').classList.contains('open');
+      return {openedWhileRunning,foldedAfter,manualStays};
+    }""")
+    chk('auto mode: running pack open',auto['openedWhileRunning'])
+    chk('auto mode: finished pack folds',auto['foldedAfter'])
+    chk('auto mode: manual open survives re-render',auto['manualStays'])
+    # ---- cards mode: classic inline cards, no packs ----
+    cards=pg.evaluate("""()=>{
+      OCM.S.opts.toolView='cards';OCM.saveOpts();OCM.chat.renderAll();
+      const body=document.querySelector('.msg.assistant .m-body');
+      const r={groups:body.querySelectorAll('.cmd-group').length,tools:body.querySelectorAll('.tool').length};
+      OCM.S.opts.toolView='fold';OCM.saveOpts();OCM.chat.renderAll();
+      r.backToPacks=document.querySelector('.msg.assistant .m-body').querySelectorAll('.cmd-group').length;
+      return r;
+    }""")
+    chk('cards mode: tools inline without packs',cards['groups']==0 and cards['tools']==1)
+    chk('switch back to packs restores groups',cards['backToPacks']==1)
+    pg.evaluate("OCM.S.sid='ses_1';OCM.chat.renderAll()")
+    pg.wait_for_timeout(200)
     # ---- focus ring must not overflow the composer ----
     pg.click('#composer textarea')
     pg.wait_for_timeout(200)

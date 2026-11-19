@@ -1144,15 +1144,7 @@ O.openCustomProvider=parentSheet=>{
 };
 
 // ---- themes / help ----
-O.openThemes=()=>{const th=[['opencode','OpenCode','#101014','#fab283'],['amoled','AMOLED','#000000','#ffffff'],['light','Светлая','#faf9f7','#c2641c'],['tokyonight','Tokyo Night','#1a1b26','#7aa2f7'],['nord','Nord','#2e3440','#88c0d0'],['gruvbox','Gruvbox','#282828','#fabd2f']];
-  const auto=O.store.get('themeAuto',false);
-  const s=O.sheet('Оформление',h('div',null,
-    O.toggleRow('bulb',O.tr('Auto by system','Авто по системе'),O.tr('Follow Android dark/light setting','Следовать тёмной/светлой теме Android'),auto,v=>{
-      O.store.set('themeAuto',v);
-      if(v&&O.applyAutoTheme)O.applyAutoTheme();else O.saveOpts();
-    }),
-    th.map(t=>O.listRow(h('span',{style:{width:'22px',height:'22px',borderRadius:'6px',background:t[2],border:'3px solid '+t[3],flex:'none'}}),t[1],'',S.opts.theme===t[0]?O.icon('check','ok'):null,()=>{S.opts.theme=t[0];O.store.set('themeManual',t[0]);O.store.set('themeAuto',false);O.saveOpts();s.close()})),
-    h('div',{class:'grp'},'Размер текста'),h('div',{class:'seg'},[13,14,15,16,18,20].map(n=>h('button',{class:S.opts.fs===n?'on':'',onclick:()=>{S.opts.fs=n;O.saveOpts();s.close()}},n)))))};
+// Theme picker lives in themes.js (24 built-ins + custom themes with live editor).
 O.openHelp=()=>O.sheet('Справка',h('div',null,h('div',{class:'grp'},'Команды'),O.builtins.map(b=>O.listRow(b.i,'/'+b.n,b.d,null,()=>{O.back();b.run()})),
   h('div',{class:'grp'},'Подсказки ввода'),h('div',{class:'note'},'@файл — упомянуть файл или папку.  !команда — выполнить команду оболочки в сессии.  Долгое нажатие на файл в дереве открывает действия.')));
 })();

@@ -3395,3 +3395,133 @@ html[data-theme=light] {
   0% { box-shadow: 0 0 0 2px var(--acc); border-radius: 12px; }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
+
+/* ==========================================================================
+   2.20 INLINE COMMAND PACKS (Claude-style)
+   text → [↓ one button per pack of tools] → text → … → conclusion.
+   The head is the outline: what the pack did, files, diff stats, duration.
+   ========================================================================== */
+.cmd-group {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--card) 72%, var(--bg));
+  overflow: hidden;
+  transition: border-color .18s, background .18s;
+}
+.cmd-group.running { border-color: color-mix(in srgb, var(--acc) 45%, var(--line)); }
+.cmd-group.has-err { border-color: color-mix(in srgb, var(--err) 50%, var(--line)); }
+.cmd-group.open { background: var(--card); }
+.cg-head {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; min-height: 46px; padding: 9px 12px;
+  text-align: left;
+}
+.cg-head:active { background: color-mix(in srgb, var(--fg) 4%, transparent); }
+.cg-head .cg-ic { flex: none; color: var(--acc); }
+.cg-head .spin { flex: none; }
+.cg-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+.cg-title {
+  font-size: 13px; font-weight: 650; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cg-sub {
+  font-size: 11.5px; color: var(--mut);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cg-err { flex: none; font-size: 11px; color: var(--err); font-weight: 700; }
+.cg-diff { flex: none; display: inline-flex; gap: 5px; font-size: 11.5px; font-weight: 700; font-family: ui-monospace, monospace; }
+.cg-diff .add { color: var(--ok); font-style: normal; }
+.cg-diff .del { color: var(--err); font-style: normal; }
+.cg-meta { flex: none; font-size: 11px; color: var(--mut); white-space: nowrap; }
+.cg-chev { flex: none; color: var(--mut); transition: transform .18s var(--ease-out); }
+.cg-chev svg { width: 15px; height: 15px; }
+.cmd-group.open .cg-chev { transform: rotate(180deg); }
+.cg-list { display: none; border-top: 1px solid var(--line); padding: 8px 10px 10px; }
+.cmd-group.open .cg-list { display: block; animation: cgIn .18s var(--ease-out); }
+@keyframes cgIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.cg-list .tool { margin: 6px 0; background: color-mix(in srgb, var(--bg2) 65%, var(--card)); }
+.cg-outline {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 4px 4px 8px; margin-bottom: 4px;
+  border-bottom: 1px dashed var(--line);
+}
+.cg-outline-t {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--mut);
+}
+.cg-outline-t .ic svg { width: 13px; height: 13px; }
+.cg-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.cg-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border: 1px solid var(--line);
+  padding: 3px 9px; border-radius: 999px; max-width: 100%;
+}
+.cg-chip .ic svg { width: 12px; height: 12px; color: var(--acc); }
+.cg-chip .fi { flex: 0 0 14px !important; }
+.cg-chip .fi svg { width: 14px; height: 14px; }
+.cg-chip.file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ==========================================================================
+   2.20 THEME GALLERY & CUSTOM EDITOR
+   ========================================================================== */
+.theme-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+}
+@media (min-width: 560px) { .theme-grid { grid-template-columns: repeat(4, 1fr); } }
+.theme-card {
+  position: relative;
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  padding: 9px; border-radius: 14px;
+  border: 1.5px solid var(--line);
+  background: var(--card);
+  text-align: left;
+  transition: border-color .15s, transform .1s;
+}
+.theme-card:active { transform: scale(.97); }
+.theme-card.on { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
+.theme-card b { font-size: 12px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-tag { font-size: 10px; color: var(--mut); text-transform: uppercase; letter-spacing: .05em; }
+.theme-sw {
+  display: flex; align-items: center; gap: 4px;
+  height: 34px; padding: 0 8px;
+  border-radius: 9px; border: 1px solid;
+}
+.theme-sw i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.theme-edit {
+  position: absolute; top: 5px; right: 5px;
+  width: 26px; height: 26px; display: grid; place-items: center;
+  border-radius: 8px; color: var(--mut);
+  background: color-mix(in srgb, var(--bg) 65%, transparent);
+}
+.theme-edit .ic svg { width: 13px; height: 13px; }
+.theme-preview {
+  border: 1px solid var(--line2); border-radius: 14px;
+  padding: 12px; margin: 10px 0;
+  display: flex; flex-direction: column; gap: 8px;
+  transition: background .15s;
+}
+.tp-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tp-bubble {
+  border: 1px solid; border-radius: 12px 12px 12px 4px;
+  padding: 7px 11px; font-size: 12.5px; max-width: 70%;
+}
+.tp-user { border-radius: 12px 12px 4px 12px; padding: 7px 13px; font-size: 12.5px; font-weight: 700; }
+.tp-code {
+  font-family: ui-monospace, monospace; font-size: 12px;
+  border-radius: 9px; padding: 8px 10px;
+}
+.theme-fields { display: flex; flex-direction: column; gap: 4px; }
+.theme-field {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 2px;
+}
+.theme-field label { font-size: 13px; color: var(--fg); flex: 1 1 auto; }
+.theme-field-inputs { display: flex; align-items: center; gap: 7px; flex: none; }
+.theme-field input[type=color] {
+  width: 40px; height: 34px; padding: 2px; border: 1px solid var(--line2);
+  border-radius: 9px; background: var(--bg2); cursor: pointer;
+}
+.theme-hex { width: 92px; font-size: 12.5px !important; padding: 7px 8px !important; }
