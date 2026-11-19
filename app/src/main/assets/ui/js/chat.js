@@ -57,6 +57,8 @@ O.chatInit=root=>{
   ta.addEventListener('keydown',e=>{if(e.key!=='ArrowDown')return;if(!ta.value.trim()){e.preventDefault();histIdx=Math.max(-1,histIdx-1);ta.value=histIdx<0?'':(O.promptHistory()[histIdx]||'');onInput()}});
   fileIn=h('input',{type:'file',multiple:true,class:'hide',accept:'image/*,application/pdf,text/*',onchange:onFiles});
   const plusBtn=h('button',{class:'attach-btn',onclick:()=>fileIn.click()},O.icon('plus'));
+  const outlineBtn=h('button',{class:'hud-icon-btn outline-btn',title:O.tr('Conversation outline','Оглавление диалога'),onclick:()=>O.openOutline&&O.openOutline()},O.icon('list'));
+  const ctxBtn=h('button',{class:'hud-icon-btn ctx-btn',title:O.tr('Context snapshot','Снимок контекста'),onclick:()=>O.openContextPreview&&O.openContextPreview()},O.icon('eye'));
   const planBtn=h('button',{class:'hud-icon-btn plan-btn',title:O.tr('Step-by-step plan','Пошаговый план'),onclick:()=>O.openPlan()},O.icon('list'));
   const syncPlanBtn=()=>{planBtn.classList.toggle('hide',!O.planMode())};
   bus.on('planMode',syncPlanBtn);syncPlanBtn();
@@ -72,7 +74,7 @@ O.chatInit=root=>{
   O.longPress(micBtn,()=>{if(O.voiceDictate)O.voiceDictate();else onMic();},450);
   bus.on('call',()=>micBtn.classList.toggle('on-call',!!(O.callActive&&O.callActive())));
   sendBtn=h('button',{id:'send',onclick:onSend},O.icon('send'));
-  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,planBtn,agentChip,modelChip);
+  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,outlineBtn,ctxBtn,planBtn,agentChip,modelChip);
   const cbarRight=h('div',{class:'cbar-right'},micBtn,sendBtn);
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
@@ -105,12 +107,16 @@ O.chatInit=root=>{
   bus.on('sessions',()=>{renderRevert()});
   bus.on('mm:progress',renderMmProgress);
   bus.on('idle',sid=>{
-    if(sid===S.sid&&O._turnStart&&O.recordTurnTime){O.recordTurnTime(S.sid,Date.now()-O._turnStart);O._turnStart=0}
-    if(sid===S.sid&&O.dequeuePrompt){
+    if(sid!==S.sid)return;
+    if(bus._idleAt&&bus._idleAt[sid]&&Date.now()-bus._idleAt[sid]<800)return;
+    (bus._idleAt=bus._idleAt||{})[sid]=Date.now();
+    if(O.clearInflight)O.clearInflight();
+    if(O._turnStart&&O.recordTurnTime){O.recordTurnTime(S.sid,Date.now()-O._turnStart);O._turnStart=0}
+    if(O.dequeuePrompt){
       const next=O.dequeuePrompt(S.sid);
-      if(next&&next.text)setTimeout(()=>{if(!busy())O.chatSendText(next.text)},400);
+      if(next&&(next.text||(next.atts&&next.atts.length)))setTimeout(()=>{if(!busy())O.chatSendText(next.text,{atts:next.atts,mentions:next.mentions})},400);
     }
-    if(sid===S.sid&&O.autoCompact&&O.autoCompact()){
+    if(O.autoCompact&&O.autoCompact()){
       const u=O.contextUsage(S.sid);
       const done=O.store.get('autoCompactAt.'+S.sid,0);
       if(u&&u.pct!=null&&u.pct>=(O.compactThreshold?O.compactThreshold():85)&&Date.now()-done>120000&&S.model){
@@ -232,7 +238,25 @@ function renderAll(){
   if(O.chatSkeletonOff)O.chatSkeletonOff();
   msgsEl.innerHTML='';msgEls.clear();partEls.clear();revKey=revisionKey();
   const list=S.sid?O.visibleMsgs(S.sid):[];
-  if(draftSid!==S.sid){draftSid=S.sid;clearTimeout(draftTimer);ta.value=S.sid?(O.getDraft(S.sid)||''):'';autosize();updateSend()}
+  if(draftSid!==S.sid){
+    draftSid=S.sid;clearTimeout(draftTimer);
+    ta.value=S.sid?(O.getDraft(S.sid)||''):'';
+    atts=[];mentions=[];
+    const sid0=S.sid;
+    if(sid0&&O.getDraftEx){
+      draftRestoring=true;
+      O.getDraftEx(sid0).then(ex=>{
+        draftRestoring=false;
+        if(!ex||draftSid!==sid0||S.sid!==sid0)return;
+        const hasAtts=Array.isArray(ex.atts)&&ex.atts.length;
+        const hasMentions=Array.isArray(ex.mentions)&&ex.mentions.length;
+        if((hasAtts||hasMentions)&&!atts.length){
+          atts=hasAtts?ex.atts:[];mentions=hasMentions?ex.mentions:[];renderAtts();
+        }
+      }).catch(()=>{draftRestoring=false});
+    }
+    renderAtts();autosize();updateSend();
+  }
   else if(S.sid&&!ta.value){const draft=O.getDraft(S.sid);if(draft){ta.value=draft;autosize();updateSend()}}
   if(!list.length){pendingHead=[];showEmpty()}
   else{
@@ -243,7 +267,7 @@ function renderAll(){
     for(let i=start;i<list.length;i++)fr.append(buildMsg(list[i]));
     msgsEl.append(fr);
   }
-  scrollEnd(true);pinBottom(list.length>60?6000:4000);renderDock();renderStatus();renderContinue();renderRevert();renderTodos();updateSend();updateChips()}
+  scrollEnd(true);pinBottom(list.length>60?6000:4000);renderDock();renderStatus();renderContinue();renderRecovery();renderRevert();renderTodos();updateSend();updateChips()}
 
 function maybeLoadOlder(){
   if(loadingOlder||!pendingHead.length)return;
@@ -291,15 +315,28 @@ function ensureMsg(m){
     if(stick)msgsEl.insertBefore(el,before);
     else keepAnchor(()=>msgsEl.insertBefore(el,before));}
   // Updating a message above the viewport must not move what the user is reading.
-  else if(stick){syncParts(el,m);metaUpdate(el,m)}
-  else keepAnchor(()=>{syncParts(el,m);metaUpdate(el,m)})}
+  else if(stick){syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m)}
+  else keepAnchor(()=>{syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m)})}
 function buildMsg(m){
   const el=h('div',{class:'msg '+m.info.role,'data-id':m.info.id},h('div',{class:'m-body'}),h('div',{class:'m-meta'}));
   O.longPress(el,()=>{if(O.native.haptic)O.native.haptic('tick');msgMenu(m)},520);
-  msgEls.set(m.info.id,el);syncParts(el,m);metaUpdate(el,m);return el}
+  msgEls.set(m.info.id,el);syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m);return el}
+// An assistant message whose parts are all hidden (synthetic prompt, no answer yet) rendered as a
+// blank card. Show an explicit state instead: working spinner, or "no visible content".
+function msgPlaceholder(el,m){
+  const old=el.firstChild.querySelector('.msg-placeholder');if(old)old.remove();
+  if(m.info.role!=='assistant')return;
+  if(m.parts.some(p=>showPart(m,p)))return;
+  if(m.info.error)return; // the error box explains the empty body
+  const st=S.status[m.info.sessionID];
+  const working=(st&&st.type!=='idle')||m.parts.some(p=>p.type==='tool'&&p.state&&(p.state.status==='running'||p.state.status==='pending'));
+  el.firstChild.append(h('div',{class:'msg-placeholder mut s'},
+    working?h('span',{class:'spin'}):O.icon('info'),
+    working?O.tr('Working — no visible output yet','Работает — видимого ответа пока нет'):O.tr('No visible content in this message','В этом сообщении нет видимого содержимого')));
+}
 function showPart(m,p){
   if(m.info.role==='user')return(p.type==='text'&&!p.synthetic&&!p.ignored)||p.type==='file'||p.type==='agent';
-  switch(p.type){case'text':return true;case'reasoning':{if(!S.opts.thinking)return false;const t=p.text||p.reasoning||p.thinking||'';return String(t).trim()!==''||!(p.time&&p.time.end)}case'tool':case'patch':case'retry':case'compaction':return true}return false}
+  switch(p.type){case'text':return typeof p.text==='string'&&(p.text.trim()!==''||!(p.time&&p.time.end));case'reasoning':{if(!S.opts.thinking)return false;const t=p.text||p.reasoning||p.thinking||'';return String(t).trim()!==''||!(p.time&&p.time.end)}case'tool':case'patch':case'retry':case'compaction':return true}return false}
 function syncParts(el,m){
   const body=el.firstChild;const keep=new Set();let prev=null;
   for(const p of m.parts){if(!showPart(m,p))continue;keep.add(p.id);
@@ -613,6 +650,7 @@ function msgMenu(m){O.actions(m.info.role==='user'?'Сообщение':'Отв�
   m.info.role==='assistant'?{label:O.tr('Regenerate (more focused)','Перегенерировать (суше)'),sub:O.tr('Same prompt, lower temperature','Тот же запрос, ниже температура'),icon:'refresh',fn:()=>regenerate(m,'focused')}:null,
   m.info.role==='assistant'?{label:O.tr('Regenerate (more creative)','Перегенерировать (смелее)'),sub:O.tr('Same prompt, higher temperature','Тот же запрос, выше температура'),icon:'bulb',fn:()=>regenerate(m,'creative')}:null,
   {label:'Форк сессии отсюда',sub:'Новая сессия со всей историей до этого места',icon:'branch',fn:()=>forkAt(m)},
+  {label:O.tr('Branch from here','Ветка отсюда'),sub:O.tr('New branch keeps this history; the original stays untouched','Новая ветка сохраняет историю; исходная сессия не меняется'),icon:'branch',fn:()=>forkAt(m)},
   {label:O.tr('Restore files to this point','Откатить файлы к этому месту'),sub:O.tr('Project snapshots (checkpoints)','Точки восстановления проекта'),icon:'undo',fn:()=>O.openCheckpoints&&O.openCheckpoints()},
   {label:O.tr('New chat from this message','Новый чат с этого сообщения'),sub:O.tr('Fresh session, only this message as context','Новая сессия, только это сообщение как контекст'),icon:'plus',fn:()=>newChatFrom(m)}])}
 async function newChatFrom(m){
@@ -684,7 +722,7 @@ async function editAndRetry(m){
   setTimeout(()=>{if(O.chat&&O.chat.sendText)O.chat.sendText(edited.trim())},250);
 }
 
-async function forkAt(m){try{const s=await api('POST','/session/'+S.sid+'/fork',{messageID:m.info.id});await O.loadSessions();await O.openSession(s.id)}catch(e){O.toast(e.message)}}
+async function forkAt(m){try{const s=await api('POST','/session/'+S.sid+'/fork',{messageID:m.info.id});if(O.noteFork)O.noteFork(s.id,S.sid);await O.loadSessions();await O.openSession(s.id)}catch(e){O.toast(e.message)}}
 
 // ---- tools ----
 function toolMeta(p){const st=p.state||{},i=st.input||{},r=O.rel;
@@ -722,11 +760,13 @@ function toolBody(p){const st=p.state||{},i=st.input||{},md=st.metadata||{};
     if(sid)b.append(h('button',{class:'btn sm',style:{marginTop:'8px'},onclick:()=>openChild(sid)},'Открыть сессию субагента'));if(out)b.append(pre(out.slice(0,3000),'code-pre'));break}
   default:if(Object.keys(i).length)b.append(pre(JSON.stringify(i,null,2).slice(0,3000),'code-pre'));if(out)b.append(pre(out.slice(0,6000),'code-pre'))}
   if(st.status==='error'&&st.error)b.append(h('div',{class:'errbox'},String(st.error)));return b}
-function fillTool(el,p){const st=p.state||{},m=toolMeta(p),isOpen=S.opts.details&&open.has(p.id);
+function fillTool(el,p){const st=p.state||{},m=toolMeta(p),isOpen=open.has(p.id);
   el.className='part tool '+(st.status||'pending')+(isOpen?' open':'');el.textContent='';el._p=p;
   const stat=st.status==='running'||st.status==='pending'?h('span',{class:'spin'}):st.status==='error'?O.icon('alert','err'):O.icon('check','ok');
-  el.append(h('button',{class:'tool-h',onclick:()=>{if(!S.opts.details)return;manualParts.add(p.id);el._auto=0;open.has(p.id)?open.delete(p.id):open.add(p.id);fillTool(el,el._p)}},
-    O.icon(m.ic),h('span',{class:'t'},m.t),h('span',{class:'sub grow'},m.s||''),stat,S.opts.details?O.icon('chevR','chev'):null));
+  // Tool headers always toggle: gating on the "details" setting made taps dead when it was off,
+  // which looked like an empty, unresponsive card.
+  el.append(h('button',{class:'tool-h',onclick:()=>{manualParts.add(p.id);el._auto=0;open.has(p.id)?open.delete(p.id):open.add(p.id);fillTool(el,el._p)}},
+    O.icon(m.ic),h('span',{class:'t'},m.t||p.tool||O.tr('Tool','Инструмент')),h('span',{class:'sub grow'},m.s||''),stat,O.icon('chevR','chev')));
   if(isOpen)el.append(h('div',{class:'tool-b'},toolBody(p)))}
 async function openChild(sid){try{if(!O.child(sid)){const s=await api('GET','/session/'+sid);(S.childSessions=S.childSessions||{})[sid]=s}}catch{}trail.push(S.sid);await O.openSession(sid);bus.emit('session')}
 O.openChild=openChild;
@@ -831,6 +871,98 @@ function renderContinue(){
       if(v!==null)O.continueGeneration(S.sid,{custom:v||undefined});
     }},O.icon('edit'))));
 }
+// ---- conversation outline: jump to any of your prompts in a long chat ----
+O.openOutline=()=>{
+  if(!S.sid)return O.toast(O.tr('Open a session first','Сначала откройте сессию'),2000);
+  const list=O.visibleMsgs(S.sid).filter(m=>m.info.role==='user');
+  const body=h('div');
+  if(!list.length)body.append(h('div',{class:'note'},O.tr('No prompts yet','Запросов пока нет')));
+  list.forEach((m,i)=>{
+    const txt=msgText(m).replace(/\s+/g,' ').trim();
+    const t=m.info.time&&m.info.time.created?new Date(m.info.time.created).toLocaleTimeString().slice(0,5):'';
+    body.append(h('button',{class:'settings-row',onclick:()=>{s.close();O.jumpToMsg(m.info.id)}},
+      h('div',{class:'settings-row-icon'},h('b',{style:{fontSize:'12px'}},String(i+1))),
+      h('div',{class:'settings-row-text'},h('b',{style:{whiteSpace:'normal'}},txt.slice(0,90)||O.tr('(attachment)','(вложение)')),h('span',null,t))));
+  });
+  const s=O.sheet(O.tr('Conversation outline','Оглавление диалога'),body,{full:true});
+};
+// Scrolls to a message, inflating older chunks first when it is above the rendered window.
+O.jumpToMsg=mid=>{
+  let el=msgEls.get(mid),guard=0;
+  while(!el&&pendingHead.length&&guard++<200){
+    const start=Math.max(0,pendingHead.length-RENDER_CHUNK);
+    const chunk=pendingHead.slice(start);
+    pendingHead=pendingHead.slice(0,start);
+    const fr=document.createDocumentFragment();
+    chunk.forEach(m=>fr.append(buildMsg(m)));
+    const first=msgsEl.firstChild;
+    if(first)msgsEl.insertBefore(fr,first);else msgsEl.append(fr);
+    el=msgEls.get(mid);
+  }
+  if(!el){O.toast(O.tr('Message not found','Сообщение не найдено'),2000);return}
+  stick=false;jumpEl.classList.remove('hide');
+  suppressScroll=true;
+  el.scrollIntoView({block:'center'});
+  requestAnimationFrame(()=>{suppressScroll=false});
+  el.classList.add('msg-flash');setTimeout(()=>el.classList.remove('msg-flash'),1600);
+};
+// ---- context snapshot: what the model will actually receive on the next send ----
+O.openContextPreview=()=>{
+  const body=h('div');
+  const row=(icon,label,val)=>h('div',{class:'settings-row'},
+    h('div',{class:'settings-row-icon'},O.icon(icon)),
+    h('div',{class:'settings-row-text'},h('b',null,label),h('span',{style:{whiteSpace:'normal',wordBreak:'break-all'}},val)));
+  const ag=S.agents.find(a=>a.name===S.agent);
+  const mmA=O.mmActive&&O.mmActive();
+  body.append(h('div',{class:'settings-card'},
+    row('bot',O.tr('Mode / agent','Режим / агент'),mmA?(O.tr('Team: ','Команда: ')+mmA.name):(ag?ag.name:S.agent)),
+    row('cpu',O.tr('Model','Модель'),S.model?S.model.providerID+'/'+S.model.modelID:O.tr('not selected','не выбрана')),
+    row('folder',O.tr('Project folder','Папка проекта'),O.sessionDir?O.sessionDir(S.sid):(S.dir||'/root'))));
+  const caps=S.model&&O.modelCapsOf?O.modelCapsOf(S.model.providerID,S.model.modelID):null;
+  if(caps)body.append(h('div',{class:'settings-card'},
+    row('image',O.tr('Images','Изображения'),caps.images===true?O.tr('supported','поддерживаются'):caps.images===false?O.tr('not supported','не поддерживаются'):O.tr('unknown','неизвестно')),
+    row('terminal',O.tr('Tool calls','Вызовы инструментов'),caps.tools===true?O.tr('supported','поддерживаются'):caps.tools===false?O.tr('not supported','не поддерживаются'):O.tr('unknown','неизвестно'))));
+  const styleTxt=O.answerStyleText?O.answerStyleText():'';
+  const extras=[];
+  if(styleTxt)extras.push(O.tr('Answer style','Стиль ответа'));
+  if(O.dryRun&&O.dryRun())extras.push('Dry-run');
+  if(mmA&&mmA.memory!==false&&O.mmMemory(mmA))extras.push(O.tr('Team memory','Память команды'));
+  if(extras.length)body.append(h('div',{class:'settings-card'},row('edit',O.tr('Extra instructions','Доп. инструкции'),extras.join(' · '))));
+  const used=mentions.filter(m=>ta.value.includes(m.tok));
+  if(used.length||atts.length){
+    const card=h('div',{class:'settings-card'});
+    used.forEach(m=>card.append(row('at',m.tok,(m.part&&m.part.source&&m.part.source.path)||O.tr('mention','упоминание'))));
+    atts.forEach(a=>card.append(row('paperclip',a.filename||'file',a.mime+' · ~'+Math.max(1,Math.round((a.url||'').length*0.75/1024))+' KB')));
+    body.append(h('div',{class:'grp'},O.tr('Attachments & mentions','Вложения и упоминания')),card);
+  }
+  const tok=S.sid&&O.calcSessionTokens?O.calcSessionTokens(S.sid):null;
+  if(tok&&tok.total)body.append(h('div',{class:'settings-card'},row('zap',O.tr('Session context','Контекст сессии'),O.fmtK(tok.total)+' tok'+(tok.pct!=null?' · '+tok.pct+'%':''))));
+  const rulesPath=(O.sessionDir?O.sessionDir(S.sid):S.dir||'/root')+'/AGENTS.md';
+  body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{
+    const r=O.native.readText(rulesPath);
+    const ta2=h('textarea',{class:'mono',rows:16});ta2.value=r.ok?r.text:O.tr('(no rules file)','(файла правил нет)');ta2.readOnly=true;
+    O.sheet(O.tr('Rules the agent reads','Правила, которые читает агент'),ta2,{full:true});
+  }},O.icon('doc'),O.tr('Show AGENTS.md','Показать AGENTS.md')));
+  O.sheet(O.tr('Context snapshot','Снимок контекста'),body,{full:true});
+};
+// ---- crash recovery: an app kill mid-generation left the turn silent ----
+let recEl=null;
+function renderRecovery(){
+  const host=statusEl.parentNode;
+  if(!recEl){recEl=h('div',{class:'hide',style:{padding:'0 10px 6px'}});host.insertBefore(recEl,statusEl)}
+  const fl=O.inflight&&O.inflight();
+  const st=fl&&S.status[fl.sid];
+  const busyNow=st&&st.type!=='idle';
+  const show=fl&&fl.sid===S.sid&&!busyNow&&Date.now()-fl.at<86400000&&!(O.canContinue&&O.canContinue(S.sid));
+  if(!show){recEl.classList.add('hide');recEl.textContent='';return}
+  recEl.classList.remove('hide');recEl.textContent='';
+  recEl.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'8px',padding:'8px 12px'}},
+    O.icon('refresh'),
+    h('span',{class:'grow',style:{fontSize:'13px'}},O.tr('Request was interrupted by an app restart','Запрос прерван перезапуском приложения')),
+    h('button',{class:'btn sm pri',onclick:()=>{O.clearInflight();renderRecovery();O.continueGeneration(S.sid)}},O.tr('Continue','Продолжить')),
+    fl.text?h('button',{class:'btn sm',onclick:()=>{const t=fl.text;O.clearInflight();renderRecovery();O.insertPrompt(t)}},O.tr('Edit','Править')):null,
+    h('button',{class:'ibtn s',title:O.tr('Dismiss','Скрыть'),onclick:()=>{O.clearInflight();renderRecovery()}},O.icon('x'))));
+}
 // One status line that answers "what is happening right now": phase, current tool and elapsed time.
 let statusT=null,statusPhase='';
 function statusPhrase(){
@@ -851,7 +983,7 @@ function statusPhrase(){
 }
 function renderStatus(){
   const s=S.status[S.sid];
-  renderContinue();
+  renderContinue();renderRecovery();
   statusEl.textContent='';
   if(!s||s.type==='idle'){statusEl.classList.add('hide');clearInterval(statusT);statusT=null;S._statusSince=0;return}
   statusEl.classList.remove('hide');
@@ -1109,7 +1241,9 @@ const BUILTINS=[
  {n:'redo',d:'Вернуть отменённые изменения',i:'redo',run:()=>doRedo()},
  {n:'compact',d:'Сжать сессию, чтобы освободить контекст',i:'refresh',run:()=>doCompact()},
  {n:'style',d:'Стиль ответа (10 пресетов)',i:'edit',run:()=>O.openAnswerStyles()},
- {n:'search',d:'Глобальный поиск',i:'search',run:()=>O.openGlobalSearch()},
+  {n:'search',d:'Глобальный поиск',i:'search',run:()=>O.openGlobalSearch()},
+  {n:'outline',d:'Оглавление диалога',i:'list',run:()=>O.openOutline()},
+  {n:'context',d:'Снимок контекста перед отправкой',i:'eye',run:()=>O.openContextPreview()},
  {n:'resources',d:'Монитор ресурсов',i:'cpu',run:()=>O.openResources()},
  {n:'calls',d:'История звонков',i:'wave',run:()=>O.openCallHistory()},
  {n:'tour',d:'Обучающий тур',i:'info',run:()=>O.openTour()},
@@ -1148,8 +1282,15 @@ function showPop(items){popEl.textContent='';if(!items.length){hidePop();return}
 let atTimer;
 let draftTimer;
 let draftSid=null;
+// Guard: while the async draft restore is loading, empty renders must not overwrite the stored draft.
+let draftRestoring=false;
+function saveDraftNow(){
+  if(!S.sid||draftRestoring)return;
+  if(O.setDraftEx)O.setDraftEx(S.sid,{atts:atts.slice(0,8),mentions:mentions.slice(0,20)});
+}
+function draftEx(){return{atts:atts.slice(0,8),mentions:mentions.slice(0,20)}}
 function onInput(){autosize();updateSend();const v=ta.value,pos=ta.selectionStart||0,before=v.slice(0,pos);
-  if(S.sid){clearTimeout(draftTimer);draftTimer=setTimeout(()=>O.setDraft(S.sid,v),300)}
+  if(S.sid){clearTimeout(draftTimer);draftTimer=setTimeout(()=>{O.setDraft(S.sid,v);saveDraftNow()},300)}
   const sm=/^\/(\S*)$/.exec(before);
   if(sm){const q=sm[1].toLowerCase();
     const srv=(S.commands||[]).filter(c=>!BUILTINS.some(b=>b.n===c.name)).map(c=>({t:'/'+c.name,d:c.description||'Пользовательская команда',icon:O.icon('slash'),f:c.name,pick:()=>{ta.value='/'+c.name+' ';ta.focus();onInput()}}));
@@ -1186,7 +1327,7 @@ O.chatAttach=list=>{
   renderAtts();
 };
 function renderAtts(){attsEl.textContent='';attsEl.classList.toggle('hide',!atts.length);
-  atts.forEach((a,i)=>attsEl.append(h('span',{class:'chip'},a.mime.startsWith('image/')?h('img',{src:a.url,style:{height:'22px',borderRadius:'4px'}}):O.fileIcon(a.filename),h('span',null,a.filename),h('button',{onclick:()=>{atts.splice(i,1);renderAtts();updateSend()}},O.icon('x')))));updateSend()}
+  atts.forEach((a,i)=>attsEl.append(h('span',{class:'chip'},a.mime.startsWith('image/')?h('img',{src:a.url,style:{height:'22px',borderRadius:'4px'}}):O.fileIcon(a.filename),h('span',null,a.filename),h('button',{onclick:()=>{atts.splice(i,1);renderAtts();updateSend();saveDraftNow()}},O.icon('x')))));updateSend();saveDraftNow()}
 async function onSend(){
   if(busy()&&!ta.value.trim()&&!atts.length){try{await api('POST','/session/'+S.sid+'/abort',{})}catch(e){O.toast(e.message)}return}
   const text=ta.value.trim();if(!text&&!atts.length)return;
@@ -1202,7 +1343,7 @@ async function onSend(){
     clear();try{const sid=await sess();O.maybeAutoTitle(sid,text);api('POST','/session/'+sid+'/shell',{agent:S.agent,model:S.model,command:cmd},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}
   // (7) While the agent is busy a typed message goes to the queue instead of interrupting.
   if(busy()&&(text||atts.length)&&O.enqueuePrompt&&S.sid){
-    O.enqueuePrompt(S.sid,text);
+    O.enqueuePrompt(S.sid,text,draftEx());
     clear();
     O.toast(O.tr('Queued — will send when the agent finishes','В очереди — отправится, когда агент закончит'),2500);
     return;
@@ -1240,6 +1381,7 @@ async function onSend(){
       try{
         const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:mdl});m.local=true;
         m.parts=parts.map((p,k)=>Object.assign({id:'prt_local'+k,sessionID:sid,messageID:mid},p));bus.emit('msg',sid,m);scrollEnd(true);
+        if(O.markInflight)O.markInflight(sid,mid,text);
         await api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:mdl,variant:S.variant||undefined,parts},{timeout:30000});
         usedModel=mdl;lastErr=null;sentMid=mid;sentSid=sid;sentTries=chain.slice(i+1);
         O._turnStart=turnStart;
@@ -1266,6 +1408,7 @@ async function onSend(){
     if(usedModel&&S.model&&(usedModel.providerID!==S.model.providerID||usedModel.modelID!==S.model.modelID)){O.setLastFallback({model:usedModel.modelID,at:Date.now()});O.toast(O.tr('Answered by fallback model: ','Ответила резервная модель: ')+usedModel.modelID,2500)}
     else if(O.setLastFallback)O.setLastFallback(null);
   }catch(e){
+    if(O.clearInflight)O.clearInflight();
     if(O.isQuotaError(e)){
       O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));
       O.showQuotaAccountModal(e.message);
@@ -1274,12 +1417,13 @@ async function onSend(){
     }
     ta.value=text;onInput();
   }}
-function clear(){histIdx=-1;clearTimeout(draftTimer);if(S.sid)O.clearDraft(S.sid);draftSid=S.sid;ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
-// Programmatic send used by call mode and widgets: the text goes through the same pipeline as a
-// tapped message (tools, fallback chain, checkpoint), so a spoken phrase behaves exactly like typing.
-O.chatSendText=text=>{
+function clear(){histIdx=-1;clearTimeout(draftTimer);draftRestoring=false;if(S.sid)O.clearDraft(S.sid);draftSid=S.sid;ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
+// Programmatic send used by call mode, widgets and the queue: same pipeline as a tapped message.
+O.chatSendText=(text,ex)=>{
   const t=String(text||'').trim();
-  if(!t)return false;
+  const hasEx=ex&&((ex.atts&&ex.atts.length)||(ex.mentions&&ex.mentions.length));
+  if(!t&&!hasEx)return false;
+  if(ex){atts=atts.concat((ex.atts||[]).slice(0,8));mentions=mentions.concat(ex.mentions||[]);renderAtts()}
   ta.value=t;autosize();updateSend();
   try{onSend()}catch(e){return false}
   return true;

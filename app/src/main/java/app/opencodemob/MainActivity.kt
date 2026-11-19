@@ -1271,6 +1271,24 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        /** Actionable notification tied to a session/question (approve, answer, stop from the shade). */
+        @JavascriptInterface fun notifyAction(title: String, text: String, sessionId: String, questionId: String) {
+            runOnUiThread {
+                try {
+                    Notifier.event(this@MainActivity, Notifier.ACTION, title, text,
+                        sessionId = sessionId, questionId = questionId)
+                } catch (_: Exception) {}
+            }
+        }
+
+        /** Inline MM reply delivered by ActionReceiver through Prefs (one-shot). */
+        @JavascriptInterface fun mmReplyQid(): String {
+            val q = Prefs.get(this, "mm_reply_qid"); Prefs.put(this, "mm_reply_qid", ""); return q
+        }
+        @JavascriptInterface fun mmReplyText(): String {
+            val t = Prefs.get(this, "mm_reply_text"); Prefs.put(this, "mm_reply_text", ""); return t
+        }
+
         // --- continuous speech input (call mode) ---
         @JavascriptInterface fun sttStart(mode: String, lang: String, bias: String, single: Boolean) {
             runOnUiThread {

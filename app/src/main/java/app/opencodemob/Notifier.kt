@@ -109,6 +109,15 @@ object Notifier {
             b.addAction(0, "Отклонить", action(c, id, 2, "permission_reject", sessionId, permissionId))
         } else if (kind == ACTION && questionId.isNotEmpty()) {
             b.addAction(0, "Открыть вопрос", open(c, sessionId))
+            // Answer a simple question without opening the app.
+            b.addAction(androidx.core.app.RemoteInput.Builder("reply_text")
+                .setLabel("Ответить").build().let { ri ->
+                NotificationCompat.Action.Builder(0, "Ответить", replyAction(c, id, 7, sessionId, questionId))
+                    .addRemoteInput(ri).setAllowGeneratedReplies(true).build()
+            })
+        } else if (kind == ACTION) {
+            b.addAction(0, "Открыть", open(c, sessionId))
+            if (sessionId.isNotEmpty()) b.addAction(0, "Стоп", action(c, id, 3, "abort", sessionId, ""))
         }
         if (kind == DONE && sessionId.isNotEmpty()) {
             b.addAction(0, "Открыть", open(c, sessionId))
@@ -118,6 +127,16 @@ object Notifier {
             b.addAction(0, "Настройки", open(c, sessionId))
         }
         try { NotificationManagerCompat.from(c).notify(id, b.build()) } catch (_: SecurityException) {}
+    }
+
+    private fun replyAction(c: Context, notifId: Int, slot: Int, sessionId: String, questionId: String): PendingIntent {
+        val i = Intent(c, ActionReceiver::class.java).apply {
+            putExtra("op_action", "question_reply")
+            putExtra("session_id", sessionId)
+            putExtra("question_id", questionId)
+            putExtra("notif_id", notifId)
+        }
+        return PendingIntent.getBroadcast(c, notifId * 10 + slot, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
     }
 
     /** Media job finished: tapping opens the Media screen, not a chat. */

@@ -72,7 +72,7 @@ O.upsertMsg=info=>{const s=O.msgs(info.sessionID);let m=s.idx.get(info.id);
 // appears, disappears, another appears". Text must only ever grow while the part is unfinished.
 const mergePart=(cur,next)=>{
   if(!cur)return next;
-  const done=!!(next.time&&next.time.end);
+  const done=!!(next.time&&next.time.end)||!!(next.state&&next.state.time&&next.state.time.end);
   const out=Object.assign({},next);
   if(!done){
     const curT=cur.text||'',nextT=typeof next.text==='string'?next.text:'';
@@ -80,6 +80,19 @@ const mergePart=(cur,next)=>{
     for(const f of ['reasoning','thinking']){
       const a=cur[f]||'',b=typeof next[f]==='string'?next[f]:'';
       if(a.length>b.length&&a.startsWith(b))out[f]=a;
+    }
+    // Tool parts: a late snapshot with an empty state must not wipe a richer running/completed
+    // state we already have — that rendered tool calls as empty cards.
+    if(next.type==='tool'&&cur.state){
+      const cs=cur.state,ns=next.state;
+      const rank={pending:0,running:1,completed:2,error:2};
+      if(!ns||!ns.status||(rank[ns.status]||0)<(rank[cs.status]||0))out.state=cs;
+      else if(ns.status===cs.status){
+        out.state=Object.assign({},ns);
+        if(!out.state.input&&cs.input)out.state.input=cs.input;
+        if(out.state.output==null&&cs.output!=null)out.state.output=cs.output;
+        if(!out.state.metadata&&cs.metadata)out.state.metadata=cs.metadata;
+      }
     }
   }
   return out;
@@ -104,14 +117,14 @@ const pageKey=(sid,page)=>'msgs:'+sid+':p'+page;
 const writeMsgs=sid=>{
   const list=O.msgs(sid).list;
   const hot=list.slice(-HOT).map(m=>({info:m.info,parts:m.parts}));
-  O.kv.set('msgs:'+sid,hot);
   // archive everything that just fell out of the hot window, one page per 300 messages
   const older=list.slice(0,Math.max(0,list.length-HOT));
-  if(older.length<=ARCH)return;
-  const page=Math.floor((older.length-1)/ARCH);
-  const slice=older.slice(page*ARCH,(page+1)*ARCH).map(m=>({info:m.info,parts:m.parts}));
-  O.kv.set(pageKey(sid,page),slice);
-  O.kv.set('msgs:'+sid+':pages',page+1);
+  const pages=Math.ceil(older.length/ARCH);
+  return tx('readwrite',(s,res,t)=>{
+    t.oncomplete=()=>res(true);t.onabort=t.onerror=()=>res(false);
+    for(let p=0;p<pages;p++)s.put(older.slice(p*ARCH,(p+1)*ARCH).map(m=>({info:m.info,parts:m.parts})),pageKey(sid,p));
+    s.put(pages,'msgs:'+sid+':pages');s.put(hot,'msgs:'+sid);
+  }).catch(()=>false);
 };
 // Loads hot window plus every archive page, oldest first, and prunes duplicates.
 O.loadCachedMsgs=async sid=>{
@@ -179,27 +192,42 @@ O.syncSessionMessages=async(sid)=>{
 O.startLiveSync=(sid)=>{
   if(liveSyncTimer)return;
   let busy=false;
+  // An idle session must keep a slow heartbeat: SSE drops happen (background freeze, network
+  // blip), and without any polling the UI never noticed the agent started until a restart.
+  let ticks=0;
   liveSyncTimer=setInterval(async()=>{
     if(busy)return; // a slow status request used to overlap with the next tick
+    const st0=S.status[S.sid];
+    const isIdle=!st0||st0.type==='idle';
+    ticks++;
+    if(isIdle&&ticks%2!==0)return; // idle: check every 6s, busy: every 3s
     busy=true;
     try{
       if(!S.sid){O.stopLiveSync();return}
       try{
         const stMap=await api('GET','/session/status',null,{timeout:4000});
         if(stMap){
-          for(const k in stMap)S.status[k]=normStatus(stMap[k]);
+          let changed=false;
+          for(const k in stMap){
+            const ns=normStatus(stMap[k]),old=S.status[k];
+            if(!old||old.type!==ns.type){S.status[k]=ns;if(k===S.sid)changed=true}
+          }
           if(!stMap[S.sid]||normStatus(stMap[S.sid]).type==='idle'){
+            const was=S.status[S.sid];
             S.status[S.sid]={type:'idle'};
-            bus.emit('status',S.sid);
-            O.stopLiveSync();
-            O.syncSessionMessages(S.sid);
-            return;
+            if(was&&was.type!=='idle'){
+              bus.emit('status',S.sid);
+              const fl=O.inflight&&O.inflight();if(fl&&fl.sid===S.sid)O.clearInflight();
+              O.syncSessionMessages(S.sid);
+            }
+          }else{
+            // The poller is the safety net for missed SSE events: without emitting here the UI
+            // never learned that the agent started working until a server restart.
+            if(changed)bus.emit('status',S.sid);
+            await O.syncSessionMessages(S.sid);
           }
         }
       }catch(_){}
-      const st=S.status[S.sid];
-      if(!st||st.type==='idle'){O.stopLiveSync();return}
-      await O.syncSessionMessages(S.sid);
     }finally{busy=false}
   },3000);
 };
@@ -229,13 +257,24 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
     bus.emit('sessions');if(did===S.sid){S.sid=null;O.stopLiveSync();bus.emit('open',null)}break}
   case'session.status':{
     const st=normStatus(p.status);
+    const was=S.status[p.sessionID];
     S.status[p.sessionID]=st;bus.emit('status',p.sessionID);
-    if(p.sessionID===S.sid&&st.type!=='idle')O.startLiveSync(p.sessionID);
+    if(st.type==='idle'&&was&&was.type!=='idle'){
+      bus.emit('idle',p.sessionID);
+      const fl=O.inflight&&O.inflight();if(fl&&fl.sid===p.sessionID)O.clearInflight();
+      if(p.sessionID===S.sid)O.syncSessionMessages(p.sessionID);
+    }
+    if(p.sessionID===S.sid)O.startLiveSync(p.sessionID);
     break}
-  case'session.idle':
-    S.status[p.sessionID]={type:'idle'};bus.emit('status',p.sessionID);bus.emit('idle',p.sessionID);
-    if(p.sessionID===S.sid){O.stopLiveSync();O.syncSessionMessages(p.sessionID)}
-    break;
+  case'session.idle':{
+    const was=S.status[p.sessionID];
+    S.status[p.sessionID]={type:'idle'};bus.emit('status',p.sessionID);
+    // Some server builds deliver only session.status:idle; emit idle here too or the queue,
+    // continue-bar and turn timers never fire (deduped on the UI side).
+    if(!was||was.type!=='idle')bus.emit('idle',p.sessionID);
+    const fl=O.inflight&&O.inflight();if(fl&&fl.sid===p.sessionID)O.clearInflight();
+    if(p.sessionID===S.sid){O.syncSessionMessages(p.sessionID)}
+    break}
   case'session.error':bus.emit('serror',p);break;
   case'session.diff':S.diffs[p.sessionID]=p.diff||[];bus.emit('diff',p.sessionID);break;
   case'message.updated':{const m=O.upsertMsg(p.info);bus.emit('msg',p.info.sessionID,m);saveMsgs(p.info.sessionID);break}
@@ -289,8 +328,8 @@ document.addEventListener('visibilitychange',()=>{
     const now=Date.now();
     if(now-lastSseKick>=4000){lastSseKick=now;try{OC.sseStart()}catch(e){}}
   }
-  // The status map may be stale after a long pause: let the poller verify, it stops itself
-  // on the first idle answer.
+  // The status map may be stale after a long pause: the heartbeat poller verifies it and
+  // keeps watching, so a missed "busy" event still surfaces without a restart.
   if(S.sid)O.startLiveSync(S.sid);
 });
 
@@ -411,10 +450,54 @@ O.importSessionJson=text=>{
   return ses;
 };
 
-// Draft persistence per session
+// Draft persistence per session (text + attachments + mentions survive restarts)
 O.getDraft=sid=>O.store.get('draft.'+sid,'');
 O.setDraft=(sid,text)=>{if(!sid)return;O.store.set('draft.'+sid,text)};
-O.clearDraft=sid=>{if(!sid)return;O.store.remove('draft.'+sid)};
+O.clearDraft=sid=>{if(!sid)return;O.store.remove('draft.'+sid);O.kv.del('draftEx:'+sid)};
+O.getDraftEx=sid=>O.kv.get('draftEx:'+sid);
+O.setDraftEx=(sid,ex)=>{
+  if(!sid)return;
+  const has=ex&&((ex.atts&&ex.atts.length)||(ex.mentions&&ex.mentions.length));
+  if(has)O.kv.set('draftEx:'+sid,ex);else O.kv.del('draftEx:'+sid);
+};
+
+// ---- inflight turn journal: survive an app kill mid-generation ----
+O.markInflight=(sid,mid,text)=>{if(sid&&mid)O.store.set('inflight',{sid,mid,text:String(text||'').slice(0,2000),at:Date.now()})};
+O.clearInflight=()=>O.store.remove('inflight');
+O.inflight=()=>O.store.get('inflight',null);
+
+// ---- model capabilities (attachments / tools / reasoning), metadata-driven ----
+O.modelCaps=m=>{
+  if(!m)return{images:null,tools:null,reasoning:false};
+  const mods=m.modalities;
+  let images=null;
+  if(Array.isArray(mods)){if(mods.includes('image'))images=true}
+  else if(mods&&Array.isArray(mods.input)&&mods.input.includes('image'))images=true;
+  if(images==null){
+    if(m.attachment===true)images=true;
+    else if(m.attachment===false)images=false;
+  }
+  let tools=null;
+  if(m.tool_call===true||m.toolCall===true||m.tools===true)tools=true;
+  else if(m.tool_call===false||m.toolCall===false||m.tools===false)tools=false;
+  return{images,tools,reasoning:!!(m.reasoning||(m.variants&&Object.keys(m.variants).length))};
+};
+O.modelCapsOf=(pid,mid)=>O.modelCaps(O.modelInfo(pid,mid));
+O.modelCapsSheet=(pid,mid)=>{
+  const info=O.modelInfo(pid,mid);
+  const c=O.modelCaps(info);
+  const yes=v=>v===true?O.tr('Yes','Да'):v===false?O.tr('No','Нет'):O.tr('Unknown (no metadata)','Неизвестно (нет метаданных)');
+  const row=(icon,label,val)=>h('div',{class:'settings-row'},
+    h('div',{class:'settings-row-icon'},O.icon(icon)),
+    h('div',{class:'settings-row-text'},h('b',null,label),h('span',null,val)));
+  O.sheet(O.tr('Model capabilities','Возможности модели')+' · '+((info&&info.name)||mid),h('div',null,
+    h('div',{class:'settings-card'},
+      row('image',O.tr('Image attachments','Вложения-изображения'),yes(c.images)),
+      row('terminal',O.tr('Tool calls','Вызовы инструментов'),yes(c.tools)),
+      row('bulb',O.tr('Reasoning','Рассуждения'),c.reasoning?O.tr('Yes','Да'):O.tr('No / unknown','Нет / неизвестно')),
+      info&&info.limit&&info.limit.context?row('memory',O.tr('Context window','Окно контекста'),O.fmtK(info.limit.context)+' tok'):null),
+    h('div',{class:'note',style:{marginTop:'10px'}},O.tr('Based on provider metadata. "Unknown" means the provider does not declare the capability — it may still work.','По метаданным провайдера. «Неизвестно» — провайдер не заявляет возможность; она может работать.'))),{hud:true});
+};
 // Alphabetical sort within each provider: pinned float to the top, then providers A→Z, then models A→Z.
 O.sortModelsByProvider=items=>{
   const pn=x=>String(x.pname||x.pid||'').toLowerCase();
@@ -512,14 +595,18 @@ O.searchMessages=async q=>{
   const out=[];
   const check=(sid,list)=>{
     for(const m of list||[]){
+      let hit=null;
       for(const p of m.parts||[]){
-        if(p.type!=='text'&&p.type!=='reasoning')continue;
-        const t=String(p.text||p.reasoning||'');
+        let t='';
+        if(p.type==='text'||p.type==='reasoning')t=String(p.text||p.reasoning||'');
+        else if(p.type==='file')t=String(p.filename||'');
+        else if(p.type==='tool'){const st=p.state||{},i=st.input||{};t=[p.tool,i.command,i.filePath,i.path,i.pattern,i.query,i.description,st.output].filter(x=>typeof x==='string').join(' ')}
         if(!t||!t.toLowerCase().includes(needle))continue;
         const i=t.toLowerCase().indexOf(needle);
-        out.push({sid,mid:m.info&&m.info.id,role:(m.info&&m.info.role)||'',text:t.slice(Math.max(0,i-60),i+140)});
+        hit={sid,mid:m.info&&m.info.id,role:(m.info&&m.info.role)||'',text:t.slice(Math.max(0,i-60),i+140)};
         break;
       }
+      if(hit)out.push(hit);
       if(out.length>120)return;
     }
   };
@@ -679,9 +766,9 @@ O.openAnswerStyles=()=>{
 
 // ---- prompt queue (7): write the next task while the agent works ----
 O.promptQueue=sid=>O.store.get('promptQueue.'+(sid||S.sid),[]);
-O.enqueuePrompt=(sid,text)=>{
+O.enqueuePrompt=(sid,text,ex)=>{
   if(!sid||!text)return;
-  const l=O.promptQueue(sid);l.push({text,at:Date.now()});
+  const l=O.promptQueue(sid);l.push({text,at:Date.now(),atts:(ex&&ex.atts)||[],mentions:(ex&&ex.mentions)||[]});
   O.store.set('promptQueue.'+sid,l);bus.emit('queue',sid);
 };
 O.dequeuePrompt=sid=>{
@@ -822,8 +909,18 @@ O.activateWorkspace=async(dir,name)=>{
   await O.setDir(dir);
   if(rec.model&&O.modelInfo(rec.model.providerID,rec.model.modelID))O.setModel(rec.model.providerID,rec.model.modelID);
   if(rec.agent&&S.agents.some(a=>a.name===rec.agent))S.agent=rec.agent;
+  // Restore the workspace's own last open file (paths only — content is read fresh).
+  if(Array.isArray(rec.openFiles)&&rec.openFiles.length&&O.openFile){
+    setTimeout(()=>{try{O.openFile(rec.openFiles[0])}catch(_){}},400);
+  }
   bus.emit('workspace');bus.emit('meta');
   return rec;
+};
+O.workspaceRememberFile=path=>{
+  if(!path||!S.dir)return;
+  const w=O.workspaceAt(S.dir);if(!w)return;
+  const l=(w.openFiles||[]).filter(x=>x!==path);l.unshift(path);
+  O.saveWorkspace(Object.assign({},w,{openFiles:l.slice(0,8)}));
 };
 O.deleteWorkspace=dir=>{
   O.store.set('workspaces',O.workspaces().filter(w=>w.dir!==dir));
@@ -1013,6 +1110,7 @@ O.openSession=async(sid,fresh)=>{
     await O.loadCachedMsgs(sid);
     O.pickDefaults();bus.emit('meta');bus.emit('open',sid);return;
   }
+  O.startLiveSync(sid);
   const ok=m=>m&&O.modelInfo(m.providerID,m.modelID);
   const sesSaved=O.store.get('session.model.'+sid);
   if(ok(sesSaved)){
@@ -1033,12 +1131,27 @@ O.openSession=async(sid,fresh)=>{
   if(!s.list.length&&O.chatSkeleton)O.chatSkeleton();
   await O.loadCachedMsgs(sid);
   bus.emit('open',sid);
+  // The server may already be working in this session (widget send, another device, missed SSE):
+  // adopt its live status on open instead of waiting for a restart to reveal it.
+  try{const st=await api('GET','/session/status',null,{timeout:5000});
+    if(S.sid===sid&&st&&st[sid]){
+      const ns=normStatus(st[sid]),old=S.status[sid];
+      S.status[sid]=ns;
+      if(!old||old.type!==ns.type){bus.emit('status',sid);if(ns.type!=='idle')O.startLiveSync(sid)}
+    }
+  }catch(_){}
   if(fresh)return;
   const prevCount=s.list.length,prevLast=s.list.length?s.list[s.list.length-1].info.id:'';
   const sdir=O.sessionDir(sid);
   try{const arr=await api('GET','/session/'+sid+'/message',null,{timeout:120000,dir:sdir});
     if(S.sid!==sid)return; // the user switched away while the request was in flight
-    s.list=[];s.idx=new Map();for(const m of arr){const x={info:m.info,parts:m.parts};s.list.push(x);s.idx.set(m.info.id,x)}
+    // A wholesale replace used to wipe richer live tool states with lagging server snapshots —
+    // tool cards rendered empty. Merge instead, keeping local knowledge when the snapshot lags.
+    for(const m of arr){
+      if(!m||!m.info)continue;
+      O.upsertMsg(m.info);
+      if(Array.isArray(m.parts))for(const pt of m.parts)O.upsertPart(pt);
+    }
     if(!sesSaved){
       const lastRemote=[...s.list].reverse().find(x=>x.info&&x.info.providerID&&x.info.modelID);
       if(lastRemote&&ok({providerID:lastRemote.info.providerID,modelID:lastRemote.info.modelID})){

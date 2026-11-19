@@ -244,6 +244,9 @@ O.mmEditor=(a,done)=>{
   const memRow=O.toggleRow('memory',O.tr('Team memory','Память команды'),
     O.tr('Durable facts from past runs are injected into every role; updated after each run.','Факты из прошлых прогонов добавляются в промпт каждой роли; обновляются после прогона.'),
     a.memory!==false,v=>{a.memory=v});
+  const approveRow=O.toggleRow('shield',O.tr('Approve each stage','Приёмка каждого этапа'),
+    O.tr('Pause before every role: review and edit its input, or stop the run.','Пауза перед каждой ролью: просмотр и правка её входа или остановка прогона.'),
+    !!a.approve,v=>{a.approve=v});
   const memViewRow=h('button',{class:'settings-row',onclick:()=>{
       // persist current name first so memory view/edit works for a new team too
       a.name=nameInp.value.trim()||a.name;O.mmSave(a);O.mmMemoryView(a);
@@ -299,7 +302,7 @@ O.mmEditor=(a,done)=>{
     h('div',{class:'note',style:{margin:'0 2px 10px'}},a.mode==='subagents'
       ?O.tr('The lead model delegates tasks to real subagents inside the same session. Roles map to subagents of your team.','Главная модель распределяет задачи между настоящими субагентами в той же сессии. Роли соответствуют субагентам вашей команды.')
       :O.tr('Each role gets its own child session. Pipeline chains them; parallel runs them at once.','Каждой роли выделяется своя дочерняя сессия. Конвейер соединяет их в цепочку; параллельно — запускает сразу.')),
-    h('div',{class:'settings-card'},pipeRow),
+    h('div',{class:'settings-card'},pipeRow,approveRow),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Lead model','Главная модель')),
     h('div',{class:'settings-card'},mainRow,backupRow,freeRow),
     h('div',{class:'settings-section-title',style:{margin:'14px 0 6px'}},O.tr('Team memory','Память команды')),
@@ -445,6 +448,23 @@ async function mmRunJudge(mm,run,role,userText,results,parentSid,leadMain,onPhas
 // ---- orchestration ----
 O.mm={run:null,last:null};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// Per-stage acceptance: pause before a role starts so its input can be reviewed and edited.
+function mmApproveStage(mm,run,role,task,inputText){
+  if(!mm.approve||run.abort)return Promise.resolve(inputText);
+  return new Promise(res=>{
+    let done=false;
+    const fin=v=>{if(done)return;done=true;try{s.close()}catch(_){}res(v)};
+    const ta=h('textarea',{class:'mono',rows:12});ta.value=inputText;
+    const s=O.sheet(O.tr('Approve stage: ','Приёмка этапа: ')+role.name,h('div',null,
+      h('div',{class:'note',style:{margin:'0 0 8px'}},O.tr('Task: ','Задача: ')+task+' — '+O.tr('review and edit the exact input, then run.','проверьте и правьте точный вход, затем запускайте.')),
+      ta,
+      h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
+        h('button',{class:'btn wide',onclick:()=>fin(null)},O.icon('stop'),O.tr('Stop run','Остановить прогон')),
+        h('button',{class:'btn pri',style:{flex:1},onclick:()=>fin(ta.value)},O.icon('play'),O.tr('Run stage','Запустить этап')))),
+      {hud:true,onClose:()=>fin(null)});
+    try{if(O.native&&O.native.notify)O.native.notify('action',O.tr('MM: approve stage','MM: приёмка этапа'),role.name)}catch(_){}
+  });
+}
 // `/session/status` returns a string on some server builds and an object with `.type` on others.
 const statusType=x=>typeof x==='string'?x:(x&&x.type)||'';
 const statusIs=(x,t)=>statusType(x)===t;
@@ -480,15 +500,18 @@ const memBlock=mm=>{
   return mem?'\n\nПамять команды (факты из прошлых прогонов, используй если релевантно):\n'+mem.slice(-6000):'';
 };
 // After a run: the lead distils durable facts into the team memory (one short call).
-async function mmMemoryUpdate(mm,sid,lead,userText,finalText){
+async function mmMemoryUpdate(mm,parentID,lead,userText,finalText){
   if(!mm||mm.memory===false||!finalText)return;
+  let sid;
   try{
+    ({id:sid}=await api('POST','/session',{parentID,title:mm.name+' · memory'}));
+    if(!sid||sid===parentID){sid=null;return}
     const instr=PLAN_TAG+'\nИзвлеки из результата 3–7 коротких фактов, полезных для будущих задач этой команды (решения, соглашения, структура проекта, грабли). Только факты, строками, без вступлений. Если полезных фактов нет — ответь ровно: NONE';
     await api('POST','/session/'+sid+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:lead,parts:[{type:'text',text:instr,synthetic:true},{type:'text',text:'Запрос: '+userText+'\n\nИтог:\n'+finalText.slice(0,6000)}]},{timeout:30000});
     await mmWaitIdle([sid],{abort:false},180000);
     const t=await mmLastAssistant(sid).catch(()=>'');
     if(t&&t.trim()&&t.trim()!=='NONE'&&!/^NONE$/m.test(t.trim()))O.mmMemoryAppend(mm,t.trim());
-  }catch(_){}
+  }catch(_){}finally{if(sid)await api('DELETE','/session/'+sid).catch(()=>{})}
 }
 
 // ---- role → human questions: a role can ask the user mid-run via a JSON block ----
@@ -516,28 +539,33 @@ function mmAskHuman(roleName,question){
         h('button',{class:'btn wide',onclick:()=>finish('')},O.tr('Skip','Пропустить')),
         h('button',{class:'btn pri',style:{flex:1},onclick:()=>{const v=ta.value.trim();if(!v)return O.toast(O.tr('Write an answer','Напишите ответ'),1500);finish(v)}},O.icon('send'),O.tr('Answer','Ответить'))));
     const s=O.sheet(O.tr('Team question','Вопрос команды'),body,{hud:true,onClose:()=>finish('')});
-    try{if(O.native&&O.native.notify)O.native.notify('action',O.tr('MM: role asks','MM: роль спрашивает'),roleName+': '+question.slice(0,120))}catch(_){}
+    // The MM question is not a server question object: register it locally so the notification's
+    // inline reply can resolve this very promise without opening the app.
+    const qid='mmq_'+Date.now().toString(36);
+    O.mmPendingAsks=O.mmPendingAsks||{};
+    O.mmPendingAsks[qid]=v=>finish(v);
+    try{if(O.native&&O.native.notifyAction)O.native.notifyAction(O.tr('MM: role asks','MM: роль спрашивает'),roleName+': '+question.slice(0,120),S.sid||'',qid)}catch(_){}
     setTimeout(()=>{try{ta.focus()}catch(_){}},350);
   });
 }
 // Waits for a role session; if it finished with an "ask" block, asks the user and continues (max 3 rounds).
-async function mmWaitRole(sid,run,roleName,timeoutMs){
+async function mmWaitRole(sid,run,roleName,timeoutMs,model){
+  let last='';
   for(let round=0;round<3;round++){
     await mmWaitIdle([sid],run,timeoutMs);
     if(run.abort)return '';
     const t=await mmLastAssistant(sid).catch(()=>'');
+    last=t;
     const ask=mmExtractAsk(t);
     if(!ask)return t;
     run.currentRole=O.tr('Question: ','Вопрос: ')+roleName;bus.emit('mm:progress');
     const answer=await mmAskHuman(roleName,ask);
     if(run.abort)return t;
     const reply=answer?O.tr('User answer: ','Ответ пользователя: ')+answer:O.tr('The user skipped the question — decide yourself and state the assumption.','Пользователь пропустил вопрос — реши сам и укажи допущение.');
-    await api('POST','/session/'+sid+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:undefined,parts:[{type:'text',text:reply}]},{timeout:30000}).catch(async()=>{
-      // some builds require the model on continue: retry with the session model
-      await api('POST','/session/'+sid+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:S.model,parts:[{type:'text',text:reply}]},{timeout:30000});
-    });
+    await api('POST','/session/'+sid+'/prompt_async',{messageID:O.mid(),agent:S.agent,model,parts:[{type:'text',text:reply}]},{timeout:30000});
   }
-  return await mmLastAssistant(sid).catch(()=>'');
+  await mmWaitIdle([sid],run,timeoutMs);
+  return await mmLastAssistant(sid).catch(()=>last);
 }
 const ASK_HINT='\n\nЕсли тебе критически не хватает данных от пользователя, можешь ОДИН раз спросить: верни блок ```json {"ask":"короткий вопрос"}``` и остановись. Ответ придёт следующим сообщением. Не спрашивай о том, что можешь решить сам.';
 
@@ -667,16 +695,22 @@ O.mmResume=async()=>{
       const role=(mm.roles||[]).find(x=>x.name===(t.role&&t.role.name))||t.role;
       if(!role)continue;
       run.currentRole=role.name;emit();
-      const cs=await api('POST','/session',{parentID:sess,title:mm.name+' · '+role.name+' · '+O.tr('resume','возобновление')});
       const prev=jobs.filter(j=>j.result).map(j=>'['+(j.role&&j.role.name)+']:\n'+j.result).join('\n\n');
-      const rtext='Ты — «'+role.name+'» в команде «'+mm.name+'».\n'+(role.prompt||'')+memBlock(mm)+
+      let rtext='Ты — «'+role.name+'» в команде «'+mm.name+'».\n'+(role.prompt||'')+memBlock(mm)+
         '\n\nЗадача: '+t.task+'\nИсходный запрос пользователя: «'+userText+'»'+
         (prev?'\n\nУже готовые результаты других ролей:\n'+prev.slice(-8000):'')+
         '\n\nВыполни свою часть и дай конкретный результат.'+(role.ask!==false?ASK_HINT:'');
+      if(mm.approve){
+        run.currentRole=O.tr('Approval: ','Приёмка: ')+role.name;emit();
+        const approved=await mmApproveStage(mm,run,role,t.task,rtext);
+        if(approved==null){run.abort=true;break}
+        rtext=approved;
+      }
+      const cs=await api('POST','/session',{parentID:sess,title:mm.name+' · '+role.name+' · '+O.tr('resume','возобновление')});
       await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:O.mmRoleModels(role).model||lead,parts:[{type:'text',text:rtext}]},{timeout:30000});
-      const job={sid:cs.id,role,task:t.task,started:Date.now(),state:'running'};
+      const job={sid:cs.id,role,task:t.task,started:Date.now(),state:'running',prompt:rtext};
       jobs.push(job);run.jobs=jobs.slice();emit();
-      const out=await mmWaitRole(cs.id,run,role.name,900000);
+      const out=await mmWaitRole(cs.id,run,role.name,900000,O.mmRoleModels(role).model||lead);
       job.result=out||'';job.state=out?'done':'error';job.finished=Date.now();emit();
     }
     if(run.abort)throw new Error('aborted');
@@ -803,8 +837,42 @@ O.mmRoleActions=job=>{
   const body=h('div',null,
     h('div',{class:'note'},O.tr('Role: ','Роль: ')+name+(job.subagent?(' · @'+job.subagent):'')+(job.sid?'':' · '+O.tr('runs in the main session','работает в основной сессии'))),
     canOpen?h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:()=>{s.close();if(O.openChild)O.openChild(job.sid)}},O.icon('chat'),O.tr('Open session','Открыть сессию')):null,
-    h('button',{class:'btn wide',style:{marginTop:'8px'},disabled:done,onclick:()=>{s.close();O.mmStopRole&&O.mmStopRole(name)}},O.icon('stop'),O.tr('Stop this model','Остановить модель')));
+    h('button',{class:'btn wide',style:{marginTop:'8px'},disabled:done,onclick:()=>{s.close();O.mmStopRole&&O.mmStopRole(name)}},O.icon('stop'),O.tr('Stop this model','Остановить модель')),
+    job.result||job.prompt?h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{
+      const b2=h('div');
+      if(job.prompt)b2.append(h('div',{class:'grp'},O.tr('Role input','Вход роли')),h('pre',{class:'code-pre',style:{maxHeight:'30vh',overflow:'auto'}},job.prompt));
+      b2.append(h('div',{class:'grp'},O.tr('Role result','Результат роли')),h('pre',{class:'code-pre',style:{maxHeight:'40vh',overflow:'auto'}},job.result||job.err||O.tr('(no result)','(нет ответа)')));
+      O.sheet(O.tr('Stage details: ','Детали этапа: ')+name,b2,{full:true});
+    }},O.icon('doc'),O.tr('Input / output','Вход / результат')):null,
+    canOpen&&done?h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{s.close();O.mmRetryRole(job)}},O.icon('refresh'),O.tr('Re-run this stage','Перезапустить этап')):null);
   const s=O.sheet(O.tr('Role: ','Роль: ')+name,body,{hud:true});
+};
+// Re-run one finished stage without touching the others; refreshes the graph/report in place.
+O.mmRetryRole=async job=>{
+  const mm=O.mmActive();
+  if(!mm)return O.toast(O.tr('Activate the team first','Сначала включите команду'),2500);
+  if(O.mm.run)return O.toast(O.tr('A run is in progress — stop it first','Идёт прогон — сначала остановите его'),2500);
+  const role=(mm.roles||[]).find(r=>r.name===(job.role&&job.role.name))||job.role;
+  const lead=mm.main||S.model;
+  const model=O.mmRoleModels(role).model||lead;
+  if(!model)return O.toast(O.tr('No model selected','Модель не выбрана'),2500);
+  const parent=(O.mm.run&&O.mm.run.sid)||S.sid;
+  if(!parent)return O.toast(O.tr('Open a chat first','Сначала откройте чат'),2000);
+  try{
+    O.toast(O.tr('Re-running: ','Перезапускаю: ')+role.name,1800);
+    const cs=await api('POST','/session',{parentID:parent,title:mm.name+' · '+role.name+' · '+O.tr('re-run','повтор этапа')});
+    const rtext=job.prompt||('Ты — «'+role.name+'» в команде «'+mm.name+'».\n'+(role.prompt||'')+memBlock(mm)+'\n\nЗадача: '+(job.task||'')+'\n\nВыполни свою часть и дай конкретный результат.');
+    await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model,parts:[{type:'text',text:rtext}]},{timeout:30000});
+    const run={abort:false,paused:false};
+    const out=await mmWaitRole(cs.id,run,role.name,900000,model);
+    job.sid=cs.id;job.result=out||'';job.err=out?'':O.tr('no result','нет ответа');job.state=out?'done':'error';job.finished=Date.now();
+    if(O.mm.last&&O.mm.last.run&&O.mm.last.run.jobs){
+      const j=O.mm.last.run.jobs.find(x=>x.role&&x.role.name===role.name);
+      if(j)Object.assign(j,{sid:job.sid,result:job.result,state:job.state,finished:job.finished});
+    }
+    bus.emit('mm:progress');
+    O.toast(out?O.tr('Stage updated: ','Этап обновлён: ')+role.name:O.tr('Stage produced no result','Этап не дал результата'),2500);
+  }catch(e){O.toast(e.message||String(e),4000)}
 };
 
 // ---- graph visualisation of the MM run (who talks to whom) ----
@@ -1148,17 +1216,23 @@ O.mmSend=async(text,parts)=>{
     for(const t of plan){
       if(run.abort)break;
       try{
-        const cs=await api('POST','/session',{parentID:sid,title:mm.name+' · '+t.role.name});
         const handoff=pipeline&&prevResult?'\n\nРезультат предыдущей роли (твой вход, продолжай с него, не начинай заново):\n'+prevResult.slice(-8000):'';
-        const rtext='Ты — «'+t.role.name+'» в команде «'+mm.name+'».\n'+(t.role.prompt||'')+memBlock(mm)+
+        let rtext='Ты — «'+t.role.name+'» в команде «'+mm.name+'».\n'+(t.role.prompt||'')+memBlock(mm)+
           '\n\nЗадача от координатора: '+t.task+'\nИсходный запрос пользователя: «'+userText+'»'+handoff+
           '\n\nВыполни свою часть и дай конкретный результат.'+(t.role.ask!==false?ASK_HINT:'');
+        if(mm.approve){
+          run.currentRole=O.tr('Approval: ','Приёмка: ')+t.role.name;emit();
+          const approved=await mmApproveStage(mm,run,t.role,t.task,rtext);
+          if(approved==null){run.abort=true;break}
+          rtext=approved;
+        }
+        const cs=await api('POST','/session',{parentID:sid,title:mm.name+' · '+t.role.name});
         await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:O.mmRoleModels(t.role).model||leadMain,parts:[{type:'text',text:rtext}]},{timeout:30000});
         const job={sid:cs.id,role:t.role,task:t.task,started:Date.now(),prompt:rtext};
         jobs.push(job);run.jobs=jobs;
         if(pipeline){
           run.phase='role';run.phaseStart=Date.now();run.currentRole=t.role.name;emit();
-          const out=await mmWaitRole(cs.id,run,t.role.name,900000);
+          const out=await mmWaitRole(cs.id,run,t.role.name,900000,O.mmRoleModels(t.role).model||leadMain);
           job.result=out||'';job.finished=Date.now();job.state=out?'done':'error';
           prevResult=out||prevResult;
           emit();
@@ -1198,7 +1272,7 @@ O.mmSend=async(text,parts)=>{
           await mmWaitIdle([cs2.id],run,420000);
           if(run.abort)break;
           const t2=await mmLastAssistant(cs2.id).catch(()=>'');
-          if(t2.trim()){jobs[x]={sid:cs2.id,role:j.role,task:j.task};done=true;break}
+          if(t2.trim()){jobs[x]={sid:cs2.id,role:j.role,task:j.task,model};done=true;break}
         }catch(e){}
       }
       if(!done){try{await api('DELETE','/session/'+j.sid,{})}catch(e){}jobs[x]={sid:null,role:j.role,err:O.tr('primary and backup models failed','основная и запасные модели не сработали'),started:j.started,finished:Date.now()}}
@@ -1207,7 +1281,7 @@ O.mmSend=async(text,parts)=>{
     for(const j of jobs){
       if(!j.sid){results.push('['+j.role.name+']: (ошибка запуска: '+(j.err||'нет ответа')+')');continue}
       let t=j.result||'';
-      if(!t){try{t=await mmWaitRole(j.sid,run,j.role.name,60000)}catch(e){t=''}}
+      if(!t){try{t=await mmWaitRole(j.sid,run,j.role.name,60000,j.model||O.mmRoleModels(j.role).model||leadMain)}catch(e){t=''}}
       j.result=t;
       results.push('['+j.role.name+']:\n'+(t||'(нет ответа)'));
     }

@@ -623,12 +623,13 @@ For example:
 (If no files were edited, output: +0 -0)
             """.trimIndent()
 
-            File(cfg, "AGENTS.md").writeText(promptText)
-            File(home, "AGENTS.md").writeText(promptText)
-            File(dotOpencode, "AGENTS.md").writeText(promptText)
+            for (dir in listOf(cfg, home, dotOpencode)) {
+                val file = File(dir, "AGENTS.md")
+                if (file.createNewFile()) file.writeText("<!-- ocm:managed:start -->\n$promptText\n<!-- ocm:managed:end -->")
+            }
 
             val readme = File(home, "README.md")
-            if (!readme.exists() || !readme.readText().contains("v2.0.1")) {
+            if (readme.createNewFile()) {
                 readme.writeText("""
 # 🚀 OpenCode Mobile v2.0.1
 

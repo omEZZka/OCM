@@ -495,6 +495,7 @@ try:
     chk('mm editor role cards',mm['cards']==3 and mm['ord']==3)
     chk('mm pipeline + memory toggles','Конвейер' in mm['text'] and 'Память команды' in mm['text'])
     chk('mm pipeline flow hint','получает результат' in mm['text'])
+    chk('mm approve-stage toggle','Приёмка каждого этапа' in mm['text'])
     pg.evaluate("OCM.back()")
     pg.evaluate("OCM.mmMemoryAppend(OCM.mmActive(),'проект на Kotlin')")
     chk('mm memory stored','Kotlin' in pg.evaluate("OCM.mmMemory(OCM.mmActive())"))
@@ -505,6 +506,169 @@ try:
     mmp=pg.inner_text('.sheet >> nth=-1')
     chk('mm picker resume + memory','Возобновить прерванный прогон' in mmp and 'Память команды' in mmp)
     pg.evaluate("OCM.back();OCM.mmSetActive(null);OCM.store.remove('mm.lastResumable')")
+    # ---- regression: managed rules block survives sends; README untouched ----
+    pg.evaluate("OCM.S.dir='/root'")
+    pg.evaluate("""()=>{
+      __srv.files['/root/AGENTS.md']='# Мои правила\\nВсегда отвечай по-русски.';
+      __srv.files['/root/README.md']='# Мой проект\\nВажное описание.';
+      __srv.files['/root/.config/opencode/AGENTS.md']='Глобальные правила пользователя.';
+      OCM.updateReadmeForModel('big-pickle');
+      OCM.updateReadmeForModel('gpt-x');
+      OCM.updateReadmeForModel('big-pickle');
+    }""")
+    rules=pg.evaluate("""()=>{
+      const a=__srv.files['/root/AGENTS.md']||'';
+      const g=__srv.files['/root/.config/opencode/AGENTS.md']||'';
+      return {mine:a.includes('Всегда отвечай по-русски.'),
+        block:(a.match(/ocm:managed:start/g)||[]).length===1&&(a.match(/ocm:managed:end/g)||[]).length===1,
+        globalMine:g.includes('Глобальные правила пользователя.'),
+        readme:__srv.files['/root/README.md']==='# Мой проект\\nВажное описание.',
+        noProjReadme:!('/root/README.md' in (window.__writes||[]).reduce((o,p)=>(o[p]=1,o),{}))||true};
+    }""")
+    chk('rules: user text preserved after model updates',rules['mine'])
+    chk('rules: exactly one managed block',rules['block'])
+    chk('rules: global user rules preserved',rules['globalMine'])
+    chk('rules: README never rewritten',rules['readme'] and not any(p.endswith('README.md') for p in pg.evaluate("window.__writes||[]")))
+    legacy=pg.evaluate("""()=>{
+      __srv.files['/root/legacy/AGENTS.md']='# OpenCode Mobile Environment & Instructions (v2.0.1)\\nстарый сгенерированный текст';
+      const dir=OCM.S.dir;OCM.S.dir='/root/legacy';OCM.updateReadmeForModel('big-pickle');OCM.S.dir=dir;
+      const t=__srv.files['/root/legacy/AGENTS.md'];
+      return t.startsWith('<!-- ocm:managed:start -->')&&t.includes('ocm:managed:end')&&!t.includes('старый сгенерированный текст');
+    }""")
+    chk('rules: legacy app-generated file migrated into block',legacy)
+    # ---- regression: archive pages cover messages 251-550 ----
+    arch=pg.evaluate("""async ()=>{
+      const sid='ses_arch';const st=OCM.msgs(sid);
+      for(let i=0;i<550;i++){const id='m'+String(i).padStart(4,'0');
+        st.list.push({info:{id,sessionID:sid,role:'user',time:{created:i}},parts:[{id:'p'+id,sessionID:sid,messageID:id,type:'text',text:'msg '+i}]});
+        st.idx.set(id,st.list[st.list.length-1]);}
+      __push({type:'message.part.updated',properties:{part:{id:'pnew',sessionID:sid,messageID:'m0549',type:'text',text:'msg 549'}}});
+      await new Promise(r=>setTimeout(r,2600));
+      const pages=await OCM.kv.get('msgs:'+sid+':pages');
+      const p0=await OCM.kv.get('msgs:'+sid+':p0');
+      OCM.dropMsgs(sid);
+      const back=await OCM.loadCachedMsgs(sid);
+      const ids=new Set(back.map(m=>m.info.id));
+      const ok=back.length===550&&ids.has('m0250')&&ids.has('m0300')&&ids.has('m0549')&&back[0].info.id==='m0000';
+      OCM.dropMsgs(sid);await OCM.dropCachedMsgs(sid);
+      return {pages,p0len:p0&&p0.length,ok};
+    }""")
+    chk('archive: 550 msgs -> 1 full page + hot window',arch['pages']==1 and arch['p0len']==300)
+    chk('archive: messages 251-550 survive reload',arch['ok'])
+    # ---- regression: tool state not wiped by lagging snapshot ----
+    tool=pg.evaluate("""()=>{
+      const sid=OCM.S.sid;
+      OCM.upsertPart({id:'pt_x',sessionID:sid,messageID:'mtool',type:'tool',tool:'bash',state:{status:'completed',input:{command:'ls'},output:'main.py',metadata:{exit:0},time:{start:1,end:2}}});
+      OCM.upsertPart({id:'pt_x',sessionID:sid,messageID:'mtool',type:'tool',tool:'bash',state:{status:'pending'}});
+      const m=OCM.msgs(sid).idx.get('mtool');const p=m&&m.parts.find(x=>x.id==='pt_x');
+      const kept=p&&p.state.status==='completed'&&p.state.output==='main.py';
+      if(m){const s=OCM.msgs(sid);s.list=s.list.filter(x=>x.info.id!=='mtool');s.idx.delete('mtool')}
+      return kept;
+    }""")
+    chk('tool part: lagging snapshot keeps richer state',tool)
+    # ---- outline + context snapshot ----
+    pg.evaluate("OCM.openOutline()")
+    pg.wait_for_timeout(250)
+    ol=pg.inner_text('.sheet >> nth=-1')
+    chk('outline lists user prompts','refactor main.py' in ol)
+    pg.evaluate("OCM.back()")
+    pg.evaluate("OCM.openContextPreview()")
+    pg.wait_for_timeout(400)
+    ctx=pg.evaluate("[...document.querySelectorAll('.sheet')].map(s=>s.textContent).find(t=>t.includes('Снимок контекста'))||''")
+    curmodel=pg.evaluate("OCM.S.model?OCM.S.model.modelID:''")
+    chk('context snapshot shows model and folder',bool(curmodel) and curmodel in ctx and 'root' in ctx)
+    pg.evaluate("OCM.back()")
+    # ---- drafts: attachments survive a re-render ----
+    dr=pg.evaluate("""async ()=>{
+      const sid=OCM.S.sid;
+      OCM.setDraft(sid,'черновик с вложением');
+      OCM.setDraftEx(sid,{atts:[{type:'file',mime:'text/plain',filename:'note.txt',url:'data:text/plain;base64,aGk='}],mentions:[]});
+      await new Promise(r=>setTimeout(r,250));
+      OCM.S.sid=null;OCM.chat.renderAll();
+      await OCM.openSession(sid);
+      await new Promise(r=>setTimeout(r,500));
+      const ta=document.querySelector('#composer textarea');
+      const chips=document.querySelectorAll('#composer .atts .chip').length;
+      return {text:ta.value,chips};
+    }""")
+    chk('draft text restored on reopen',dr['text']=='черновик с вложением')
+    chk('draft attachment restored on reopen',dr['chips']==1)
+    pg.evaluate("OCM.clearDraft(OCM.S.sid);OCM.chat.renderAll()")
+    # ---- model capabilities ----
+    caps=pg.evaluate("""()=>{
+      const a=OCM.modelCaps({attachment:false});
+      const b=OCM.modelCaps({modalities:['image','text'],tool_call:true});
+      const c=OCM.modelCaps({});
+      return {noImg:a.images===false,img:b.images===true,tools:b.tools===true,unknown:c.images===null&&c.tools===null};
+    }""")
+    chk('caps: attachment=false -> no images',caps['noImg'])
+    chk('caps: modalities + tool_call detected',caps['img'] and caps['tools'])
+    chk('caps: missing metadata -> unknown',caps['unknown'])
+    # ---- configurable bottom bar ----
+    nav=pg.evaluate("""()=>{
+      OCM.store.set('navTabs',['chat','term','files']);OCM.rebuildBottomBar();
+      const pills=[...document.querySelectorAll('#bottom-bar .bottom-pill span')].map(x=>x.textContent).filter(Boolean);
+      OCM.store.set('navTabs',['chat','files']);OCM.rebuildBottomBar();
+      return pills;
+    }""")
+    chk('bottom bar: custom tabs rendered',nav[:3]==['Чат','Терминал','Файлы'])
+    # ---- crash recovery banner ----
+    rec=pg.evaluate("""()=>{
+      // fresh session: no assistant history, so canContinue is false and recovery must show
+      const sid='ses_rec';OCM.S.sessions.unshift({id:sid,title:'rec',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;OCM.S.status[sid]={type:'idle'};
+      OCM.markInflight(sid,'msg_x','прерванный запрос');
+      OCM.chat.renderAll();
+      const shown=[...document.querySelectorAll('.card')].some(c=>c.textContent.includes('прерван перезапуском'));
+      OCM.clearInflight();OCM.chat.renderAll();
+      const gone=![...document.querySelectorAll('.card')].some(c=>c.textContent.includes('прерван перезапуском'));
+      OCM.S.sid=OCM.S.sessions.find(x=>x.id!=='ses_rec').id;OCM.chat.renderAll();
+      return {shown,gone};
+    }""")
+    chk('recovery banner shown after interrupted send',rec['shown'])
+    chk('recovery banner dismisses',rec['gone'])
+    # ---- status poller reveals a running agent without restart ----
+    poll=pg.evaluate("""async ()=>{
+      const sid=OCM.S.sid;
+      window.__status={};OCM.S.status[sid]={type:'idle'};
+      OCM.stopLiveSync();OCM.startLiveSync(sid);
+      window.__status={[sid]:{type:'busy'}};
+      await new Promise(r=>setTimeout(r,7000));
+      const busy=OCM.S.status[sid].type==='busy';
+      const line=!document.querySelector('.status-line').classList.contains('hide');
+      window.__status={};
+      await new Promise(r=>setTimeout(r,4000));
+      const idle=OCM.S.status[sid].type==='idle';
+      OCM.stopLiveSync();
+      return {busy,line,idle};
+    }""")
+    chk('poller picks up busy status without restart',poll['busy'] and poll['line'])
+    chk('poller returns to idle',poll['idle'])
+    # ---- MM: approval gate + stage retry helpers ----
+    mmx=pg.evaluate("""()=>{
+      const mm=OCM.mmList().find(x=>x.id==='mm_t1');
+      mm.approve=true;OCM.mmSave(mm);
+      OCM.mmEditor(OCM.mmList().find(x=>x.id==='mm_t1'));
+      const txt=document.querySelector('.sheet:last-child').textContent;
+      OCM.back();
+      return {toggle:txt.includes('Приёмка каждого этапа'),retry:typeof OCM.mmRetryRole==='function'};
+    }""")
+    chk('mm approval toggle in editor',mmx['toggle'])
+    chk('mm stage retry helper exists',mmx['retry'])
+    # ---- voice draft: recognised text goes to a review sheet ----
+    vd=pg.evaluate("""()=>{
+      document.querySelector('#composer textarea').value='';
+      OCM.voiceDictate();
+      OCEvent('stt',{t:'final',text:'голосовой черновик тест'});
+      const sh=[...document.querySelectorAll('.sheet')].find(x=>x.textContent.includes('Голосовой черновик'));
+      const has=!!sh;
+      const ta=sh&&sh.querySelector('textarea');
+      const val=ta?ta.value:'';
+      OCM.back();
+      return {has,val};
+    }""")
+    chk('voice draft sheet opens with recognised text',vd['has'] and 'голосовой черновик тест' in vd['val'])
+    pg.evaluate("OCM.clearDraft('ses_1');OCM.chat.renderAll()")
     # ---- sessions drawer ----
     pg.evaluate("__push({type:'session.updated',properties:{info:{id:'ses_9',title:'Очень длинное название сессии про рефакторинг системы аутентификации пользователей приложения и прочего',time:{created:1,updated:Date.now()},directory:'/root'}}})")
     pg.evaluate("OCM.openSessions()")

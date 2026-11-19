@@ -93,6 +93,7 @@ O.native={
   preparePreview:p=>(window.OC&&OC.preparePreview?OC.preparePreview(p):''),
   openPreviewWindow:(u,t)=>{try{return !!(window.OC&&OC.openPreviewWindow&&OC.openPreviewWindow(u,t||''))}catch(_){return false}},
   notify:(kind,title,text)=>{try{if(window.OC&&OC.notify)OC.notify(kind,title,text)}catch(_){}},
+  notifyAction:(title,text,sid,qid)=>{try{if(window.OC&&OC.notifyAction)OC.notifyAction(title,text,sid||'',qid||'')}catch(_){}},
   autoBackupState:()=>{try{return j(OC.autoBackupState())||{}}catch(_){return{}}},
   autoBackupConfigure:(enabled,hours,password)=>{try{return j(OC.autoBackupConfigure(enabled,hours,password))||{ok:false}}catch(_){return{ok:false}}},
   autoBackupNow:password=>{try{return j(OC.autoBackupNow(password||''))||{ok:false}}catch(_){return{ok:false}}},

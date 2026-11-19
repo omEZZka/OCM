@@ -21,7 +21,10 @@ class ActionReceiver : BroadcastReceiver() {
         val op = intent.getStringExtra("op_action") ?: return
         val sid = intent.getStringExtra("session_id") ?: ""
         val pid = intent.getStringExtra("permission_id") ?: ""
+        val qid = intent.getStringExtra("question_id") ?: ""
         val notifId = intent.getIntExtra("notif_id", 0)
+        val replyText = androidx.core.app.RemoteInput.getResultsFromIntent(intent)
+            ?.getCharSequence("reply_text")?.toString()?.trim() ?: ""
         val pending = goAsync()
         Thread {
             var ok = false
@@ -32,6 +35,21 @@ class ActionReceiver : BroadcastReceiver() {
                         "permission_once" -> post(port, "/permission/$pid/reply", """{"reply":"once"}""")
                         "permission_reject" -> post(port, "/permission/$pid/reply", """{"reply":"reject"}""")
                         "abort" -> post(port, "/session/$sid/abort", "{}")
+                        "question_reply" -> if (replyText.isNotEmpty()) {
+                            val answer = org.json.JSONObject.quote(replyText)
+                            if (qid.startsWith("mmq_")) {
+                                // MM role question: resolved inside the UI, not by the server.
+                                Prefs.put(context, "mm_reply_qid", qid)
+                                Prefs.put(context, "mm_reply_text", replyText)
+                                val i = Intent(context, MainActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                    .putExtra("widget_action", "mm_reply")
+                                    .putExtra("widget_session", sid)
+                                context.startActivity(i)
+                            } else {
+                                post(port, "/question/$qid/reply", """{"answers":[[$answer]]}""")
+                            }
+                        } else throw IllegalStateException("empty reply")
                     }
                     ok = true
                 }

@@ -230,10 +230,14 @@ O.openProjects=()=>{
     const seen=new Set();
     const add=w=>{
       if(!w||!w.dir||seen.has(w.dir))return;seen.add(w.dir);
+      const bits=[w.dir];
+      if(w.model&&w.model.modelID)bits.push(w.model.modelID);
+      if(w.agent)bits.push('@'+w.agent);
+      if(w.openFiles&&w.openFiles.length)bits.push(w.openFiles.length+' '+O.tr('files','файл.'));
       body.append(h('div',{class:'workspace-card'},
         h('button',{class:'workspace-main',onclick:async()=>{s.close();await O.activateWorkspace(w.dir,w.name);O.toast(O.workspaceName(w),1200)}},
           O.icon('folder'),
-          h('div',{class:'settings-row-text'},h('b',null,O.workspaceName(w)),h('span',null,w.dir))),
+          h('div',{class:'settings-row-text'},h('b',null,O.workspaceName(w)),h('span',null,bits.join(' · ')))),
         h('button',{class:'ibtn s',onclick:()=>O.actions(O.workspaceName(w),[
           {label:O.tr('Rename','Переименовать'),icon:'edit',fn:async()=>{const n=await O.ask(O.tr('Workspace name','Название проекта'),null,O.workspaceName(w));if(n){O.saveWorkspace(Object.assign({},w,{name:n}));draw()}}},
           {label:O.tr('Remove from list','Убрать из списка'),icon:'trash',danger:true,fn:()=>{O.deleteWorkspace(w.dir);draw()}}
@@ -456,7 +460,11 @@ O.openModels=()=>{
           if(cl)parts.push(O.tr('left','осталось')+' '+O.fmtK(cl.left)+' ('+cl.pct+'%)');
         }
       }
-      if(x.m&&(x.m.modalities&&x.m.modalities.includes('image')||x.m.attachment!==false))parts.push('images');
+      const caps=O.modelCaps?O.modelCaps(x.m):{images:null,tools:null};
+      if(caps.images===true)parts.push(O.tr('images','изображения'));
+      else if(caps.images===false)parts.push(O.tr('no images','без изображений'));
+      if(caps.tools===true)parts.push(O.tr('tools','инструменты'));
+      else if(caps.tools===false)parts.push(O.tr('no tools','без инструментов'));
       if(x.m&&(x.m.reasoning||x.m.variants))parts.push('reasoning');
       if(!isFree&&x.m&&x.m.cost&&typeof x.m.cost.input==='number'&&x.m.cost.input>0){
         parts.push('$'+x.m.cost.input+'/1M');
@@ -581,6 +589,7 @@ function modelActions(x,redraw){
 
   O.actions(x.name||x.mid,[
     {section:provider},
+    {label:O.tr('Capabilities','Возможности'),sub:O.tr('Images, tool calls, reasoning, context','Изображения, инструменты, рассуждения, контекст'),icon:'info',fn:()=>O.modelCapsSheet&&O.modelCapsSheet(x.pid,x.mid)},
     {label:pinned?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),sub:O.tr('Keep it at the top of the list','Держать в начале списка'),icon:'pin',fn:()=>{O.toggleModelPin(key);redraw&&redraw()}},
     folder
       ?{label:O.tr('In folder','В папке')+': '+folder.name,sub:O.tr('Change or remove','Сменить или убрать'),icon:'folder',fn:pickFolder}

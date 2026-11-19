@@ -1,5 +1,5 @@
 (function(){
-const srv={sessions:[],msgs:{},calls:[]};window.__srv=srv;
+const srv={sessions:[],msgs:{},calls:[],files:{}};window.__srv=srv;
 const DEF={version:'1.0.8',code:1,user:'dev@example.com',name:'Dev',guest:false,googleConfigured:true,installed:true,core:'v1.18.5',perms:{notifications:true,files:true,install:true,battery:false},flags:{snd_done:true,snd_action:true,snd_quota:false,noseccomp:false},ready:true};
 const route=(method,path,body)=>{const u=new URL('http://x'+path),p=u.pathname;srv.calls.push({method,p,q:u.search,body:body?JSON.parse(body):null});
  if(p==='/config/providers')return{providers:[{id:'opencode',name:'OpenCode Zen',models:{
@@ -16,7 +16,8 @@ const route=(method,path,body)=>{const u=new URL('http://x'+path),p=u.pathname;s
  if(p==='/vcs')return{branch:'main'};
  if(p==='/session'&&method==='GET')return srv.sessions;
  if(p==='/session'&&method==='POST'){const s={id:'ses_'+(srv.sessions.length+1),title:'New session - 2026',time:{created:Date.now(),updated:Date.now()},directory:'/root'};srv.sessions.unshift(s);srv.msgs[s.id]=[];return s}
- if(p==='/session/status')return{};
+ if(p==='/session/status')return window.__status||{};
+ if(/^\/session\/[^/]+$/.test(p)&&method==='GET'){const id=p.split('/')[2];return srv.sessions.find(s=>s.id===id)||{}}
  if(/\/session\/[^/]+\/message$/.test(p))return srv.msgs[p.split('/')[2]]||[];
  if(/\/(todo|diff)$/.test(p))return[];
  if(p==='/permission'||p==='/question')return[];
@@ -44,10 +45,13 @@ window.OC={
   start(){setTimeout(()=>OCEvent('ready',{}),10)},restartServer(){window.__restarted=1},resetConfig(){window.__resetConfig=1},hardRestart(){window.__hardRestart=1},minimize(){},grant(k){window.__granted=k},setFlag(k,v){(window.__flags=window.__flags||{})[k]=v},testSound(){},
  http(id,m,p,b){setTimeout(()=>{try{OCEvent('http',{id,status:200,ct:'application/json',body:JSON.stringify(route(m,p,b))})}catch(e){OCEvent('http',{id,status:500,ct:'text/plain',body:String(e)})}},4)},
  drop(){},sseStart(){sse=true;setTimeout(()=>OCEvent('sse',{t:'open'}),5)},sseStop(){},wsOpen(id){setTimeout(()=>{OCEvent('ws',{id,t:'open'});OCEvent('ws',{id,t:'msg',d:'root@phone:~# '})},5)},wsSend(id,t){(window.__wsSent=window.__wsSent||[]).push(t)},wsClose(){},
- ls:p=>JSON.stringify({ok:true,path:p,items:[{name:'app',dir:true},{name:'notes.txt',dir:false}]}),fs:()=>JSON.stringify({ok:true}),readText:()=>JSON.stringify({ok:true,text:'abc'}),writeText:()=>JSON.stringify({ok:true}),
+ ls:p=>JSON.stringify({ok:true,path:p,items:[{name:'app',dir:true},{name:'notes.txt',dir:false}]}),fs:()=>JSON.stringify({ok:true}),
+ readText(p){const f=srv.files[p];return f===undefined?JSON.stringify({ok:false,err:'Not a file'}):JSON.stringify({ok:true,text:f})},
+ writeText(p,t){srv.files[p]=String(t);(window.__writes=window.__writes||[]).push(p);return JSON.stringify({ok:true})},
  cfgRead:()=>window.__cfg||'{\n // comment\n "plugin":["a"],\n "mcp":{"ctx7":{"type":"remote","url":"https://m.example/mcp","enabled":true}}\n}',cfgWrite(t){window.__cfg=t;return JSON.stringify({ok:true})},readLog:()=>'log line',
  pickFile(k,d){window.__picked=[k,d]},shimUrl:()=>'',backupProfile:()=>JSON.stringify({ok:false,err:'mock'}),backupProfileFull:(p,s)=>JSON.stringify({ok:true,path:'/sdcard/Download/mock.ocmbak',size:1000,skipped:0,full:true}),restoreProfile:()=>JSON.stringify({ok:false,err:'mock'}),copy(t){window.__copied=t},pasteText:()=>'pasted',share(t){window.__shared=t},openLink(u){window.__opened=u},
   openApp(t){return true},preparePreview(p){return ''},openPreviewWindow(u,t){window.__previewWindow=[u,t];return true},startVoiceInput(l){},notify(k,t,x){window.__notified=[k,t,x]},
+ notifyAction(t,x,sid,qid){window.__notifiedAction=[t,x,sid,qid]},mmReplyQid(){return window.__mmReplyQid||''},mmReplyText(){return window.__mmReplyText||''},
  netGet(u,h,t){return JSON.stringify(window.__netGetResult||{ok:true,status:200,body:'{"data":[]}'})},
  netGetAsync(id,u,h,t){(window.__mediaCalls=window.__mediaCalls||[]).push({op:'get',url:u,headers:JSON.parse(h)});setTimeout(()=>OCEvent('mediaNet',{id,result:JSON.stringify(window.__netGetResult||{ok:true,status:200,body:'{"data":[]}'})}),5)},
  netPostToFile(){return JSON.stringify({ok:true,path:'/root/media/x.png'})},

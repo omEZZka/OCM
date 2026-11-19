@@ -185,11 +185,12 @@ O.openSettings=()=>{
     O.tr('Automatically summarize the session at 85% context usage','Автоматически сжимать сессию при заполнении контекста на 85%'),
     O.autoCompact(),v=>O.setAutoCompact(v));
   const tilesRow=O.listRow('sliders',O.tr('Home tiles','Плитки главного экрана'),O.tr('Choose shortcuts for the empty chat screen','Ярлыки на пустом экране чата'),O.icon('chevR'),()=>O.openHomeTiles());
+  const navRow=O.listRow('layout',O.tr('Bottom bar','Нижний бар'),O.tr('Choose your one-tap tabs','Свои вкладки в один тап'),O.icon('chevR'),()=>O.openNavSettings&&O.openNavSettings());
   const hapticRow=O.toggleRow('zap',O.tr('Haptic feedback','Тактильный отклик'),O.tr('Vibrate on send, toggles and long-press','Вибрация при отправке, переключении и долгом нажатии'),O.store.get('haptics',true),v=>O.store.set('haptics',v));
   const focusRow=O.toggleRow('eye',O.tr('Focus mode','Фокус-режим'),O.tr('Hide panels — only the conversation','Скрыть панели — только переписка'),O.focusMode(),v=>O.setFocusMode(v));
   const dryRow=O.toggleRow('shield',O.tr('Dry-run mode','Режим Dry-run'),O.tr('Agent proposes commands and diffs without executing','Агент предлагает команды и diff без выполнения'),O.dryRun(),v=>O.setDryRun(v));
   const tourRow=O.listRow('info',O.tr('Feature tour','Обучающий тур'),O.tr('Show the welcome guide again','Показать приветственный гид ещё раз'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openTour(),200)});
-  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,fastRow,autoCompactRow,hapticRow,focusRow,dryRow,tilesRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
+  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,fastRow,autoCompactRow,hapticRow,focusRow,dryRow,tilesRow,navRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
   panes.main.append(appCard);
 
   // 4. Notifications & Sounds
@@ -1072,15 +1073,15 @@ At the very end of EVERY response, you MUST output a separate line with line add
 // Writes AGENTS.md / README.md into every profile location. Called on each send, but the content
 // almost never changes — remember what was written per path and skip identical writes (6 files x
 // every message was pure blocking I/O on the WebView thread).
-let readmeWrote={};
+const rulesStart='<!-- ocm:managed:start -->',rulesEnd='<!-- ocm:managed:end -->';
+const readRules=path=>{const r=O.native.readText(path);return r&&r.ok?r.text:r&&r.err==='Not a file'?'':null};
 // Teaches the agent that a generated map exists, so it opens one file instead of walking the tree.
 // Written once per project; kept short so it does not inflate every request.
 // Tells the agent that it can generate media through the factory, and how.
 O.ensureMediaHint = root=>{
   try{
     const path=(root||S.dir)+'/AGENTS.md';
-    const cur=O.native.readText(path);
-    const text=(cur&&cur.ok&&cur.text)||'';
+    const text=readRules(path);if(text===null)return;
     if(text.includes('media-gen'))return;
     const hint='\n\n## Media generation\n\n'+
       'You can create images, video, speech and music with the on-device media factory:\n\n'+
@@ -1096,8 +1097,7 @@ O.ensureMapHint = root=>{
   try{
     if(O.memoryOn&&!O.memoryOn())return;
     const path=(root||S.dir)+'/AGENTS.md';
-    const cur=O.native.readText(path);
-    const text=(cur&&cur.ok&&cur.text)||'';
+    const text=readRules(path);if(text===null)return;
     if(text.includes('PROJECT_MAP.md'))return;
     const hint='\n\n## Project map\n\n`PROJECT_MAP.md` in the project root lists every folder with its file count and file names. '+
       'Read it before exploring the tree instead of running repeated `ls`/`glob` calls. It is regenerated automatically after file changes.\n';
@@ -1123,23 +1123,25 @@ O.updateReadmeForModel = (modelID) => {
       content = BASE_SYSTEM_INSTRUCTIONS;
     }
 
-    const targets = [
-      CFG + '/AGENTS.md',
-      CFG + '/README.md',
-      '/root/AGENTS.md',
-      '/root/README.md'
-    ];
-    if (S.dir && S.dir !== '/root') {
-      targets.push(S.dir + '/AGENTS.md');
-      targets.push(S.dir + '/README.md');
-    }
-
-    for (const path of targets) {
-      if (readmeWrote[path] === content) continue;
+    const block=rulesStart+'\n'+content+'\n'+rulesEnd;
+    for (const dir of new Set([CFG,'/root',S.dir].filter(Boolean))) {
+      const path=dir+'/AGENTS.md';
       try {
-        O.native.fs('mkdir', O.dirname(path));
-        const r = O.native.writeText(path, content);
-        if (r && r.ok) readmeWrote[path] = content;
+        const old=readRules(path);if(old===null)continue;
+        const a=old.indexOf(rulesStart),b=old.indexOf(rulesEnd);
+        let next;
+        if(a>=0||b>=0){
+          if(a<0||b<a||old.lastIndexOf(rulesStart)!==a||old.lastIndexOf(rulesEnd)!==b)continue;
+          next=old.slice(0,a)+block+old.slice(b+rulesEnd.length);
+        }else if(old.startsWith('# OpenCode Mobile Environment & Instructions (v2.0.1)')||old.startsWith('# OpenCode System Directives & Instructions (Active: ')){
+          // Legacy app-generated file: it is entirely ours. Replace it, but keep any hints
+          // (media/map) that were appended after the base instructions.
+          const bi=old.indexOf(BASE_SYSTEM_INSTRUCTIONS);
+          const tail=bi>=0?old.slice(bi+BASE_SYSTEM_INSTRUCTIONS.length):'';
+          next=block+tail;
+        }
+        else next=old+(old?'\n\n':'')+block;
+        if(next!==old)O.native.writeText(path,next);
       } catch (_) {}
     }
   } catch (_) {}

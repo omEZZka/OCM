@@ -3380,3 +3380,18 @@ html[data-theme=light] {
 .mm-role-prompt { margin: 8px 2px 2px; line-height: 1.45; }
 .mm-role-flow { display: flex; align-items: center; gap: 4px; margin-top: 6px; color: var(--acc); }
 .mm-role-flow .ic svg { width: 13px; height: 13px; }
+
+/* Empty assistant messages must explain themselves instead of rendering a blank card. */
+.msg-placeholder {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+.msg-placeholder .ic { width: 15px; height: 15px; flex: none; }
+/* Jump-to-message highlight from the outline / search. */
+.msg-flash .m-body { animation: msgFlash 1.6s ease-out; }
+@keyframes msgFlash {
+  0% { box-shadow: 0 0 0 2px var(--acc); border-radius: 12px; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}

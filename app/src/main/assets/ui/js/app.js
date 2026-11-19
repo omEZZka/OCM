@@ -44,12 +44,58 @@ function build(){
 
   const main=h('div',{id:'main'},P.files,P.chat,P.side);
 
-  // Compact bottom bar: Chat | Files | ⋮ menu (terminal, changes, memory live in the menu).
-  B.chat=h('button',{class:'bottom-pill active',onclick:()=>O.setTab('chat')},O.icon('chat'),h('span',null,O.tr('Chat','Чат')));
-  B.files=h('button',{class:'bottom-pill',onclick:()=>O.setTab('files')},O.icon('folder'),h('span',null,O.tr('Files','Файлы')));
-  B.more=h('button',{class:'bottom-pill',onclick:()=>bottomMenu()},O.icon('dots'),h('span',null,O.tr('Menu','Меню')));
-
-  const bottomBar=h('div',{id:'bottom-bar'},B.chat,B.files,B.more);
+  // Bottom bar: user-configurable tabs (Settings → Bottom bar), ⋮ menu always last.
+  const bottomBar=h('div',{id:'bottom-bar'});
+  const NAV_DEFS=[
+    ['chat','chat',()=>O.tr('Chat','Чат'),()=>O.setTab('chat')],
+    ['files','folder',()=>O.tr('Files','Файлы'),()=>O.setTab('files')],
+    ['term','terminal',()=>O.tr('Terminal','Терминал'),()=>O.setTab('term')],
+    ['changes','branch',()=>O.tr('Changes','Изменения'),()=>O.setTab('changes')],
+    ['search','search',()=>O.tr('Search','Поиск'),()=>O.openGlobalSearch()],
+    ['projects','folder',()=>O.tr('Projects','Проекты'),()=>O.openProjects()],
+    ['sessions','list',()=>O.tr('Sessions','Сессии'),()=>O.openSessions()],
+    ['voice','mic',()=>O.tr('Voice','Голос'),()=>O.onMicChoice&&O.onMicChoice()]
+  ];
+  O.navTabs=()=>{const v=O.store.get('navTabs',['chat','files']);return Array.isArray(v)&&v.length?v.filter(x=>NAV_DEFS.some(d=>d[0]===x)):['chat','files']};
+  const buildBottom=()=>{
+    bottomBar.textContent='';B={};
+    O.navTabs().forEach(id=>{
+      const d=NAV_DEFS.find(x=>x[0]===id);if(!d)return;
+      B[id]=h('button',{class:'bottom-pill',onclick:d[3]},O.icon(d[1]),h('span',null,d[2]()));
+      bottomBar.append(B[id]);
+    });
+    B.more=h('button',{class:'bottom-pill',onclick:()=>bottomMenu()},O.icon('dots'),h('span',null,O.tr('Menu','Меню')));
+    bottomBar.append(B.more);
+    layout();
+  };
+  O.rebuildBottomBar=buildBottom;
+  buildBottom();
+  O.openNavSettings=()=>{
+    const body=h('div');
+    const s=O.sheet(O.tr('Bottom bar','Нижний бар'),body,{hud:true});
+    const draw=()=>{
+      body.textContent='';
+      body.append(h('div',{class:'note'},O.tr('Pick up to 4 tabs. The ⋮ menu is always there. Order = tap order below.','Выберите до 4 вкладок. Меню ⋮ всегда на месте. Порядок — по нажатию ниже.')));
+      const cur=O.navTabs();
+      cur.forEach((id,i)=>{
+        const d=NAV_DEFS.find(x=>x[0]===id);if(!d)return;
+        body.append(h('div',{class:'settings-row'},
+          h('div',{class:'settings-row-icon'},O.icon(d[1])),
+          h('div',{class:'settings-row-text'},h('b',null,d[2]())),
+          h('button',{class:'ibtn s',disabled:i===0,onclick:()=>{const l=O.navTabs();[l[i-1],l[i]]=[l[i],l[i-1]];O.store.set('navTabs',l);buildBottom();draw()}},O.icon('up')),
+          h('button',{class:'ibtn s',disabled:i===cur.length-1,onclick:()=>{const l=O.navTabs();[l[i+1],l[i]]=[l[i],l[i+1]];O.store.set('navTabs',l);buildBottom();draw()}},O.icon('down')),
+          h('button',{class:'ibtn s',disabled:cur.length<=1,onclick:()=>{O.store.set('navTabs',cur.filter(x=>x!==id));buildBottom();draw()}},O.icon('x'))));
+      });
+      NAV_DEFS.filter(d=>!cur.includes(d[0])).forEach(d=>{
+        body.append(O.listRow(d[1],d[2](),O.tr('Add','Добавить'),O.icon('plus'),()=>{
+          const l=O.navTabs();
+          if(l.length>=4)return O.toast(O.tr('Maximum 4 tabs','Максимум 4 вкладки'),2000);
+          l.push(d[0]);O.store.set('navTabs',l);buildBottom();draw();
+        }));
+      });
+    };
+    draw();
+  };
 
   app.append(top,T.banner,main,bottomBar);
   // focus mode exit affordance (visible only in focus mode)
@@ -95,8 +141,7 @@ function layout(){
   SP.changes.classList.toggle('show',sideTab==='changes');
   SB.term.classList.toggle('on',sideTab==='term');
   SB.changes.classList.toggle('on',sideTab==='changes');
-  if(B.chat)B.chat.classList.toggle('active',tab==='chat');
-  if(B.files)B.files.classList.toggle('active',tab==='files');
+  for(const k in B){if(k!=='more')B[k].classList.toggle('active',tab===k)}
   if(O.termShown)O.termShown();
 }
 
@@ -105,6 +150,7 @@ function bottomMenu(){
   O.actions(O.tr('Menu','Меню'),[
     {label:O.tr('Terminal','Терминал'),icon:'terminal',fn:()=>O.setTab('term')},
     {label:O.tr('Changes','Изменения'),icon:'branch',fn:()=>O.setTab('changes')},
+    {label:O.tr('Bottom bar…','Нижний бар…'),sub:O.tr('Choose your tabs','Выбрать свои вкладки'),icon:'sliders',fn:()=>O.openNavSettings()},
     {label:memOn?O.tr('Memory: on','Память: вкл'):O.tr('Memory: off','Память: выкл'),sub:O.tr('Project map and rules generation','Создание карты проекта и правил'),icon:'memory',fn:()=>{
       const v=!O.store.get('memory',true);
       O.store.set('memory',v);
@@ -299,15 +345,27 @@ O.on('share',d=>{
   if(!d||(!d.text&&!(d.files&&d.files.length)))return;
   const go=()=>{
     if(!built){setTimeout(go,200);return}
-    O.setTab('chat');
-    if(d.text&&O.insertText)O.insertText(d.text);
-    // shared images/PDFs become normal attachments in the composer
-    if(Array.isArray(d.files)&&d.files.length&&O.chatAttach){
-      O.chatAttach(d.files);
-      O.toast(O.tr('Attached files: ','Вложено файлов: ')+d.files.length,2000);
-    }else if(d.text){
-      O.toast(O.tr('Shared text inserted','Текст из другого приложения вставлен'),1800);
-    }
+    const apply=()=>{
+      O.setTab('chat');
+      if(d.text&&O.insertText)O.insertText(d.text);
+      // shared images/PDFs become normal attachments in the composer
+      if(Array.isArray(d.files)&&d.files.length&&O.chatAttach){
+        O.chatAttach(d.files);
+        O.toast(O.tr('Attached files: ','Вложено файлов: ')+d.files.length,2000);
+      }else if(d.text){
+        O.toast(O.tr('Shared text inserted','Текст из другого приложения вставлен'),1800);
+      }
+    };
+    // Let the user pick the destination chat instead of always the active one.
+    const ses=(S.sessions||[]).slice(0,8);
+    if(ses.length>1){
+      O.actions(O.tr('Share to…','Поделиться в…'),[
+        {label:O.tr('Current chat','Текущий чат'),sub:S.sid?O.sessionTitle(S.sessions.find(x=>x.id===S.sid)||{}):'',icon:'chat',fn:apply},
+        {label:O.tr('New chat','Новый чат'),icon:'plus',fn:async()=>{try{await O.newSession();apply()}catch(e){O.toast(e.message)}}},
+        {section:O.tr('Recent chats','Недавние чаты')},
+        ...ses.filter(x=>x.id!==S.sid).slice(0,6).map(x=>({label:O.sessionTitle(x),icon:'chat',fn:async()=>{await O.openSession(x.id);apply()}}))
+      ]);
+    }else apply();
   };
   go();
 });

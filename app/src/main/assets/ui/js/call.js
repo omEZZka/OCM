@@ -105,8 +105,19 @@ O.voiceDictate=()=>{
     done=true;stop();restore();
     const t=String(txt||'').trim();
     if(!t){O.toast(O.tr('No speech detected','Речь не распознана'),2200,'error');return}
-    if(O.insertText)O.insertText(base?(base+' '+t):t);
+    const full=base?(base+' '+t):t;
     O.setTab('chat');
+    // Voice draft: review and edit before anything is sent.
+    let closed=false;
+    const ta2=h('textarea',{rows:5});ta2.value=full;
+    const sh=O.sheet(O.tr('Voice draft','Голосовой черновик'),h('div',null,
+      h('div',{class:'note',style:{margin:'0 0 8px'}},O.tr('Check the recognised text, then send or keep editing.','Проверьте распознанный текст, затем отправьте или продолжите правку.')),
+      ta2,
+      h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
+        h('button',{class:'btn grow',onclick:()=>{closed=true;sh.close();if(O.insertText)O.insertText(full);O.toast(O.tr('Saved to the input field','Сохранено в поле ввода'),1500)}},O.icon('edit'),O.tr('To input','В поле ввода')),
+        h('button',{class:'btn pri grow',onclick:()=>{const v=ta2.value.trim();closed=true;sh.close();if(v&&O.chatSendText)O.chatSendText(v)}},O.icon('send'),O.tr('Send','Отправить')))),
+      {hud:true,onClose:()=>{if(!closed&&O.insertText)O.insertText(ta2.value)}});
+    setTimeout(()=>{try{ta2.focus()}catch(_){}},250);
   };
   const off=O.on('stt',d=>{
     if(done)return;

@@ -122,6 +122,7 @@ async function newEntry(dirRel,isDir){const name=await O.ask(isDir?'Новая �
 
 // ---- viewer / editor ----
 O.openFile=async n=>{const rel=typeof n==='string'?n:n.path,abs=typeof n==='string'?(n.startsWith('/')?n:S.dir+'/'+n):absOf(n);
+  if(O.workspaceRememberFile)O.workspaceRememberFile(abs);
   const body=h('div',{style:{display:'flex',flexDirection:'column',height:'100%',margin:'-10px -12px -16px'}},h('div',{class:'mut',style:{padding:'20px'}},'Загрузка...'));
   let text=null,editing=false,img=null;
   const actions=h('span',{style:{display:'flex'}});
