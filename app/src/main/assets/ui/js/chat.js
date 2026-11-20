@@ -1,6 +1,6 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
-let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn,stickyEl,agentAvatar,lampBtn;
+let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn,stickyEl,agentAvatar;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
 // Parts the user expanded/collapsed by hand: survives re-renders, never auto-collapsed.
 const manualParts=new Set();
@@ -69,9 +69,6 @@ O.chatInit=root=>{
   // Agent avatar with pulse (06) + who-is-answering card (43); long-press switches mode fast.
   agentAvatar=h('button',{class:'agent-avatar',title:O.tr('Who is answering','Кто отвечает'),onclick:agentCard},O.icon('bot'));
   O.longPress(agentAvatar,()=>O.openAgents(),500);
-  // Night lamp toggle (45)
-  lampBtn=h('button',{class:'hud-icon-btn lamp-btn'+(O.nightLamp()?' on':''),title:O.tr('Night lamp','Ночная лампа'),onclick:()=>O.setNightLamp(!O.nightLamp())},O.icon('bulb'));
-  if(O.nightLamp())document.documentElement.classList.add('night-lamp');
   modelChip=h('button',{class:'hud-pill model-pill',onclick:()=>O.openModels()},h('span',null,O.tr('Select model','Выбрать модель')),O.icon('chevD'));
   // Tap: while a call runs it ends it, otherwise a sheet asks what the user wants.
   // Long-press: straight to dictation, the fastest path for a single phrase.
@@ -101,7 +98,7 @@ O.chatInit=root=>{
     }));
   },500);
   const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentAvatar,outlineBtn,ctxBtn,planBtn,agentChip,modelChip);
-  const cbarRight=h('div',{class:'cbar-right'},lampBtn,micBtn,sendBtn);
+  const cbarRight=h('div',{class:'cbar-right'},micBtn,sendBtn);
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,stickyEl,jumpEl);
@@ -384,9 +381,9 @@ O.nightLamp=()=>O.store.get('nightLamp',false);
 O.setNightLamp=on=>{
   O.store.set('nightLamp',!!on);
   document.documentElement.classList.toggle('night-lamp',!!on);
-  if(lampBtn)lampBtn.classList.toggle('on',!!on);
   O.toast(on?O.tr('Night lamp on','Ночная лампа включена'):O.tr('Night lamp off','Ночная лампа выключена'),1400);
 };
+if(O.nightLamp())document.documentElement.classList.add('night-lamp');
 // ---- selection threads (34): select a fragment of an answer → ask about exactly it ----
 function initSelectionThreads(){
   let selBtn=null;
@@ -595,9 +592,9 @@ function toolView(){
 }
 O.toolView=toolView;
 const GROUPABLE=p=>p.type==='tool'||p.type==='patch'||p.type==='retry';
-// Anything that is not plain visible text/reasoning keeps consecutive commands in ONE pack:
-// hidden parts (thinking off, empty text, compaction markers) must not split the arrow.
-const isTextish=p=>p.type==='text'||p.type==='reasoning';
+// ONLY plain visible prose splits command packs. Reasoning, hidden parts, empty streaming text,
+// stats footers and system markers all live INSIDE the pack: consecutive commands = one arrow.
+const isProse=p=>p.type==='text'&&typeof p.text==='string'&&p.text.trim()!==''&&!isStatsText(p);
 function grpKey(m,parts){return m.info.id+'#'+parts[0].id}
 function groupOutline(parts){
   const counts={},files=new Set();let edits=0,run=0,err=0,desc='',cmd='';
@@ -656,19 +653,23 @@ function syncGrouped(el,m){
   const oldMap=new Map(olds.map(g=>[g.dataset.gkey,g]));
   const used=new Set();
   const seq=[];let run=[];
+  const flush=()=>{if(run.length){seq.push({t:'g',parts:run});run=[]}};
   for(const p of m.parts){
     if(GROUPABLE(p)){run.push(p);continue}
     if(isStatsText(p))continue; // "+N -M" footer lives in the badge, never breaks a pack
-    // Non-text parts (reasoning with thinking off, compaction, hidden/empty text) never break a
-    // run of commands: ALL consecutive tools live under one arrow.
-    if(!showPart(m,p)){continue}
-    if(!isTextish(p)){
-      // compaction is a system marker, invisible glue: it never breaks a command pack
+    if(p.type==='reasoning'){
+      // reasoning is NOT prose: it never splits consecutive commands. Visible thinking renders
+      // inside the pack (or above it when no pack is open yet).
+      if(!showPart(m,p))continue;
       if(run.length)run.push(p);else seq.push({t:'p',p});continue}
-    if(run.length){seq.push({t:'g',parts:run});run=[]}
+    if(!showPart(m,p))continue;
+    if(!isProse(p)){
+      // system markers / files / chips: glue inside a pack, standalone otherwise
+      if(run.length)run.push(p);else seq.push({t:'p',p});continue}
+    flush();
     seq.push({t:'p',p});
   }
-  if(run.length)seq.push({t:'g',parts:run});
+  flush();
   let anchor=body.firstChild;
   const put=node=>{
     while(anchor&&(anchor.classList&&(anchor.classList.contains('errbox')||anchor.classList.contains('msg-diff-line')||anchor.classList.contains('msg-diff-badge')||anchor.classList.contains('msg-placeholder'))))anchor=anchor.nextSibling;
@@ -965,6 +966,12 @@ function msgActions(m){
     bar.append(ib('copy',O.tr('Copy answer','Копировать ответ'),()=>O.native.copy(txt())));
     bar.append(ib('refresh',O.tr('Regenerate','Перегенерировать'),()=>O.regenerateFrom&&O.regenerateFrom(m)));
     bar.append(ib('branch',O.tr('Second opinion (another model)','Второе мнение (другая модель)'),()=>O.secondOpinion&&O.secondOpinion(m)));
+    bar.append(ib('zap',O.tr('Duel: compare two models side by side','Дуэль: сравнить две модели бок о бок'),()=>{
+      const list=O.visibleMsgs(m.info.sessionID||S.sid);
+      const idx=list.findIndex(x=>x.info.id===m.info.id);
+      let user=null;for(let i=idx-1;i>=0;i--)if(list[i].info.role==='user'){user=list[i];break}
+      O.openDuel&&O.openDuel(user?msgText(user):'');
+    }));
     bar.append(ib('share',O.tr('Share','Поделиться'),()=>O.native.share(txt())));
   }else{
     bar.append(ib('copy',O.tr('Copy','Копировать'),()=>O.native.copy(txt())));
@@ -1711,6 +1718,9 @@ const BUILTINS=[
  {n:'compact',d:'Сжать сессию, чтобы освободить контекст',i:'refresh',run:()=>doCompact()},
  {n:'style',d:'Стиль ответа (10 пресетов)',i:'edit',run:()=>O.openAnswerStyles()},
   {n:'search',d:'Глобальный поиск',i:'search',run:()=>O.openGlobalSearch()},
+ {n:'duel',d:'Дуэль: две модели отвечают, судья выбирает',i:'zap',run:arg=>O.openDuel&&O.openDuel(arg)},
+ {n:'memory',d:'Персональная память: факты о вас',i:'memory',run:()=>O.openUserFacts&&O.openUserFacts()},
+ {n:'template',d:'Шаблон проекта для этого чата',i:'doc',run:()=>O.openProjectTpls&&O.openProjectTpls(true)},
   {n:'outline',d:'Оглавление диалога',i:'list',run:()=>O.openOutline()},
   {n:'context',d:'Снимок контекста перед отправкой',i:'eye',run:()=>O.openContextPreview()},
  {n:'resources',d:'Монитор ресурсов',i:'cpu',run:()=>O.openResources()},
@@ -1800,7 +1810,24 @@ O.chatAttach=list=>{
   renderAtts();
 };
 function renderAtts(){attsEl.textContent='';attsEl.classList.toggle('hide',!atts.length);
-  atts.forEach((a,i)=>attsEl.append(h('span',{class:'chip'},a.mime.startsWith('image/')?h('img',{src:a.url,style:{height:'22px',borderRadius:'4px'}}):O.fileIcon(a.filename),h('span',null,a.filename),h('button',{onclick:()=>{atts.splice(i,1);renderAtts();updateSend();saveDraftNow()}},O.icon('x')))));updateSend();saveDraftNow()}
+  atts.forEach((a,i)=>{
+    // tap the chip body → preview (013); long-press → OCR for images (014)
+    const chip=h('span',{class:'chip att-chip',onclick:e=>{if(e.target.closest('button'))return;O.previewAttachment&&O.previewAttachment(a)}},
+      a.mime.startsWith('image/')?h('img',{src:a.url,style:{height:'22px',borderRadius:'4px'}}):O.fileIcon(a.filename),
+      h('span',null,a.filename),
+      a._ocr?h('span',{class:'ocr-badge',title:O.tr('Text extracted','Текст извлечён')},O.icon('doc')):null,
+      h('button',{onclick:()=>{atts.splice(i,1);renderAtts();updateSend();saveDraftNow()}},O.icon('x')));
+    if(a.mime.startsWith('image/')&&window.OC&&OC.ocrImage){
+      O.longPress(chip,async()=>{
+        O.toast(O.tr('Reading text from image…','Читаю текст с картинки…'),1500);
+        const t=await O.ocrAttachment(a);
+        if(t){a._ocr=t;renderAtts();O.toast(O.tr('Text extracted — will ride along the prompt','Текст извлечён — добавится к запросу'),2200)}
+        else O.toast(O.tr('No text found','Текст не найден'),2000);
+      },550);
+    }
+    attsEl.append(chip);
+  });
+  updateSend();saveDraftNow()}
 let sending=false;
 async function onSend(){
   // A double tap (or a queued click after a slow frame) must never send the prompt twice.
@@ -1839,11 +1866,20 @@ async function onSend(){
   // (10) Answer style: a short instruction rides along as a synthetic part (not shown as user text).
   const styleTxt=O.answerStyleText?O.answerStyleText():'';
   if(styleTxt)parts.push({type:'text',text:'[Стиль ответа: '+styleTxt+']',synthetic:true});
+  // Personal memory (020) + project template (009): hidden instructions ride along every prompt.
+  const factsTxt=O.userFactsText?O.userFactsText():'';
+  if(factsTxt)parts.push({type:'text',text:factsTxt,synthetic:true});
+  const tplTxt=O.tplTextFor?O.tplTextFor(S.sid):'';
+  if(tplTxt)parts.push({type:'text',text:tplTxt,synthetic:true});
   // dry-run: propose, never execute
   if(O.dryRun&&O.dryRun())parts.push({type:'text',text:'[РЕЖИМ DRY-RUN: не выполняй команды и не изменяй файлы. Покажи план действий и точные команды/diff, которые ты бы выполнил, и дождись подтверждения.]',synthetic:true});
   if(text)parts.push({type:'text',text});
   mentions.filter(m=>text.includes(m.tok)).forEach(m=>{const p=JSON.parse(JSON.stringify(m.part));if(p.source&&p.source.text){p.source.text.start=text.indexOf(m.tok);p.source.text.end=p.source.text.start+m.tok.length}parts.push(p)});
-  atts.forEach(a=>parts.push(a));
+  atts.forEach(a=>{
+    parts.push(a);
+    // OCR text (014) rides along as a hidden part so even text-only models can read the screenshot
+    if(a._ocr)parts.push({type:'text',text:'[Текст с изображения '+a.filename+']:\n'+a._ocr.slice(0,8000),synthetic:true});
+  });
   if(O.mmActive()&&O.mmSend){clear();try{await O.mmSend(text,parts)}catch(e){O.toast(e.message||String(e),4000)}return}
   if(O.pushPromptHistory)O.pushPromptHistory(text);
   O.runHook('onSend',{text,parts,model:S.model,agent:S.agent});

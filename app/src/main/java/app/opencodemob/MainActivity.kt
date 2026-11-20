@@ -1754,6 +1754,28 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // OCR (014): extract text from a screenshot attachment. Async: ML Kit may download the
+        // model on first use; the UI gets an 'ocr' event with the result.
+        @JavascriptInterface fun ocrImage(id: String, dataUrl: String) {
+            thread {
+                val result = try {
+                    val comma = dataUrl.indexOf(',')
+                    if (comma < 0) JSONObject().put("ok", false).put("err", "bad data url").toString()
+                    else {
+                        val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
+                        val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            ?: throw IllegalArgumentException("cannot decode image")
+                        val img = com.google.mlkit.vision.text.TextRecognition
+                            .getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS)
+                        val task = img.process(com.google.mlkit.vision.common.InputImage.fromBitmap(bmp, 0))
+                        val text = com.google.android.gms.tasks.Tasks.await(task, 60, java.util.concurrent.TimeUnit.SECONDS)
+                        JSONObject().put("ok", true).put("text", text.text).toString()
+                    }
+                } catch (e: Exception) { JSONObject().put("ok", false).put("err", e.message ?: e.toString()).toString() }
+                emit("ocr", JSONObject().put("id", id).put("result", result))
+            }
+        }
+
         @JavascriptInterface fun readText(path: String): String = try {
             val f = Runtime.hostPath(this@MainActivity, uid(), path)
             if (!f.isFile) JSONObject().put("ok", false).put("err", "Not a file").toString()

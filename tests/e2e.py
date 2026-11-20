@@ -486,6 +486,17 @@ try:
     }""")
     chk('one arrow for all consecutive commands',one['groups']==1)
     chk('hidden parts do not split the pack',one['tools']==4)
+    # visible reasoning between tools must ALSO stay inside the one pack
+    onev=pg.evaluate("""()=>{
+      OCM.S.opts.thinking=true;
+      OCM.upsertPart({id:'r03',sessionID:'ses_one',messageID:'mo1',type:'reasoning',text:'думаю между командами',time:{end:1}});
+      OCM.chat.renderAll();
+      const body=document.querySelector('.msg.assistant .m-body');
+      const g=body.querySelectorAll('.cmd-group').length;
+      const inside=body.querySelector('.cmd-group')._parts.some(p=>p.type==='reasoning');
+      return {g,inside};
+    }""")
+    chk('visible reasoning stays in the pack',onev['g']==1 and onev['inside'])
     # ---- 2.21 perf: unchanged message events do zero DOM work ----
     perf=pg.evaluate("""()=>{
       const sid=OCM.S.sid;const m=OCM.visibleMsgs(sid).find(x=>x.info.role==='assistant');
@@ -541,14 +552,20 @@ try:
     }""")
     chk('agent avatar pulses while busy',pulse['on'] and pulse['off'])
     chk('agent card opens on avatar tap',pulse['sheet'])
-    # ---- 2.21: night lamp ----
+    # ---- 2.21: night lamp lives in settings, not in the composer ----
     lamp=pg.evaluate("""()=>{
       OCM.setNightLamp(true);
       const on=document.documentElement.classList.contains('night-lamp');
       OCM.setNightLamp(false);
-      return {on,off:!document.documentElement.classList.contains('night-lamp'),btn:!!document.querySelector('.lamp-btn')};
+      return {on,off:!document.documentElement.classList.contains('night-lamp'),noChip:!document.querySelector('.lamp-btn')};
     }""")
-    chk('night lamp toggles',lamp['on'] and lamp['off'] and lamp['btn'])
+    chk('night lamp toggles',lamp['on'] and lamp['off'])
+    chk('night lamp not a composer chip',lamp['noChip'])
+    pg.evaluate("OCM.openSettings()")
+    pg.wait_for_selector('.sheet .settings-tabs')
+    pg.wait_for_timeout(300)
+    chk('night lamp row in settings','Ночная лампа' in pg.inner_text('.sheet'))
+    pg.evaluate("OCM.back()")
     # ---- 2.21: smart stop -> resume button ----
     resume=pg.evaluate("""()=>{
       const sid='ses_res';OCM.S.sessions.unshift({id:sid,title:'res',time:{created:1,updated:Date.now()}});
@@ -938,6 +955,113 @@ try:
     }""")
     chk('poller picks up busy status without restart',poll['busy'] and poll['line'])
     chk('poller returns to idle',poll['idle'])
+    # ---- freeze watchdog: busy + silent SSE for 12s -> stream kick + snapshot pull ----
+    frz=pg.evaluate("""async ()=>{
+      const sid=OCM.S.sid;
+      window.__status={[sid]:{type:'busy'}};OCM.S.status[sid]={type:'busy'};
+      let kicks=0;const orig=OC.sseStart;OC.sseStart=()=>{kicks++;orig()};
+      // simulate a zombie stream: no events for >12s while status says busy
+      OCM.stopLiveSync();OCM.startLiveSync(sid);
+      await new Promise(r=>setTimeout(r,100));
+      // force the watchdog window by backdating the last event marker via a fresh busy sync
+      await new Promise(r=>setTimeout(r,13500));
+      OC.sseStart=orig;
+      const syncs=__srv.calls.filter(c=>c.p.includes('/message')).length;
+      window.__status={};OCM.S.status[sid]={type:'idle'};OCM.stopLiveSync();
+      return {kicks,syncs};
+    }""")
+    chk('freeze watchdog kicks dead SSE',frz['kicks']>=1)
+    chk('freeze watchdog pulls snapshots',frz['syncs']>=2)
+    # ---- 2.22: personal memory (020) ----
+    mem=pg.evaluate("""()=>{
+      OCM.addUserFact('предпочитаю Kotlin');
+      OCM.addUserFact('предпочитаю Kotlin'); // duplicate ignored
+      const n=OCM.userFacts().length;
+      const txt=OCM.userFactsText();
+      OCM.openUserFacts();
+      const sheet=[...document.querySelectorAll('.sheet')].some(s=>s.textContent.includes('Персональная память'));
+      OCM.back();
+      return {n,txt,sheet};
+    }""")
+    chk('memory: fact stored once',mem['n']==1)
+    chk('memory: facts ride along prompts','Kotlin' in mem['txt'])
+    chk('memory sheet opens',mem['sheet'])
+    memsend=pg.evaluate("""()=>{
+      OCM.S.sid='ses_1';
+      const before=__srv.calls.filter(c=>c.p.endsWith('prompt_async')).length;
+      document.querySelector('#composer textarea').value='тест памяти';
+      document.querySelector('#composer textarea').dispatchEvent(new Event('input'));
+      document.querySelector('#send').click();
+      return new Promise(res=>setTimeout(()=>{
+        const calls=__srv.calls.filter(c=>c.p.endsWith('prompt_async'));
+        const last=calls[calls.length-1];
+        const hasFact=(last.body.parts||[]).some(p=>p.synthetic&&(p.text||'').includes('Kotlin'));
+        res({sent:calls.length>before,hasFact});
+      },600));
+    }""")
+    chk('memory injected into prompt',memsend['sent'] and memsend['hasFact'])
+    pg.evaluate("__push({type:'permission.replied',properties:{requestID:'per_1',sessionID:'ses_1'}});__push({type:'session.idle',properties:{sessionID:'ses_1'}})")
+    pg.wait_for_timeout(200)
+    # ---- 2.22: project templates (009) ----
+    tpl=pg.evaluate("""()=>{
+      const tpls=OCM.projectTpls();
+      OCM.applyProjectTpl(tpls[0]);
+      const txt=OCM.tplTextFor(OCM.S.sid);
+      OCM.saveProjectTpl({id:'tpl_test',name:'Мой шаблон',icon:'doc',prompt:'правило X'});
+      const custom=OCM.projectTpls().some(t=>t.id==='tpl_test');
+      OCM.openProjectTpls(true);
+      const sheet=[...document.querySelectorAll('.sheet')].some(s=>s.textContent.includes('Шаблоны проектов'));
+      OCM.back();
+      return {n:tpls.length,txt,custom,sheet};
+    }""")
+    chk('templates: defaults exist',tpl['n']>=5)
+    chk('template text injected','Android' in tpl['txt'] or 'Kotlin' in tpl['txt'])
+    chk('custom template saved',tpl['custom'])
+    chk('template picker opens',tpl['sheet'])
+    # ---- 2.22: attachment preview (013) + OCR (014) ----
+    att=pg.evaluate("""async ()=>{
+      OCM.chatAttach([{mime:'image/png',filename:'shot.png',data:'aGk='}]);
+      const chip=document.querySelector('#composer .att-chip');
+      chip.click();
+      const viewer=[...document.querySelectorAll('.sheet')].some(s=>s.textContent.includes('shot.png'));
+      OCM.back();
+      const a=await OCM.ocrAttachment({url:'data:image/png;base64,aGk='});
+      return {chip:!!chip,viewer,ocr:a};
+    }""")
+    chk('attachment chip opens preview',att['chip'] and att['viewer'])
+    chk('OCR bridge returns text','MOCK OCR' in (att['ocr'] or ''))
+    ocrsend=pg.evaluate("""()=>{
+      // simulate an OCR'd attachment riding along the next prompt
+      OCM.chatAttach([{mime:'image/png',filename:'ocr.png',data:'aGk='}]);
+      const chips=document.querySelectorAll('#composer .att-chip');
+      return {chips:chips.length};
+    }""")
+    chk('second attachment added',ocrsend['chips']>=1)
+    pg.evaluate("document.querySelectorAll('#composer .atts .chip button').forEach(b=>b.click())")
+    # ---- 2.22: duel (017/018) ----
+    duel=pg.evaluate("""()=>{
+      OCM.openDuel('тест дуэли');
+      const sh=[...document.querySelectorAll('.sheet')].find(s=>s.textContent.includes('Дуэль моделей'));
+      const has=!!sh;
+      const selects=sh?sh.querySelectorAll('select').length:0;
+      const q=sh?sh.querySelector('textarea').value:'';
+      OCM.back();
+      return {has,selects,q};
+    }""")
+    chk('duel sheet with two model selects',duel['has'] and duel['selects']==2)
+    chk('duel prefilled with question',duel['q']=='тест дуэли')
+    # ---- 2.22: smart search button exists (002) ----
+    smart=pg.evaluate("""()=>{
+      OCM.openGlobalSearch();
+      const sh=[...document.querySelectorAll('.sheet')].find(s=>s.textContent.includes('Глобальный поиск'));
+      const btn=sh&&[...sh.querySelectorAll('button')].find(b=>b.textContent.includes('Умный поиск'));
+      const fn=typeof OCM.smartSearch==='function';
+      OCM.back();
+      return {btn:!!btn,fn};
+    }""")
+    chk('smart search button + helper',smart['btn'] and smart['fn'])
+    # closed sheets linger in the DOM for 260ms: let them detach before .sheet:last-child lookups
+    pg.wait_for_timeout(350)
     # ---- MM: approval gate + stage retry helpers ----
     mmx=pg.evaluate("""()=>{
       const mm=OCM.mmList().find(x=>x.id==='mm_t1');

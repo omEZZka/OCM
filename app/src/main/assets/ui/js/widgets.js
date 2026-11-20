@@ -727,11 +727,35 @@ O.openResources=()=>{
 // ---- (62) global search: chats, messages, files, commands, models, actions ----
 O.openGlobalSearch=()=>{
   const q=h('input',{placeholder:O.tr('Search everything…','Искать везде…'),style:{marginBottom:'10px'}});
+  const smartBtn=h('button',{class:'btn sm wide',style:{marginBottom:'10px'}},O.icon('bulb'),O.tr('Smart search (AI, by meaning)','Умный поиск (ИИ, по смыслу)'));
   const out=h('div');
-  const s=O.sheet(O.tr('Global search','Глобальный поиск'),h('div',null,q,out),{full:true});
+  const s=O.sheet(O.tr('Global search','Глобальный поиск'),h('div',null,q,smartBtn,out),{full:true});
   let t=null;
   const row=(icon,title,sub,fn)=>h('button',{class:'settings-row',onclick:()=>{s.close();fn()}},
     O.icon(icon),h('div',{class:'settings-row-text'},h('b',null,title),sub?h('span',null,sub):null));
+  // 002: natural-language search across sessions — the model reads a digest and picks by meaning
+  smartBtn.onclick=async()=>{
+    const query=String(q.value||'').trim();
+    if(query.length<3)return O.toast(O.tr('Type what you are looking for','Напишите, что ищете'),1800);
+    if(!O.smartSearch)return O.toast('smart search unavailable',2000);
+    smartBtn.disabled=true;out.textContent='';
+    out.append(h('div',{class:'note'},h('span',{class:'spin'}),' ',O.tr('AI is reading your chats…','ИИ читает ваши чаты…')));
+    try{
+      const hits=await O.smartSearch(query);
+      if(!s.root.isConnected)return;
+      out.textContent='';
+      if(!hits.length){out.append(h('div',{class:'note'},O.tr('Nothing matches by meaning','По смыслу ничего не нашлось')));return}
+      out.append(h('div',{class:'grp'},O.tr('Found by meaning','Найдено по смыслу')));
+      hits.forEach(r=>{
+        const ses2=(O.S.sessions||[]).find(x=>x.id===r.sid);
+        out.append(row('bulb',ses2?O.sessionTitle(ses2):r.sid.slice(0,10),r.why||'',async()=>{
+          await O.openSession(r.sid);
+          setTimeout(()=>O.jumpToMsg&&O.jumpToMsg(r.mid),400);
+        }));
+      });
+    }catch(e){out.textContent='';out.append(h('div',{class:'note'},e.message||String(e)))}
+    finally{smartBtn.disabled=false}
+  };
   const run=async()=>{
     const needle=String(q.value||'').trim().toLowerCase();
     out.textContent='';

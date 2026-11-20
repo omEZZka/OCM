@@ -76,7 +76,7 @@ window.OC={
  resourceStats(){return JSON.stringify({ramTotal:8e9,ramAvail:3e9,jvmUsed:1e8,jvmMax:5e8,appPssKb:120000,cpuPct:17,rootfsBytes:2.1e9,profileBytes:5e7,diskFree:20e9,diskTotal:64e9,serverReady:true})},gitRun(){return JSON.stringify({ok:true,out:''})},
  checkpointCreate(){return JSON.stringify({ok:true,queued:true})},checkpointList(){return JSON.stringify({ok:true,items:[]})},checkpointRestore(){return JSON.stringify({ok:true})},
  startOverlay(){},stopOverlay(){},overlayState(){return JSON.stringify({allowed:false,running:false})},setOverlayState(){},
- sttStart(){},sttStop(){},sttAvailable(){return true},callAudio(){},ttsInit(){},ttsSpeak(){},ttsStop(){},ttsConfigure(){},ttsVoices(){return '[]'},
+ sttStart(){},sttStop(){},sttAvailable(){return true},ocrImage(id,u){setTimeout(()=>OCEvent('ocr',{id,result:JSON.stringify(window.__ocrResult||{ok:true,text:'MOCK OCR TEXT from screenshot'})}),5)},callAudio(){},ttsInit(){},ttsSpeak(){},ttsStop(){},ttsConfigure(){},ttsVoices(){return '[]'},
  checkUpdates(){setTimeout(()=>OCEvent('update',{core:'v1.18.6'}),5)},applyAppUpdate(){},applyCoreUpdate(){}
 };
 window.__onPrompt=b=>{const sid='ses_1';const P=(part)=>__push({type:'message.part.updated',properties:{part:Object.assign({sessionID:sid},part)}});

@@ -183,7 +183,7 @@ const trimStore=()=>{if(M.size<=24)return;
 };
 
 // ---- server events ----
-let liveSyncTimer=null;
+let liveSyncTimer=null,lastEventAt=0;
 O.syncSessionMessages=async(sid)=>{
   if(!sid||sid!==S.sid)return;
   try{
@@ -191,16 +191,26 @@ O.syncSessionMessages=async(sid)=>{
     if(!Array.isArray(arr))return;
     // Periodically the UI pulls the whole message list as a safety net. That snapshot can be a
     // little behind the live deltas, so parts are merged (see mergePart) instead of replaced.
+    let changed=false;
     for(const m of arr){
       if(!m||!m.info)continue;
+      const prev=O.msgs(sid).idx.get(m.info.id);
+      const prevN=prev?prev.parts.length:-1;
+      const prevLen=prev?prev.parts.reduce((a,p)=>a+String(p.text||'').length+String((p.state&&p.state.output)||'').length,0):-1;
       O.upsertMsg(m.info);
       if(Array.isArray(m.parts)){
         for(const pt of m.parts) O.upsertPart(pt);
       }
+      const now=O.msgs(sid).idx.get(m.info.id);
+      const nowN=now?now.parts.length:-1;
+      const nowLen=now?now.parts.reduce((a,p)=>a+String(p.text||'').length+String((p.state&&p.state.output)||'').length,0):-1;
+      if(nowN!==prevN||nowLen!==prevLen)changed=true;
     }
     // Incremental merge only. Emitting 'open' here re-rendered the whole chat and force-scrolled
     // to the bottom every 3 s while the user was reading above (the "yanked down" bug).
-    if(sid===S.sid)bus.emit('resync',sid);
+    // The resync itself counts as fresh data: it feeds the SSE watchdog below.
+    if(changed)lastEventAt=Date.now();
+    if(sid===S.sid&&changed)bus.emit('resync',sid);
     saveMsgs(sid);
   }catch(e){}
 };
@@ -216,6 +226,13 @@ O.startLiveSync=(sid)=>{
     const isIdle=!st0||st0.type==='idle';
     ticks++;
     if(isIdle&&ticks%2!==0)return; // idle: check every 6s, busy: every 3s
+    // FREEZE WATCHDOG: the agent is "busy" but no SSE data arrived for 12+ seconds — the stream
+    // died silently (proot socket freeze after backgrounding). Kick it and pull a snapshot now,
+    // instead of letting the chat sit frozen mid-task until a manual restart.
+    if(!isIdle&&lastEventAt&&Date.now()-lastEventAt>12000){
+      lastEventAt=Date.now(); // one kick per window; the sync below re-arms it if data flows
+      try{OC.sseStart()}catch(_){}
+    }
     busy=true;
     try{
       if(!S.sid){O.stopLiveSync();return}
@@ -251,6 +268,7 @@ O.stopLiveSync=()=>{
 };
 
 O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
+  lastEventAt=Date.now();
   const ev=o.payload||o,p=ev.properties||{};
   const targetSid=p.sessionID||(p.info&&p.info.sessionID)||(p.part&&p.part.sessionID);
   if(o.directory&&o.directory!=='global'&&S.dir&&o.directory!==S.dir&&targetSid!==S.sid&&!/^(permission|question)\./.test(ev.type))return;
@@ -327,7 +345,9 @@ const normPerm=p=>({id:p.id,sessionID:p.sessionID,title:p.title||p.permission||p
 // Brief SSE drops (app frozen in background for a second) must not flash the reconnect banner:
 // delay it, cancel when the stream comes back.
 let upT=null;
-O.on('sse',d=>{if(d.t==='data')O.onServerEvent(d.d);else if(d.t==='open'){if(upT){clearTimeout(upT);upT=null}S.up=true;bus.emit('conn')}
+O.on('sse',d=>{if(d.t==='data')O.onServerEvent(d.d);else if(d.t==='open'){if(upT){clearTimeout(upT);upT=null}S.up=true;lastEventAt=Date.now();bus.emit('conn');
+  // A reconnect may have missed the whole middle of a turn: pull the truth immediately.
+  if(S.sid){O.syncSessionMessages(S.sid);api('GET','/session/status',null,{timeout:4000}).then(st=>{if(st&&S.sid&&st[S.sid]){const ns=normStatus(st[S.sid]);const old=S.status[S.sid];S.status[S.sid]=ns;if(!old||old.type!==ns.type)bus.emit('status',S.sid)}}).catch(()=>{})}}
   else if(d.t==='close'){S.up=false;if(!upT)upT=setTimeout(()=>{upT=null;if(!S.up)bus.emit('conn')},5000)}});
 // Returning to the foreground: force a fresh stream. Throttled, because the native loop already
 // reconnects on its own and repeated restarts would cancel its backoff every time.
@@ -346,6 +366,17 @@ document.addEventListener('visibilitychange',()=>{
   // The status map may be stale after a long pause: the heartbeat poller verifies it and
   // keeps watching, so a missed "busy" event still surfaces without a restart.
   if(S.sid)O.startLiveSync(S.sid);
+  // Foreground after a freeze: even if SSE claims to be "up", the socket may be a zombie.
+  // Force one immediate truth pull so a mid-task freeze heals within a second of return.
+  if(S.sid){O.syncSessionMessages(S.sid);
+    api('GET','/session/status',null,{timeout:4000}).then(st=>{
+      if(!st||!S.sid)return;
+      const ns=st[S.sid]?normStatus(st[S.sid]):{type:'idle'};
+      const old=S.status[S.sid];
+      S.status[S.sid]=ns;
+      if(!old||old.type!==ns.type){bus.emit('status',S.sid);if(ns.type==='idle'&&old&&old.type!=='idle')bus.emit('idle',S.sid)}
+    }).catch(()=>{});
+  }
 });
 
 // ---- overlay bubble state ----
