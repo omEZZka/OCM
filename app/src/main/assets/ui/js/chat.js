@@ -78,7 +78,7 @@ O.chatInit=root=>{
   }},O.icon('mic'));
   O.longPress(micBtn,()=>{if(O.voiceDictate)O.voiceDictate();else onMic();},450);
   bus.on('call',()=>micBtn.classList.toggle('on-call',!!(O.callActive&&O.callActive())));
-  sendBtn=h('button',{id:'send',onclick:onSend},O.icon('send'));
+  sendBtn=h('button',{id:'send',onclick:()=>onSend()},O.icon('send'));
   // Send-to-another-model (20): long-press on send picks a model for THIS message.
   O.longPress(sendBtn,()=>{
     const text=ta.value.trim();
@@ -88,12 +88,9 @@ O.chatInit=root=>{
     O.actions(O.tr('Send with model…','Отправить моделью…'),others.map(x=>{
       const key=x.pid+'/'+x.mid;
       return{label:x.name||x.mid,sub:key===curKey?O.tr('current','текущая'):x.pid,icon:key===curKey?'check':'cpu',fn:()=>{
-        const prev=S.model;
-        S.model={providerID:x.pid,modelID:x.mid};
-        bus.emit('meta');
-        onSend();
-        // one-shot override: the session model is restored right after the send
-        setTimeout(()=>{S.model=prev;bus.emit('meta')},600);
+        // FIX (audit #8): pass the model as a parameter — mutating S.model on a 600ms timer raced
+        // the async send (session creation can take longer) and could clobber a manual switch.
+        onSend({providerID:x.pid,modelID:x.mid});
       }};
     }));
   },500);
@@ -122,11 +119,16 @@ O.chatInit=root=>{
   let partRaf=0;
   bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);
     if(was&&!partRaf)partRaf=requestAnimationFrame(()=>{partRaf=0;scrollEnd()})});
-  bus.on('msg-removed',(sid,id)=>{const e=msgEls.get(id);if(e){
-    // merged turn cards are aliased by several ids: only remove the DOM when no other live
-    // message of the turn still points at this card
+  bus.on('msg-removed',(sid,id)=>{
+    // FIX (audit #4): guard foreign sessions; purge partEls/timers of the removed card's parts
+    if(sid!==S.sid)return;
+    const e=msgEls.get(id);if(!e)return;
     let shared=false;for(const[k,v]of msgEls){if(v===e&&k!==id){shared=true;break}}
-    if(!shared)e.remove();msgEls.delete(id)}});
+    if(!shared){
+      e.querySelectorAll('[data-pid]').forEach(pe=>{const pid=pe.dataset.pid;partEls.delete(pid);dropTimer(pid);if(pe._tt){clearTimeout(pe._tt);pe._tt=null}});
+      e.remove();
+    }
+    msgEls.delete(id)});
   bus.on('part-removed',(sid,m,pid)=>{dropTimer(pid);const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
   bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend();syncAgentPulse();
     // status flips can change placeholders / auto-fold state without any part change
@@ -144,9 +146,14 @@ O.chatInit=root=>{
     (bus._idleAt=bus._idleAt||{})[sid]=Date.now();
     if(O.clearInflight)O.clearInflight();
     if(O._turnStart&&O.recordTurnTime){O.recordTurnTime(S.sid,Date.now()-O._turnStart);O._turnStart=0}
-    if(O.dequeuePrompt){
-      const next=O.dequeuePrompt(S.sid);
-      if(next&&(next.text||(next.atts&&next.atts.length)))setTimeout(()=>{if(!busy())O.chatSendText(next.text,{atts:next.atts,mentions:next.mentions})},400);
+    if(O.peekPrompt){
+      // FIX (audit #9): peek + commit AFTER a successful send; if the agent became busy again
+      // during the delay, the item stays queued instead of vanishing.
+      const next=O.peekPrompt(S.sid);
+      if(next&&(next.text||(next.atts&&next.atts.length)))setTimeout(()=>{
+        if(busy())return;
+        if(O.chatSendText(next.text,{atts:next.atts,mentions:next.mentions}))O.commitPrompt(S.sid);
+      },400);
     }
     if(O.autoCompact&&O.autoCompact()){
       const u=O.contextUsage(S.sid);
@@ -252,9 +259,13 @@ const scrollEnd=f=>{requestAnimationFrame(()=>{
   const target=msgsEl.scrollHeight-msgsEl.clientHeight;
   const cur=msgsEl.scrollTop;
   // Cinematic follow: short smooth glide when close, instant jump for big gaps (session open).
-  if(f||target-cur>msgsEl.clientHeight*1.5||!O.chatAnim||!O.chatAnim()){msgsEl.scrollTop=target}
-  else{try{msgsEl.scrollTo({top:target,behavior:'smooth'})}catch(_){msgsEl.scrollTop=target}}
-  requestAnimationFrame(()=>{suppressScroll=false});
+  if(f||target-cur>msgsEl.clientHeight*1.5||!O.chatAnim||!O.chatAnim()){msgsEl.scrollTop=target;requestAnimationFrame(()=>{suppressScroll=false})}
+  else{
+    // FIX (audit #10): the glide animates for hundreds of ms and fires scroll events; releasing
+    // suppressScroll after ONE frame let those events kill stick mid-stream. Hold it ~450ms.
+    try{msgsEl.scrollTo({top:target,behavior:'smooth'})}catch(_){msgsEl.scrollTop=target}
+    setTimeout(()=>{suppressScroll=false},450);
+  }
   if(f){stick=true;jumpEl.classList.add('hide')}
 })};
 O.chatAnim=()=>O.store.get('chatAnim',true);
@@ -453,6 +464,15 @@ function renderAll(){
   timers.clear();
   if(O.chatSkeletonOff)O.chatSkeletonOff();
   msgsEl.innerHTML='';msgEls.clear();partEls.clear();revKey=revisionKey();
+  // FIX (audit #3): these Sets grew forever (one key per message/part of every session ever
+  // opened). Prune to the CURRENT session's keys instead of wiping: a same-session rebuild must
+  // preserve the user's manual open/close choices (keys are prefixed with the message id).
+  const curIds=new Set((S.sid?O.msgs(S.sid).list:[]).map(m=>m.info.id));
+  const keepKey=k=>{const mid=k.split('#')[0];return curIds.has(mid)};
+  for(const k of [...open])if(!keepKey(k))open.delete(k);
+  for(const k of [...manualParts])if(!keepKey(k))manualParts.delete(k);
+  for(const k of [...openGroups])if(!keepKey(k))openGroups.delete(k);
+  for(const k of [...manualGroups])if(!keepKey(k))manualGroups.delete(k);
   const list=S.sid?O.visibleMsgs(S.sid):[];
   if(draftSid!==S.sid){
     draftSid=S.sid;clearTimeout(draftTimer);
@@ -520,10 +540,14 @@ function maybeLoadOlder(){
   chunk.forEach(m=>{
     if(m.info.role==='assistant'&&toolView()!=='cards'){
       const host=turnHost(m);
-      if(built.has(host.info.id)){const he=msgEls.get(host.info.id);if(he)msgEls.set(m.info.id,he);return}
+      // FIX (audit #2): the turn's card may already exist in a LATER chunk (built is per-chunk).
+      // Reuse the live card instead of building a duplicate that orphans the old one.
+      const exist=msgEls.get(host.info.id);
+      if(built.has(host.info.id)||exist){const he=exist||msgEls.get(host.info.id);if(he){msgEls.set(m.info.id,he);(he._tids||[]).forEach(id=>msgEls.set(id,he))}return}
       const vm=mergedTurnMsg(host);
       const el=buildMsg(vm);built.add(host.info.id);
-      (vm._ids||[host.info.id]).forEach(id=>msgEls.set(id,el));
+      el._tids=vm._ids||[host.info.id];
+      el._tids.forEach(id=>msgEls.set(id,el));
       fr.append(el);
     }else{const el=buildMsg(m);built.add(m.info.id);fr.append(el)}
   });
@@ -579,8 +603,9 @@ function ensureMsg(m){
   }
   let el=msgEls.get(m.info.id);
   if(!el){const e=msgsEl.querySelector('.empty');if(e)e.remove();if(chatRoot)chatRoot.classList.remove('is-empty');
-    const bm=(m.info.role==='assistant'&&toolView()!=='cards')?mergedTurnMsg(m):m;
+    const bm=(m.info.role==='assistant'&&toolView()!=='cards')?mergedTurnMsg(turnHost(m)):m;
     el=buildMsg(bm);
+    if(bm._ids)bm._ids.forEach(id=>msgEls.set(id,el));
     let before=null;for(const c of msgsEl.children){if(c.dataset.id&&c.dataset.id>m.info.id){before=c;break}}
     if(stick)msgsEl.insertBefore(el,before);
     else keepAnchor(()=>msgsEl.insertBefore(el,before));
@@ -588,12 +613,15 @@ function ensureMsg(m){
   // PERF: an event about a message whose content did not change must not touch the DOM at all.
   // msgSig covers every visible field; unchanged → zero work (this was the >1s tap lag: every SSE
   // status tick re-rendered every visible message, rebuilt metas and re-ran markdown).
-  const sig=msgSig(m);
+  // FIX (audit #1): the HOST of a merged turn must sync as the WHOLE turn — syncing the raw host
+  // message wiped every later round from the shared card (idle handler hit this path).
+  const vm=(m.info.role==='assistant'&&toolView()!=='cards')?mergedTurnMsg(turnHost(m)):m;
+  const sig=msgSig(vm);
   if(el._sig===sig)return;
   el._sig=sig;
   // Updating a message above the viewport must not move what the user is reading.
-  if(stick){syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m)}
-  else keepAnchor(()=>{syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m)})}
+  if(stick){syncParts(el,vm);metaUpdate(el,vm);msgPlaceholder(el,vm)}
+  else keepAnchor(()=>{syncParts(el,vm);metaUpdate(el,vm);msgPlaceholder(el,vm)})}
 // First assistant message of the turn this message belongs to (scans back to the user prompt).
 function turnHost(m){
   const list=O.msgs(m.info.sessionID).list;
@@ -636,9 +664,12 @@ function mergedTurnMsg(host){
 function msgSig(m){
   const i=m.info;
   let s=i.role+'|'+(i.time&&i.time.completed||0)+'|'+(i.time&&i.time.end||0)+'|'+(i.error?i.error.name||'err':'')+'|'+(i.modelID||'')+'|'+(i.tokens&&(i.tokens.input||0)+(i.tokens.output||0)||0)+'|'+(i.cost||0);
+  // FIX (audit #6): same-length text edits and tool input/error changes were invisible to the
+  // signature — a cheap tail hash catches them without hashing the whole answer.
+  const tail=t=>{t=String(t||'');let x=t.length;for(let k=Math.max(0,t.length-48);k<t.length;k++)x=(x*31+t.charCodeAt(k))|0;return x};
   for(const p of m.parts){
-    if(p.type==='text'||p.type==='reasoning')s+='|'+p.id+':'+String(p.text||p.reasoning||'').length+':'+(p.time&&p.time.end?1:0);
-    else if(p.type==='tool'){const st=p.state||{};s+='|'+p.id+':'+(st.status||'')+':'+String(st.output!=null?st.output:'').length+':'+((st.metadata&&st.metadata.diff)||'').length}
+    if(p.type==='text'||p.type==='reasoning'){const t=String(p.text||p.reasoning||'');s+='|'+p.id+':'+t.length+':'+tail(t)+':'+(p.time&&p.time.end?1:0)}
+    else if(p.type==='tool'){const st=p.state||{};s+='|'+p.id+':'+(st.status||'')+':'+String(st.output!=null?st.output:'').length+':'+((st.metadata&&st.metadata.diff)||'').length+':'+(st.input?JSON.stringify(st.input).length:0)+':'+(st.error?String(st.error).length:0)}
     else s+='|'+p.id+':'+p.type;
   }
   return s;
@@ -834,7 +865,18 @@ function syncGrouped(el,m){
       put(g);
     }
   }
-  for(const g of olds){if(!used.has(g.dataset.gkey))g.remove()}
+  // FIX (audit #5): dropping a pack must purge partEls/timers of its dead children. A pack is
+  // "dead" only when its key is not reused AND its host message no longer has a live card
+  // (renderAll detaches everything but keeps msgEls aliases — those packs come right back).
+  const liveIds=new Set(msgEls.keys());
+  for(const g of olds){
+    if(used.has(g.dataset.gkey))continue;
+    if(g._mid&&liveIds.has(g._mid))continue; // rebuild in progress: state must survive
+    g.querySelectorAll('[data-pid]').forEach(pe=>{const pid=pe.dataset.pid;
+      if(pe.isConnected&&!g.contains(pe))return;
+      partEls.delete(pid);dropTimer(pid);if(pe._tt){clearTimeout(pe._tt);pe._tt=null}});
+    openGroups.delete(g.dataset.gkey);manualGroups.delete(g.dataset.gkey);
+    g.remove()}
   const keepIds=new Set(seq.filter(x=>x.t==='p').map(x=>x.p.id));
   for(const c of [...body.children]){
     if(c.classList&&c.classList.contains('cmd-group'))continue;
@@ -1485,10 +1527,13 @@ O.jumpToMsg=mid=>{
     chunk.forEach(m=>{
       if(m.info.role==='assistant'&&toolView()!=='cards'){
         const host=turnHost(m);
-        if(built.has(host.info.id)){const he=msgEls.get(host.info.id);if(he)msgEls.set(m.info.id,he);return}
+        // FIX (audit #2): reuse an existing turn card from another chunk — no duplicates
+        const exist=msgEls.get(host.info.id);
+        if(built.has(host.info.id)||exist){const he=exist||msgEls.get(host.info.id);if(he){msgEls.set(m.info.id,he);(he._tids||[]).forEach(id=>msgEls.set(id,he))}return}
         const vm=mergedTurnMsg(host);
         const el=buildMsg(vm);built.add(host.info.id);
-        (vm._ids||[host.info.id]).forEach(id=>msgEls.set(id,el));
+        el._tids=vm._ids||[host.info.id];
+        el._tids.forEach(id=>msgEls.set(id,el));
         fr.append(el);
       }else{const el=buildMsg(m);built.add(m.info.id);fr.append(el)}
     });
@@ -1967,7 +2012,9 @@ function renderAtts(){attsEl.textContent='';attsEl.classList.toggle('hide',!atts
   });
   updateSend();saveDraftNow()}
 let sending=false;
-async function onSend(){
+// modelOverride (audit #8): one-shot model for THIS send, no global mutation/timer race.
+async function onSend(modelOverride){
+  const sendModel=modelOverride||S.model;
   // A double tap (or a queued click after a slow frame) must never send the prompt twice.
   if(sending)return;
   if(busy()&&!ta.value.trim()&&!atts.length){
@@ -1986,7 +2033,7 @@ async function onSend(){
     const sc=(S.commands||[]).find(c=>c.name===cm[1]);
     if(sc){if(!S.model)return O.openConnect();clear();try{const sid=await sess();O.maybeAutoTitle(sid,text);api('POST','/session/'+sid+'/command',{command:sc.name,arguments:cm[2]||'',agent:S.agent,model:modelStr()},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}}
 
-  if(!S.model&&!O.mmActive()){O.toast('Подключите провайдера, чтобы выбрать модель');O.openConnect();return}
+  if(!sendModel&&!O.mmActive()){O.toast('Подключите провайдера, чтобы выбрать модель');O.openConnect();return}
   if(text.startsWith('!')){const cmd=text.slice(1).trim();
     if(/^opencode(\s+tui)?\s*$/i.test(cmd)){O.toast('Приложение уже является интерфейсом OpenCode. TUI — во вкладке «Терминал» → Shell, агент — во вкладке «Чат»',6000);clear();return}
     clear();try{const sid=await sess();O.maybeAutoTitle(sid,text);api('POST','/session/'+sid+'/shell',{agent:S.agent,model:S.model,command:cmd},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}
@@ -2030,9 +2077,10 @@ async function onSend(){
   try{
     const sid=await sess();
     // a chat can live in its own folder; the request must use that directory, not the global one
-    if(O.sessionDir&&O.dir!==O.sessionDir(sid)){try{O.dir=O.sessionDir(sid)}catch(_){}}
+    if(O.sessionDir&&O.dir!==O.sessionDir(sid)){try{O.dir=O.sessionDir(sid);S.dir=O.dir}catch(_){}}
     O.maybeAutoTitle(sid,text);
-    const chain=[S.model].filter(Boolean).concat(O.fallbackChain());
+    const chain=[sendModel].filter(Boolean).concat(modelOverride?[]:O.fallbackChain());
+    const rotTries={};
     for(let i=0;i<chain.length;i++){
       const mdl=chain[i];
       const mid=O.mid();
@@ -2050,7 +2098,10 @@ async function onSend(){
         const isQuota=O.isQuotaError(e);
         const retryable=isQuota||!e.status||e.status>=429;
         // Quota exhausted: try the next key of the same provider before falling back to another model.
-        if(isQuota&&O.keyRingOf(mdl.providerID).length>1){
+        // FIX (audit #7): rotateProviderKey returns true even when EVERY key is exhausted — the
+        // old i--;continue looped forever. Cap rotations at the ring size per model.
+        if(isQuota&&O.keyRingOf(mdl.providerID).length>1&&(rotTries[mdl.providerID]||0)<O.keyRingOf(mdl.providerID).length){
+          rotTries[mdl.providerID]=(rotTries[mdl.providerID]||0)+1;
           const rotated=await O.rotateProviderKey(mdl.providerID,true);
           if(rotated){i--;continue} // retry the same model with the fresh key
         }
@@ -2063,7 +2114,7 @@ async function onSend(){
     }
     if(lastErr)throw lastErr;
     if(sentTries.length)O._fallback={sid:sentSid,mid:sentMid,parts,tries:sentTries};
-    if(usedModel&&S.model&&(usedModel.providerID!==S.model.providerID||usedModel.modelID!==S.model.modelID)){O.setLastFallback({model:usedModel.modelID,at:Date.now()});O.toast(O.tr('Answered by fallback model: ','Ответила резервная модель: ')+usedModel.modelID,2500)}
+    if(usedModel&&sendModel&&(usedModel.providerID!==sendModel.providerID||usedModel.modelID!==sendModel.modelID)){O.setLastFallback({model:usedModel.modelID,at:Date.now()});O.toast(O.tr('Answered by fallback model: ','Ответила резервная модель: ')+usedModel.modelID,2500)}
     else if(O.setLastFallback)O.setLastFallback(null);
   }catch(e){
     if(O.clearInflight)O.clearInflight();

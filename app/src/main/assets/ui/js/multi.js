@@ -529,7 +529,10 @@ function mmExtractAsk(text){
 function mmAskHuman(roleName,question){
   return new Promise(res=>{
     let done=false;
-    const finish=v=>{if(done)return;done=true;try{s.close()}catch(_){}res(v)};
+    const qid='mmq_'+Date.now().toString(36);
+    // FIX (audit J12): answering via the sheet left the resolver in mmPendingAsks forever —
+    // the map grew and a late notification tap called a dead resolver. Clean up in finish.
+    const finish=v=>{if(done)return;done=true;try{delete O.mmPendingAsks[qid]}catch(_){}try{s.close()}catch(_){}res(v)};
     const ta=h('textarea',{rows:3,placeholder:O.tr('Your answer…','Ваш ответ…')});
     const body=h('div',null,
       h('div',{class:'note',style:{margin:'0 0 8px'}},O.tr('Role ','Роль «')+roleName+O.tr(' asks:','» спрашивает:')),
@@ -541,7 +544,6 @@ function mmAskHuman(roleName,question){
     const s=O.sheet(O.tr('Team question','Вопрос команды'),body,{hud:true,onClose:()=>finish('')});
     // The MM question is not a server question object: register it locally so the notification's
     // inline reply can resolve this very promise without opening the app.
-    const qid='mmq_'+Date.now().toString(36);
     O.mmPendingAsks=O.mmPendingAsks||{};
     O.mmPendingAsks[qid]=v=>finish(v);
     try{if(O.native&&O.native.notifyAction)O.native.notifyAction(O.tr('MM: role asks','MM: роль спрашивает'),roleName+': '+question.slice(0,120),S.sid||'',qid)}catch(_){}
@@ -572,6 +574,11 @@ const ASK_HINT='\n\nЕсли тебе критически не хватает �
 async function mmWaitIdle(sids,run,timeoutMs){
   const end=Date.now()+(timeoutMs||600000);
   const pending=new Set(sids);
+  // FIX (audit J7): right after prompt_async the server has not flipped to busy yet — the first
+  // poll saw "no status" and returned instantly, so the planner parsed the PREVIOUS answer.
+  // Require an observed busy OR a 5s grace before accepting idle for each session.
+  const startedAt=Date.now();
+  const sawBusy=new Set();
   while(Date.now()<end){
     if(!run||run.abort)throw new Error('aborted');
     if(run.paused){await sleep(500);continue}
@@ -581,7 +588,11 @@ async function mmWaitIdle(sids,run,timeoutMs){
         if(run.roleAborts&&run.roleAborts.has(id)){try{await api('POST','/session/'+id+'/abort',{})}catch(e){};pending.delete(id);continue}
         // server builds differ: status may be a string or an object with `.type`
         const t=statusType(st[id]);
-        if(!t||t==='idle'||t==='error')pending.delete(id)}
+        if(t&&t!=='idle'&&t!=='error')sawBusy.add(id);
+        if(!t||t==='idle'||t==='error'){
+          if(!sawBusy.has(id)&&Date.now()-startedAt<5000)continue; // grace: busy may not have landed yet
+          pending.delete(id)}
+      }
       if(!pending.size)return;
     }catch(e){}
     await sleep(2500);

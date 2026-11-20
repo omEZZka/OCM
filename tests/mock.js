@@ -44,7 +44,7 @@ window.OC={
  resetInstall(){window.__resetInstall=1;OCEvent('install',{pct:30});setTimeout(()=>OCEvent('install',{done:true}),20)},
   start(){setTimeout(()=>OCEvent('ready',{}),10)},restartServer(){window.__restarted=1},resetConfig(){window.__resetConfig=1},hardRestart(){window.__hardRestart=1},minimize(){},grant(k){window.__granted=k},setFlag(k,v){(window.__flags=window.__flags||{})[k]=v},testSound(){},
  http(id,m,p,b){setTimeout(()=>{try{OCEvent('http',{id,status:200,ct:'application/json',body:JSON.stringify(route(m,p,b))})}catch(e){OCEvent('http',{id,status:500,ct:'text/plain',body:String(e)})}},4)},
- drop(){},sseStart(){sse=true;setTimeout(()=>OCEvent('sse',{t:'open'}),5)},sseStop(){},wsOpen(id){setTimeout(()=>{OCEvent('ws',{id,t:'open'});OCEvent('ws',{id,t:'msg',d:'root@phone:~# '})},5)},wsSend(id,t){(window.__wsSent=window.__wsSent||[]).push(t)},wsClose(){},
+ drop(){},uiHandshake(){},sseStart(){sse=true;setTimeout(()=>OCEvent('sse',{t:'open'}),5)},sseStop(){},wsOpen(id){setTimeout(()=>{OCEvent('ws',{id,t:'open'});OCEvent('ws',{id,t:'msg',d:'root@phone:~# '})},5)},wsSend(id,t){(window.__wsSent=window.__wsSent||[]).push(t)},wsClose(){},
  ls:p=>JSON.stringify({ok:true,path:p,items:[{name:'app',dir:true},{name:'notes.txt',dir:false}]}),fs:()=>JSON.stringify({ok:true}),
  readText(p){const f=srv.files[p];return f===undefined?JSON.stringify({ok:false,err:'Not a file'}):JSON.stringify({ok:true,text:f})},
  writeText(p,t){srv.files[p]=String(t);(window.__writes=window.__writes||[]).push(p);return JSON.stringify({ok:true})},

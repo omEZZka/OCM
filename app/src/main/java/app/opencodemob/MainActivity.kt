@@ -319,9 +319,22 @@ class MainActivity : ComponentActivity() {
             }, 300)
             return
         }
-        ui.postDelayed({
-            emit("widget_action", JSONObject().put("action", act).put("target", target).put("session", sessionId))
-        }, 500)
+        // FIX (audit K4): a fixed 500ms delay lost notification/widget intents on cold start —
+        // the page was still loading and window.OCEvent did not exist yet. Deliver only after
+        // the UI signals readiness (uiReady), with a generous fallback timeout.
+        val payload = JSONObject().put("action", act).put("target", target).put("session", sessionId)
+        synchronized(pendingIntents) { pendingIntents.add(payload) }
+        flushIntents()
+        ui.postDelayed({ flushIntents() }, 2500)
+        ui.postDelayed({ flushIntents() }, 6000)
+    }
+
+    private val pendingIntents = mutableListOf<JSONObject>()
+    @Volatile private var uiReady = false
+    private fun flushIntents() {
+        if (!uiReady) return
+        val list = synchronized(pendingIntents) { val c = pendingIntents.toList(); pendingIntents.clear(); c }
+        list.forEach { emit("widget_action", it) }
     }
 
     override fun onAttachedToWindow() {
@@ -1719,6 +1732,10 @@ class MainActivity : ComponentActivity() {
             Net.request(this@MainActivity, id, method, path, body) { n, d -> emit(n, d) }
         }
         @JavascriptInterface fun drop(id: String) { Net.drop(this@MainActivity, id) }
+
+        // UI handshake: the page finished loading and window.OCEvent exists — deliver any
+        // notification/widget intents that arrived during boot (audit K4).
+        @JavascriptInterface fun uiHandshake() { uiReady = true; ui.post { flushIntents() } }
         @JavascriptInterface fun sseStart() { Net.sseStart { n, d -> emit(n, d) } }
         @JavascriptInterface fun sseStop() { Net.sseStop() }
         @JavascriptInterface fun wsOpen(id: String, path: String) { Net.wsOpen(id, path) { n, d -> emit(n, d) } }

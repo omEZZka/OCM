@@ -374,7 +374,13 @@ O.checkpointBeforeSend=text=>{
   const label=String(text||'').split('\n')[0].slice(0,80);
   if(cpBusy){cpQueued=label;return}
   cpBusy=true;
-  try{O.native.checkpointCreate(S.dir,label)}catch(_){cpBusy=false}
+  try{
+    // FIX (audit J8): when the runtime is not installed the bridge answers {ok:false}
+    // SYNCHRONOUSLY with no 'checkpoint' event — cpBusy stayed true forever and every later
+    // snapshot was silently queued into oblivion. Release the flag on a non-queued answer.
+    const r=O.native.checkpointCreate(S.dir,label);
+    if(!r||(!r.queued&&!r.ok))cpBusy=false;
+  }catch(_){cpBusy=false}
 };
 O.on('checkpoint',d=>{
   cpBusy=false;

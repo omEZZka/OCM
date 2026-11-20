@@ -588,7 +588,16 @@ try:
     }""")
     chk('perf: 30 duplicate events -> 0 DOM mutations',perf['mutations']==0 and perf['same'])
     # ---- 2.21: sticky date header + reading position memory ----
-    pg.evaluate("OCM.S.sid='ses_1';OCM.chat.renderAll()")
+    # inflate the session so there is real scroll range (2 short msgs fit one screen)
+    pg.evaluate("""()=>{
+      OCM.S.sid='ses_1';
+      for(let i=0;i<14;i++){
+        const id='zz_fill'+String(i).padStart(2,'0');
+        OCM.upsertMsg({id,sessionID:'ses_1',role:'user',time:{created:Date.now()}});
+        OCM.upsertPart({id:'zzp'+i,sessionID:'ses_1',messageID:id,type:'text',text:'наполнение '.repeat(12)+i});
+      }
+      OCM.chat.renderAll();
+    }""")
     pg.wait_for_timeout(500)
     sticky=pg.evaluate("""()=>{
       const msgs=document.querySelector('#msgs');
@@ -1141,7 +1150,50 @@ try:
       return {btn:!!btn,fn};
     }""")
     chk('smart search button + helper',smart['btn'] and smart['fn'])
-    # closed sheets linger in the DOM for 260ms: let them detach before .sheet:last-child lookups
+    # ---- 2.22.2 audit fixes ----
+    # stripJsonc must not eat commas inside string values
+    sj=pg.evaluate("""()=>({
+      str:OCM.stripJsonc('{"a":"текст, ]"}'),
+      trail:OCM.parseJsonc('{"a":[1,2,],}').a.length,
+      comment:OCM.parseJsonc('{// c\\n"a":1,}').a
+    })""")
+    chk('stripJsonc keeps string commas',sj['str']=='{"a":"текст, ]"}')
+    chk('stripJsonc removes trailing commas',sj['trail']==2 and sj['comment']==1)
+    # queued prompt survives a busy race (peek+commit)
+    q=pg.evaluate("""()=>{
+      OCM.enqueuePrompt('ses_q','задача в очереди');
+      const peek=OCM.peekPrompt('ses_q');
+      const stillThere=OCM.promptQueue('ses_q').length===1;
+      OCM.commitPrompt('ses_q');
+      return {peek:peek&&peek.text,stillThere,after:OCM.promptQueue('ses_q').length};
+    }""")
+    chk('queue peek does not consume',q['peek']=='задача в очереди' and q['stillThere'])
+    chk('queue commit removes once',q['after']==0)
+    # msgSig catches same-length text edits
+    sig=pg.evaluate("""()=>{
+      const sid='ses_sig';OCM.S.sessions.unshift({id:sid,title:'sig',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;
+      OCM.upsertMsg({id:'ms1',sessionID:sid,role:'assistant',time:{created:Date.now()}});
+      OCM.upsertPart({id:'ps1',sessionID:sid,messageID:'ms1',type:'text',text:'aaaa',time:{end:1}});
+      OCM.chat.renderAll();
+      const before=document.querySelector('.msg.assistant .p-text').textContent;
+      OCM.upsertPart({id:'ps1',sessionID:sid,messageID:'ms1',type:'text',text:'bbbb',time:{end:1}});
+      OCM.bus.emit('part',sid,OCM.msgs(sid).idx.get('ms1'));
+      return new Promise(res=>setTimeout(()=>{
+        const after=document.querySelector('.msg.assistant .p-text').textContent;
+        OCM.S.sid='ses_1';OCM.chat.renderAll();
+        res({before,after});
+      },400));
+    }""")
+    chk('same-length text edit re-renders','aaaa' in sig['before'] and 'bbbb' in sig['after'])
+    # minimap wrapper is returned even before DOM insertion
+    mm=pg.evaluate("""()=>{
+      const v=OCM.codeView(Array.from({length:120},(_,i)=>'line '+i).join('\\n'),'x.py');
+      return {canvas:!!v.querySelector('canvas'),code:!!v.querySelector('.code-view')};
+    }""")
+    chk('minimap built before insertion',mm['canvas'] and mm['code'])
+    # uiHandshake bridge exists
+    chk('uiHandshake bridge',pg.evaluate("typeof OC.uiHandshake==='function'"))
     pg.wait_for_timeout(350)
     # ---- MM: approval gate + stage retry helpers ----
     mmx=pg.evaluate("""()=>{

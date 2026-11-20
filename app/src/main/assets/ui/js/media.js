@@ -277,6 +277,13 @@ O.mediaGenerate=opts=>{
     state:'queued', started:0, finished:0, path:'', error:'', progress:0
   };
   M.queue.push(job);
+  // FIX (audit J13): finished jobs accumulated forever (memory + O(n) scans on every event).
+  // Keep the 60 most recent finished ones; active jobs are never pruned.
+  if(M.queue.length>90){
+    const finished=M.queue.filter(j=>j.state==='done'||j.state==='error'||j.state==='cancelled');
+    const drop=new Set(finished.slice(0,Math.max(0,finished.length-60)).map(j=>j.id));
+    for(let i=M.queue.length-1;i>=0;i--)if(drop.has(M.queue[i].id))M.queue.splice(i,1);
+  }
   bus.emit('media');
   pump();
   return job.id;
@@ -1049,7 +1056,8 @@ O.on('mediaRequest',async d=>{
   const started=Date.now();
   const wait=setInterval(()=>{
     const j=M.queue.find(x=>x.id===jobId);
-    if(!j)return;
+    // FIX (audit J13): a vanished job left this 500ms interval alive forever
+    if(!j){clearInterval(wait);O.native.mediaAnswer(d.id,{ok:false,err:'job gone'});return}
     if(j.state==='done'){
       clearInterval(wait);
       O.native.mediaAnswer(d.id,{ok:true,path:j.path,kind:j.kind});

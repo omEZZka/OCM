@@ -64,8 +64,13 @@ O.stripJsonc=t=>{let o='',i=0,s=false;while(i<t.length){const c=t[i],n=t[i+1];
   if(c==='"'){s=true;o+=c;i++;continue}
   if(c==='/'&&n==='/'){while(i<t.length&&t[i]!=='\n')i++;continue}
   if(c==='/'&&n==='*'){i+=2;while(i<t.length&&!(t[i]==='*'&&t[i+1]==='/'))i++;i+=2;continue}
+  // FIX (audit J14): trailing-comma removal ran over the WHOLE text including string values —
+  // {"a":"текст, ]"} lost its comma. Strip a comma only when the next non-space char closes a
+  // container, and only outside strings (we are outside by construction here).
+  if(c===','){let k=i+1;while(k<t.length&&/\s/.test(t[k]))k++;
+    if(t[k]==='}'||t[k]===']'){i++;continue}}
   o+=c;i++}
-  return o.replace(/,(\s*[}\]])/g,'$1')};
+  return o};
 O.parseJsonc=t=>JSON.parse(O.stripJsonc(t));
 
 // toast

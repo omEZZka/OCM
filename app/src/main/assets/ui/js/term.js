@@ -42,15 +42,21 @@ function upsertEntry(p,quiet){const st=p.state||{},i=st.input||{},md=st.metadata
 function theme(){const c=getComputedStyle(document.documentElement),g=n=>c.getPropertyValue(n).trim();return{background:g('--code'),foreground:g('--fg'),cursor:g('--acc'),selectionBackground:g('--bg3')}}
 function doFit(){if(!fit||!term||!xhost.offsetParent)return;try{fit.fit()}catch{}
   if(pty)api('PUT','/pty/'+pty.id,{size:{cols:term.cols,rows:term.rows}}).catch(()=>{})}
+let ptyCreating=false;
 async function startPty(){
   if(!term){term=new Terminal({fontSize:13,fontFamily:'ui-monospace,Menlo,Consolas,monospace',cursorBlink:true,scrollback:5000,theme:theme(),allowProposedApi:true});
     fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open(xhost);
     term.onData(d=>{if(!wsid)return;if(ctrl&&d.length===1){d=String.fromCharCode(d.toUpperCase().charCodeAt(0)&31);ctrl=false;ctrlBtn.classList.remove('on')}OC.wsSend(wsid,d)});
     term.onResize(()=>{if(pty)api('PUT','/pty/'+pty.id,{size:{cols:term.cols,rows:term.rows}}).catch(()=>{})})}
   doFit();if(pty&&wsid)return;
+  // FIX (audit J9): two quick Shell entries before POST /pty resolved created TWO server PTYs;
+  // the first leaked with an orphaned websocket. One creation at a time.
+  if(ptyCreating)return;
+  ptyCreating=true;
   try{if(!pty)pty=await api('POST','/pty',{cwd:S.dir,title:'shell'});
     wsid='w'+Date.now().toString(36);OC.wsOpen(wsid,'/pty/'+pty.id+'/connect?directory='+encodeURIComponent(S.dir))}
-  catch(e){term.write('\r\n\x1b[31mТерминал недоступен: '+(e.message||'ошибка')+'\x1b[0m\r\nИспользуйте вкладку «Агент», чтобы запускать команды.\r\n')}}
+  catch(e){term.write('\r\n\x1b[31mТерминал недоступен: '+(e.message||'ошибка')+'\x1b[0m\r\nИспользуйте вкладку «Агент», чтобы запускать команды.\r\n')}
+  finally{ptyCreating=false}}
 function onWs(d){if(d.id!==wsid)return;
   if(d.t==='open'){setTimeout(doFit,50)}
   else if(d.t==='msg')term.write(d.d);
@@ -58,5 +64,7 @@ function onWs(d){if(d.id!==wsid)return;
   else if(d.t==='close'||d.t==='err'){term.write('\r\n\x1b[33m[сессия закрыта — нажмите ⟳, чтобы запустить новый shell]\x1b[0m\r\n');wsid=null}}
 async function restart(){if(sub==='agent'){rebuildLog();return}
   if(wsid){OC.wsClose(wsid);wsid=null}if(pty){api('DELETE','/pty/'+pty.id).catch(()=>{});pty=null}if(term)term.reset();startPty()}
-bus.on('dir',()=>{if(wsid){OC.wsClose(wsid);wsid=null}pty=null;if(term)term.reset()});
+// FIX (audit J9): switching projects leaked the server-side shell process — pty was dropped
+// without DELETE. Kill it properly.
+bus.on('dir',()=>{if(wsid){OC.wsClose(wsid);wsid=null}if(pty){api('DELETE','/pty/'+pty.id).catch(()=>{});pty=null}if(term)term.reset()});
 })();

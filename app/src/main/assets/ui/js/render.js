@@ -217,11 +217,12 @@ O.codeView=(text,path)=>{const lines=text.split('\n');const big=lines.length>400
   if(big)box.append(h('div',{class:'mut s',style:{padding:'8px 12px'}},'Показаны первые 4000 строк'));
   // Minimap: a thin column on the right showing the file's shape (indentation + non-empty lines).
   // It doubles as a scrollbar — tapping a spot jumps to that part of the file.
+  // FIX (audit #12): codeView is called BEFORE insertion into the DOM, so parentNode was always
+  // null and the whole minimap was silently discarded. Build the wrapper unconditionally.
+  let ret=box;
   if(hl.length>60){
     const wrap=h('div',{style:{position:'relative',display:'flex',flex:1,minHeight:0,overflow:'hidden'}});
-    const holder=box.parentNode;
-    if(holder)holder.replaceChild(wrap,box);
-    wrap.append(box);
+    wrap.append(box);ret=wrap;
     const map=h('div',{style:{flex:'0 0 46px',position:'relative',overflow:'hidden',background:'var(--bg2)',borderLeft:'1px solid var(--line)',cursor:'pointer'}});
     const canvas=h('canvas',{style:{width:'100%',height:'100%',display:'block'}});
     map.append(canvas);
@@ -249,7 +250,7 @@ O.codeView=(text,path)=>{const lines=text.split('\n');const big=lines.length>400
       const hgt=Math.max(8,(box.clientHeight/total)*map.clientHeight);
       g.globalAlpha=0.16;g.fillStyle='#fff';g.fillRect(0,top,46,hgt);
     };
-    const ro=new ResizeObserver(()=>paintMap());ro.observe(map);
+    const ro=new ResizeObserver(()=>{if(!map.isConnected){ro.disconnect();return}paintMap()});ro.observe(map);
     requestAnimationFrame(paintMap);
     map.addEventListener('click',e=>{
       const rect=map.getBoundingClientRect();
@@ -266,5 +267,5 @@ O.codeView=(text,path)=>{const lines=text.split('\n');const big=lines.length>400
     const onScroll=()=>{if(map._t)return;map._t=requestAnimationFrame(()=>{map._t=0;paintMap()})};
     box.addEventListener('scroll',onScroll,{passive:true});
   }
-  return box};
+  return ret};
 })();

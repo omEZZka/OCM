@@ -592,13 +592,18 @@ function showLock(){
   document.body.append(lockOverlay);
   unlock();
 }
+let unlockOff=null;
 function unlock(){
+  // FIX (audit J15): every tap added a NEW appUnlock listener that never unsubscribed on
+  // mismatched ids — N failed attempts left N listeners and N parallel biometric prompts.
+  if(unlockOff){try{unlockOff()}catch(_){}unlockOff=null}
   const id='u'+Date.now();
   const off=O.on('appUnlock',d=>{
     if(!d||d.id!==id)return;
-    if(d.ok){off();if(lockOverlay){lockOverlay.remove();lockOverlay=null}}
-    else if(!d.retry){off();O.toast(d.err||O.tr('Unlock failed','Не удалось разблокировать'),3000)}
+    if(d.ok){off();unlockOff=null;if(lockOverlay){lockOverlay.remove();lockOverlay=null}}
+    else if(!d.retry){off();unlockOff=null;O.toast(d.err||O.tr('Unlock failed','Не удалось разблокировать'),3000)}
   });
+  unlockOff=off;
   O.native.biometricUnlock(id,'OpenCode Mobile');
 }
 O.initAppLock=()=>{

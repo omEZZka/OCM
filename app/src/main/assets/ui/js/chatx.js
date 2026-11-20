@@ -245,7 +245,15 @@ O.stageTitleFor=(key,parts)=>{
     }).catch(()=>{}).finally(()=>{stageBusy=false});
   return null;
 };
-bus.on('stageTitle',()=>{if(O.chat&&O.chat.renderAll)O.chat.renderAll()});
+// FIX (audit #11): a completed AI stage title used to trigger a FULL renderAll with forced
+// bottom-scroll — readers above got yanked down after every pack. Update just that pack's head.
+bus.on('stageTitle',key=>{
+  const g=document.querySelector('.cmd-group[data-gkey="'+(window.CSS&&CSS.escape?CSS.escape(key):key)+'"]');
+  if(g&&g._parts&&g._info){
+    const m=O.msgs(g._info.sessionID).idx.get(g._mid);
+    if(m){g._sig='';bus.emit('part',g._info.sessionID,m)}
+  }
+});
 // ---- 32: long-session summary with expand ----
 O.openSessionSummary=async()=>{
   if(!S.sid)return O.toast(O.tr('Open a session first','Сначала откройте сессию'),2000);

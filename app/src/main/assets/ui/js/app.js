@@ -423,6 +423,9 @@ function initKeyboardShortcuts(){
 }
 document.addEventListener('DOMContentLoaded',()=>{
   O.saveOpts();
+  // Native handshake (audit K4): tell Kotlin the event sink exists so buffered notification
+  // intents are delivered now, not lost to a fixed timer.
+  try{if(window.OC&&OC.uiHandshake)OC.uiHandshake()}catch(_){}
   O.bootRun();
   initKeyboardShortcuts();
 });

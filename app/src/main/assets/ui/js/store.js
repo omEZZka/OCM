@@ -841,6 +841,13 @@ O.dequeuePrompt=sid=>{
   const l=O.promptQueue(sid);const it=l.shift();
   O.store.set('promptQueue.'+sid,l);bus.emit('queue',sid);return it;
 };
+// FIX (audit #9): peek without removing — the caller commits only after a successful send,
+// so a busy-race inside the 400ms delay can no longer silently eat a queued message.
+O.peekPrompt=sid=>O.promptQueue(sid)[0]||null;
+O.commitPrompt=sid=>{
+  const l=O.promptQueue(sid);l.shift();
+  O.store.set('promptQueue.'+sid,l);bus.emit('queue',sid);
+};
 O.removeQueued=(sid,i)=>{
   const l=O.promptQueue(sid);l.splice(i,1);
   O.store.set('promptQueue.'+sid,l);bus.emit('queue',sid);
@@ -1168,7 +1175,9 @@ O.openSession=async(sid,fresh)=>{
   if(S.sid!==sid)O.stopLiveSync();
   // A chat can live in its own folder: apply it on OPEN, not only right before sending, so
   // regenerate/continue/todo/diff/file actions all address the right project.
-  if(sid){const sd=O.sessionDir(sid);if(sd&&sd!==O.dir)O.dir=sd}
+  // FIX (audit #15): O.dir and S.dir must move together — SSE filtering, O.rel and session caches
+  // key off S.dir; updating only O.dir dropped events of per-folder sessions.
+  if(sid){const sd=O.sessionDir(sid);if(sd&&sd!==O.dir){O.dir=sd;S.dir=sd}}
   S.sid=sid;O.store.set('sid.'+S.dir,sid);
   trimStore();
   if(!sid){bus.emit('open',null);return}
@@ -1418,10 +1427,22 @@ O.migrateData=async()=>{
   if(cur>=SCHEMA)return;
   try{
     if(cur<2){
-      // v2: message cache moved to paged keys; drop the old monolithic entry if it still exists.
-      // It is re-created by the next write from the live in-memory list.
+      // v2: message cache moved to paged keys. FIX (audit #13): the old code deleted the PAGE
+      // COUNTER, orphaning every pN page and losing history. Convert the legacy monolith into
+      // page 0 + hot window instead, keeping all messages.
       for(const s of (S.sessions||[]).slice(0,200)){
-        try{await O.kv.del('msgs:'+s.id+':pages')}catch(_){}
+        try{
+          const pages=await O.kv.get('msgs:'+s.id+':pages');
+          if(pages!=null)continue; // already paged — nothing to migrate
+          const mono=await O.kv.get('msgs:'+s.id);
+          if(!Array.isArray(mono)||!mono.length)continue;
+          const HOT2=250,ARCH2=300;
+          const older=mono.slice(0,Math.max(0,mono.length-HOT2));
+          const pc=Math.ceil(older.length/ARCH2);
+          for(let p=0;p<pc;p++)await O.kv.set('msgs:'+s.id+':p'+p,older.slice(p*ARCH2,(p+1)*ARCH2));
+          await O.kv.set('msgs:'+s.id+':pages',pc);
+          await O.kv.set('msgs:'+s.id,mono.slice(-HOT2));
+        }catch(_){}
       }
       // per-session directories: default everything to the current project
       const dirs=O.store.get('sessionDirs',null);

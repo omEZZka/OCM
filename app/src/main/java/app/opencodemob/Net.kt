@@ -76,11 +76,18 @@ object Net {
         var backoff = 700L
         while (g == sseGen) {
             var connected = false
+            var myCall: okhttp3.Call? = null
             try {
                 val req = Request.Builder().url("http://${base()}/global/event")
                     .header("Authorization", auth()).header("Accept", "text/event-stream").build()
-                val call = stream.newCall(req); sseCall = call
+                val call = stream.newCall(req)
+                myCall = call
+                // FIX (audit K3): sseStop between the gen check and execute() left this call
+                // uncancelled, blocking a pool thread forever on readUtf8Line (readTimeout=0).
+                if (g != sseGen) { call.cancel(); return }
+                sseCall = call
                 call.execute().use { r ->
+                    if (g != sseGen) { call.cancel(); return }
                     if (!r.isSuccessful) throw IOException("sse ${r.code}")
                     connected = true
                     backoff = 700L
@@ -94,7 +101,7 @@ object Net {
             } catch (_: InterruptedException) {
                 return
             } catch (_: Exception) {}
-            if (g != sseGen) return
+            if (g != sseGen) { try { myCall?.cancel() } catch (_: Exception) {}; return }
             emit("sse", JSONObject().put("t", "close"))
             // The server may still be booting (first launch after an install): back off instead of
             // hammering it every 1.5s. Reset as soon as a stream is actually established.
@@ -110,16 +117,20 @@ object Net {
         wsClose(id)
         val req = Request.Builder().url("ws://${base()}$path").header("Authorization", auth()).build()
         fun ev(t: String, d: String? = null) = emit("ws", JSONObject().put("id", id).put("t", t).apply { if (d != null) put("d", d) })
-        sockets[id] = stream.newWebSocket(req, object : WebSocketListener() {
+        // FIX (audit K2): the OLD socket's async onClosed/onFailure used to remove the NEW socket
+        // from the map (plain remove(id)) — the terminal died after every reconnect. Two-arg
+        // remove only deletes the entry when it still points at THIS socket.
+        val listener = object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) = ev("open")
             override fun onMessage(ws: WebSocket, text: String) = ev("msg", text)
             override fun onMessage(ws: WebSocket, bytes: ByteString) {
                 if (bytes.size > 0 && bytes[0].toInt() == 0) return // control frame, not terminal output
                 ev("bin", bytes.base64())
             }
-            override fun onClosed(ws: WebSocket, code: Int, reason: String) { sockets.remove(id); ev("close") }
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) { sockets.remove(id); ev("err", t.message) }
-        })
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) { sockets.remove(id, ws); ev("close") }
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) { sockets.remove(id, ws); ev("err", t.message) }
+        }
+        sockets[id] = stream.newWebSocket(req, listener)
     }
 
     fun wsSend(id: String, text: String) { sockets[id]?.send(text) }

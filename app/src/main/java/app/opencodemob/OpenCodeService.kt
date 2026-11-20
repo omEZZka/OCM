@@ -22,7 +22,6 @@ class OpenCodeService : Service() {
     private var watcher: Thread? = null
     private var wake: PowerManager.WakeLock? = null
     @Volatile private var stopping = false
-    private var lastIdle = 0L
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -136,12 +135,20 @@ class OpenCodeService : Service() {
         }
     }
 
-    // Only real provider quota/limit errors. The old regex matched any "exceeded"/"credit" anywhere
-    // in the event JSON (tool output included), so a working model kept triggering "quota" alerts.
-    private val quotaRe = Regex("(?i)FreeUsageLimitError|GoUsageLimitError|BudgetLimitError|insufficient_quota|\"statusCode\":\\s*429|usage.?limit|rate.?limit|limit\\s+reached|too many requests")
+    // Only real provider quota/limit errors. Generic rate-limit/429 patterns matched transient
+    // retries of a WORKING model and fired "quota exhausted" while the answer kept streaming.
+    private val quotaRe = Regex("(?i)FreeUsageLimitError|GoUsageLimitError|BudgetLimitError|insufficient_quota|insufficient credit|quota\\s+(exceeded|exhausted)|billing.{0,20}(limit|hard)")
     private val notQuotaRe = Regex("(?i)ContextOverflow|OutputLength|MessageAborted")
     // One quota alert per burst: the core emits session.error for every retry attempt.
     private var lastQuotaNotif = 0L
+    // DONE notifications: session.idle fires after EVERY tool round and for every MM child
+    // session — not only when the user's task actually finished. Track busy periods per session,
+    // require a real assistant answer in the period, debounce per session, and skip child sessions
+    // while their parent is still working.
+    private val busySince = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val sawAnswer = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private val lastDone = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val parentOf = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     /** Best-effort human title for a session, used in notifications. */
     private val titleCache = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -175,6 +182,28 @@ class OpenCodeService : Service() {
         val permId = props.optString("permissionID").ifEmpty { if (type.startsWith("permission.")) props.optString("id") else "" }
         val qId = props.optString("questionID").ifEmpty { if (type.startsWith("question.")) props.optString("id") else "" }
         when {
+            type == "session.updated" || type == "session.created" -> {
+                val info = props.optJSONObject("info")
+                if (info != null) {
+                    val id = info.optString("id")
+                    val parent = info.optString("parentID")
+                    if (id.isNotEmpty()) {
+                        if (parent.isNotEmpty()) parentOf[id] = parent else parentOf.remove(id)
+                        val t = cleanTitle(info.optString("title"))
+                        if (t.isNotEmpty()) titleCache[id] = t
+                    }
+                }
+            }
+            type == "message.part.updated" || type == "message.part.delta" -> {
+                // a text part with actual content = the model produced an answer this period
+                val part = props.optJSONObject("part")
+                val psid = part?.optString("sessionID") ?: sid
+                val ptype = part?.optString("type") ?: ""
+                val txt = part?.optString("text") ?: props.optString("delta")
+                if (psid.isNotEmpty() && (ptype == "text" || props.optString("field") == "text") && txt.isNotBlank()) {
+                    sawAnswer[psid] = true
+                }
+            }
             type == "session.status" -> {
                 val rawStatus = props.opt("status")
                 val st = when (rawStatus) {
@@ -183,6 +212,10 @@ class OpenCodeService : Service() {
                     else -> props.optString("type")
                 }
                 if (st == "busy" || st == "running" || st == "retry") {
+                    if (sid.isNotEmpty() && !busySince.containsKey(sid)) {
+                        busySince[sid] = SystemClock.elapsedRealtime()
+                        sawAnswer.remove(sid)
+                    }
                     val title = props.optString("title").ifEmpty { "Задача выполняется" }
                     WidgetUpdater.set(this, title, if (sid.isNotEmpty()) "Сессия ${sid.take(8)}" else "OpenCode работает", true)
                     // The UI publishes MM progress in Prefs; mirror it into a determinate notification.
@@ -190,16 +223,13 @@ class OpenCodeService : Service() {
                     val mmAll = Prefs.get(this, "overlay_jobs", "").split(',').count { it.isNotBlank() }
                     if (mmAll > 0) Notifier.progress(this, Prefs.get(this, "overlay_phase", ""), mmDone, mmAll, sid)
                 } else if (st == "idle") {
+                    maybeDone(sid)
                     WidgetUpdater.idle(this)
                     Notifier.cancelProgress(this)
                 }
             }
             type == "session.idle" -> {
-                val now = SystemClock.elapsedRealtime()
-                if (now - lastIdle > 3000) {
-                    lastIdle = now
-                    Notifier.event(this, Notifier.DONE, "Задача завершена", "OpenCode завершил работу.", sessionId = sid, sessionTitle = sessionTitle(sid))
-                }
+                maybeDone(sid)
                 WidgetUpdater.idle(this)
             }
             type == "question.asked" || (type.startsWith("permission.") && (type.endsWith("updated") || type.endsWith("asked"))) ->
@@ -216,6 +246,29 @@ class OpenCodeService : Service() {
                 }
             }
         }
+    }
+
+    /**
+     * "Task completed" only when a real work period ends: the session was busy, the model actually
+     * answered, no busy parent (MM child), and at most one notification per 8s per session.
+     * A tool round finishing mid-task no longer fires DONE.
+     */
+    private fun maybeDone(sid: String) {
+        if (sid.isEmpty()) return
+        val started = busySince.remove(sid) ?: return
+        val answered = sawAnswer.remove(sid) == true
+        val now = SystemClock.elapsedRealtime()
+        // a period shorter than 2s with no answer is a tool blip, not a finished task
+        if (!answered && now - started < 2000) return
+        if (!answered) return
+        // MM child sessions: the parent is still working — the task is NOT done
+        val parent = parentOf[sid]
+        if (parent != null && busySince.containsKey(parent)) return
+        val last = lastDone[sid] ?: 0L
+        if (now - last < 8000) return
+        if (lastDone.size > 200) lastDone.clear()
+        lastDone[sid] = now
+        Notifier.event(this, Notifier.DONE, "Задача завершена", "OpenCode завершил работу.", sessionId = sid, sessionTitle = sessionTitle(sid))
     }
 
     override fun onDestroy() {

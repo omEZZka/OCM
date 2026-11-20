@@ -190,8 +190,11 @@ O.on('tts',d=>{
   if(d.t==='start'){C.speakingStarted=Date.now();setState('speaking');armDuringPlayback();return}
   if(d.t==='done'||d.t==='error'){
     if(C.interrupted){C._ttsBatch=0;return}   // user took the floor: stay silent
+    // FIX (audit J11): 'done' from navigation phrases / voice-test / diff reading decremented
+    // the ANSWER batch and resumed listening mid-answer. Only count events while an answer
+    // batch is actually in flight (state=speaking with a batch armed by speakAnswer).
     if(C._ttsBatch>0){C._ttsBatch--;return}
-    resumeListening();
+    if(C.state==='speaking'&&C._answerSpeaking){C._answerSpeaking=false;resumeListening()}
   }
 });
 
@@ -413,6 +416,9 @@ async function commitTurn(spoken){
   pushLog('user',text);
   setState('thinking');
   if(!S.sid){try{await O.newSession()}catch(e){O.toast(e.message);setState('idle');return}}
+  // FIX (audit J10): C.sid stayed null when the call created the session itself — the transcript
+  // mirror filters by sid!==C.sid and never showed a single agent reply.
+  C.sid=S.sid;
   const sent=O.chat.sendText?O.chat.sendText(text):false;
   if(!sent){setState('listening');listen();return}
   watchTurn(S.sid);
@@ -447,6 +453,7 @@ function speakAnswer(text){
   chunks.forEach(c=>{if((buf+' '+c).length>420){if(buf)parts.push(buf);buf=c}else buf=buf?buf+' '+c:c});
   if(buf)parts.push(buf);
   C._ttsBatch=Math.max(0,parts.length-1);
+  C._answerSpeaking=true;
   recentSpoken=parts.map(norm).filter(Boolean);
   C.speakingStarted=Date.now();
   setState('speaking');

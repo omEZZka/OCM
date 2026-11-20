@@ -251,13 +251,18 @@ O.openDuel=async(prefill)=>{
 // ---- 002: semantic search — natural language over sessions and messages ----
 O.smartSearch=async(query,onHit)=>{
   if(!O.sideAsk||!S.model)throw new Error(O.tr('No model for smart search','Нет модели для умного поиска'));
-  // gather a compact digest of recent sessions: titles + user prompts + key assistant lines
+  // gather a compact digest of recent sessions: titles + user prompts.
+  // FIX (audit #14): read the hot cache directly via kv — loadCachedMsgs stuffed 40 full sessions
+  // into the in-memory store M (memory spike + background archive loads + stray resync events).
   const lines=[];
   const ses=(S.sessions||[]).slice(0,40);
   for(const s of ses){
     let list=[];
-    try{list=await O.loadCachedMsgs(s.id)}catch(_){}
-    const users=list.filter(m=>m.info.role==='user').slice(-6);
+    try{
+      const inMem=O.msgs(s.id).list;
+      list=inMem.length?inMem:(await O.kv.get('msgs:'+s.id))||[];
+    }catch(_){}
+    const users=list.filter(m=>m.info&&m.info.role==='user').slice(-6);
     users.forEach(m=>{
       const t=(m.parts||[]).filter(p=>p.type==='text'&&!p.synthetic).map(p=>p.text).join(' ').replace(/\s+/g,' ').slice(0,160);
       if(t)lines.push(s.id+'|'+m.info.id+'|'+O.sessionTitle(s).slice(0,40)+'|'+t);
