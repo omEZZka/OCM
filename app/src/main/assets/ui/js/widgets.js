@@ -888,8 +888,15 @@ O.on('widget_action', d => {
   if (d && d.action) {
     if (d.action === 'open_chat') {
       O.setTab('chat');
-      if (d.session) { try { O.openSession(d.session) } catch (_) {} }
-      setTimeout(()=>{try{O.chat.focus()}catch(_){}},150);
+      if (d.session) {
+        // Cold start from a notification: the server may still be booting. Wait for it (up to
+        // ~15s) instead of opening into a stale/offline view.
+        (async()=>{
+          for(let i=0;i<15&&!S.up;i++)await new Promise(r=>setTimeout(r,1000));
+          try{await O.openSession(d.session)}catch(_){}
+          try{O.chat.focus()}catch(_){}
+        })();
+      } else setTimeout(()=>{try{O.chat.focus()}catch(_){}},150);
       return;
     }
     if (d.action === 'status') { O.setTab('chat'); return; }

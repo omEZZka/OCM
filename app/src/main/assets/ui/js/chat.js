@@ -110,6 +110,7 @@ O.chatInit=root=>{
     if(sid!==S.sid)return;
     const list=O.visibleMsgs(sid);
     const was=stick;
+    // FIX (turn merge): resync must respect merged turn cards — ensureMsg aliases them itself.
     for(const m of list.slice(-RENDER_TAIL))ensureMsg(m);
     if(was)scrollEnd();
   });
@@ -121,7 +122,11 @@ O.chatInit=root=>{
   let partRaf=0;
   bus.on('part',(sid,m)=>{if(sid!==S.sid)return;const was=stick;ensureMsg(m);
     if(was&&!partRaf)partRaf=requestAnimationFrame(()=>{partRaf=0;scrollEnd()})});
-  bus.on('msg-removed',(sid,id)=>{const e=msgEls.get(id);if(e){e.remove();msgEls.delete(id)}});
+  bus.on('msg-removed',(sid,id)=>{const e=msgEls.get(id);if(e){
+    // merged turn cards are aliased by several ids: only remove the DOM when no other live
+    // message of the turn still points at this card
+    let shared=false;for(const[k,v]of msgEls){if(v===e&&k!==id){shared=true;break}}
+    if(!shared)e.remove();msgEls.delete(id)}});
   bus.on('part-removed',(sid,m,pid)=>{dropTimer(pid);const e=partEls.get(pid);if(e){e.remove();partEls.delete(pid)}});
   bus.on('status',sid=>{const st=S.status[sid];if(O._fallback&&O._fallback.sid===sid&&(!st||st.type==='idle'))O._fallback=null;if(sid===S.sid){renderStatus();updateSend();syncAgentPulse();
     // status flips can change placeholders / auto-fold state without any part change
@@ -153,9 +158,16 @@ O.chatInit=root=>{
       }
     }
     renderContinue();flushPartTimers();
-    // final exact pass: streaming used throttled renders, the settled message must be exact
+    // final exact pass: streaming used throttled renders, the settled message must be exact.
+    // FIX (turn merge): merged cards must re-sync as a whole turn, not per source message —
+    // otherwise a settled pack kept stale streaming text of its merged parts.
+    const seenEls=new Set();
     for(const m of (S.sid?O.msgs(S.sid).list:[])){
-      const el=msgEls.get(m.info.id);if(!el)continue;
+      const el=msgEls.get(m.info.id);if(!el||seenEls.has(el))continue;
+      seenEls.add(el);
+      if(m.info.role==='assistant'&&toolView()!=='cards'){
+        el._sig='';ensureMsg(m);continue;
+      }
       for(const p of m.parts){const pe=partEls.get(p.id);if(pe&&(p.type==='text'||p.type==='reasoning')){pe._t=null;fillPart(pe,p,m,false)}}
     }
   });
@@ -468,12 +480,30 @@ function renderAll(){
     const start=Math.max(0,list.length-RENDER_TAIL);
     pendingHead=list.slice(0,start);
     const fr=document.createDocumentFragment();
-    for(let i=start;i<list.length;i++)fr.append(buildMsg(list[i]));
+    const built=new Set();
+    for(let i=start;i<list.length;i++){
+      const m=list[i];
+      // turn merge: only the host assistant message of a turn builds a card
+      if(m.info.role==='assistant'&&toolView()!=='cards'){
+        const host=turnHost(m);
+        if(built.has(host.info.id)){msgEls.set(m.info.id,msgEls.get(host.info.id));continue}
+        const vm=mergedTurnMsg(host);
+        const el=buildMsg(vm);built.add(host.info.id);
+        (vm._ids||[host.info.id]).forEach(id=>msgEls.set(id,el));
+        fr.append(el);
+      }else{
+        const el=buildMsg(m);built.add(m.info.id);fr.append(el);
+      }
+    }
     msgsEl.append(fr);
   }
-  // Reading-position memory (26): reopen where the user left off instead of always the bottom.
-  const restored=restoreReadPos();
-  if(!restored){scrollEnd(true);pinBottom(list.length>60?6000:4000)}
+  // FIX (active-session open lands mid-chat): a BUSY session always opens at the live tail —
+  // reading-position memory applies only to settled sessions. The pin window is longer while
+  // the agent works: streamed markdown/code keeps inflating the height for many seconds.
+  const st=S.status[S.sid];
+  const active=!!st&&st.type!=='idle';
+  const restored=!active&&restoreReadPos();
+  if(!restored){stick=true;scrollEnd(true);pinBottom(active?15000:(list.length>60?6000:4000))}
   scheduleSticky();syncAgentPulse();
   renderDock();renderStatus();renderContinue();renderRecovery();renderRevert();renderTodos();updateSend();updateChips()}
 
@@ -486,7 +516,17 @@ function maybeLoadOlder(){
   const chunk=pendingHead.slice(start);
   pendingHead=pendingHead.slice(0,start);
   const fr=document.createDocumentFragment();
-  chunk.forEach(m=>fr.append(buildMsg(m)));
+  const built=new Set();
+  chunk.forEach(m=>{
+    if(m.info.role==='assistant'&&toolView()!=='cards'){
+      const host=turnHost(m);
+      if(built.has(host.info.id)){const he=msgEls.get(host.info.id);if(he)msgEls.set(m.info.id,he);return}
+      const vm=mergedTurnMsg(host);
+      const el=buildMsg(vm);built.add(host.info.id);
+      (vm._ids||[host.info.id]).forEach(id=>msgEls.set(id,el));
+      fr.append(el);
+    }else{const el=buildMsg(m);built.add(m.info.id);fr.append(el)}
+  });
   const first=msgsEl.firstChild;
   if(first)msgsEl.insertBefore(fr,first);else msgsEl.append(fr);
   requestAnimationFrame(()=>{suppressScroll=true;msgsEl.scrollTop=prevTop+(msgsEl.scrollHeight-prevH);requestAnimationFrame(()=>{suppressScroll=false});loadingOlder=false});
@@ -517,8 +557,30 @@ function flushPartTimers(){
 }
 function ensureMsg(m){
   const rv=revisionKey();if(rv&&m.info.id>=rv)return;
+  // TURN MERGE: consecutive assistant messages of one turn render as ONE card with ONE pack.
+  // The server emits a new assistant message per tool round; the user must not see 5 cards.
+  if(m.info.role==='assistant'&&toolView()!=='cards'){
+    const host=turnHost(m);
+    if(host&&host.info.id!==m.info.id){
+      let hel=msgEls.get(host.info.id);
+      if(!hel){ensureMsg(host);hel=msgEls.get(host.info.id)}
+      if(hel){
+        const vm=mergedTurnMsg(host);
+        const sig=msgSig(vm);
+        if(hel._sig!==sig){
+          hel._sig=sig;
+          const run=()=>{syncGrouped(hel,vm);metaUpdate(hel,vm);msgPlaceholder(hel,vm)};
+          if(stick)run();else keepAnchor(run);
+        }
+        msgEls.set(m.info.id,hel); // alias: events about this message update the shared card
+        return;
+      }
+    }
+  }
   let el=msgEls.get(m.info.id);
-  if(!el){const e=msgsEl.querySelector('.empty');if(e)e.remove();if(chatRoot)chatRoot.classList.remove('is-empty');el=buildMsg(m);
+  if(!el){const e=msgsEl.querySelector('.empty');if(e)e.remove();if(chatRoot)chatRoot.classList.remove('is-empty');
+    const bm=(m.info.role==='assistant'&&toolView()!=='cards')?mergedTurnMsg(m):m;
+    el=buildMsg(bm);
     let before=null;for(const c of msgsEl.children){if(c.dataset.id&&c.dataset.id>m.info.id){before=c;break}}
     if(stick)msgsEl.insertBefore(el,before);
     else keepAnchor(()=>msgsEl.insertBefore(el,before));
@@ -532,6 +594,45 @@ function ensureMsg(m){
   // Updating a message above the viewport must not move what the user is reading.
   if(stick){syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m)}
   else keepAnchor(()=>{syncParts(el,m);metaUpdate(el,m);msgPlaceholder(el,m)})}
+// First assistant message of the turn this message belongs to (scans back to the user prompt).
+function turnHost(m){
+  const list=O.msgs(m.info.sessionID).list;
+  const idx=list.findIndex(x=>x.info.id===m.info.id);
+  if(idx<0)return m;
+  let host=m;
+  for(let i=idx-1;i>=0;i--){
+    const x=list[i];
+    if(x.info.role==='user')break;
+    if(x.info.role==='assistant')host=x;
+  }
+  return host;
+}
+// Virtual message: host info + parts of ALL assistant messages of the turn, in order.
+function mergedTurnMsg(host){
+  const list=O.msgs(host.info.sessionID).list;
+  const idx=list.findIndex(x=>x.info.id===host.info.id);
+  if(idx<0)return host;
+  const parts=[];let last=host;
+  for(let i=idx;i<list.length;i++){
+    const x=list[i];
+    if(x.info.role!=='assistant')break;
+    parts.push(...x.parts);last=x;
+  }
+  if(parts.length===host.parts.length)return host;
+  // meta reflects the whole turn: last message's completion/tokens summed across the turn
+  let tokIn=0,tokOut=0,cost=0;
+  for(let i=idx;i<list.length;i++){
+    const x=list[i];if(x.info.role!=='assistant')break;
+    if(x.info.tokens){tokIn+=x.info.tokens.input||0;tokOut+=x.info.tokens.output||0}
+    if(typeof x.info.cost==='number')cost+=x.info.cost;
+  }
+  const info=Object.assign({},host.info,{
+    time:{created:host.info.time&&host.info.time.created,completed:last.info.time&&last.info.time.completed},
+    tokens:{input:tokIn,output:tokOut},cost,error:last.info.error||host.info.error,
+    modelID:last.info.modelID||host.info.modelID
+  });
+  return{info,parts,_merged:true,_ids:list.slice(idx).filter(x=>x.info.role==='assistant').map(x=>x.info.id)};
+}
 function msgSig(m){
   const i=m.info;
   let s=i.role+'|'+(i.time&&i.time.completed||0)+'|'+(i.time&&i.time.end||0)+'|'+(i.error?i.error.name||'err':'')+'|'+(i.modelID||'')+'|'+(i.tokens&&(i.tokens.input||0)+(i.tokens.output||0)||0)+'|'+(i.cost||0);
@@ -569,6 +670,19 @@ function showPart(m,p){
 // A text part that only carries the mandatory "+N -M" footer is not prose: it must not split a
 // run of commands into two arrows.
 const isStatsText=p=>p.type==='text'&&typeof p.text==='string'&&/^\s*[+]\d+\s+[-]\d+\s*$/.test(p.text);
+// ---- turn grouping: one user prompt + ALL assistant messages until the next prompt = one turn.
+// opencode splits a single answer into several assistant messages (one per tool round); the user
+// sees them as separate cards. In pack modes the whole turn's tool activity lives under ONE arrow.
+function turnOf(list){
+  const turns=[];let t=null;
+  for(const m of list){
+    if(m.info.role==='user'){t={user:m,asst:[]};turns.push(t);continue}
+    if(m.info.role==='assistant'){if(!t){t={user:null,asst:[]};turns.push(t)}t.asst.push(m)}
+  }
+  return turns;
+}
+const hasTools=m=>m.parts.some(p=>GROUPABLE(p));
+const hasProse=m=>m.parts.some(p=>showPart(m,p)&&isProse(p));
 function syncParts(el,m){
   if(m.info.role==='assistant'&&toolView()!=='cards'){syncGrouped(el,m);return}
   const body=el.firstChild;const keep=new Set();let prev=null;
@@ -1367,7 +1481,17 @@ O.jumpToMsg=mid=>{
     const chunk=pendingHead.slice(start);
     pendingHead=pendingHead.slice(0,start);
     const fr=document.createDocumentFragment();
-    chunk.forEach(m=>fr.append(buildMsg(m)));
+    const built=new Set();
+    chunk.forEach(m=>{
+      if(m.info.role==='assistant'&&toolView()!=='cards'){
+        const host=turnHost(m);
+        if(built.has(host.info.id)){const he=msgEls.get(host.info.id);if(he)msgEls.set(m.info.id,he);return}
+        const vm=mergedTurnMsg(host);
+        const el=buildMsg(vm);built.add(host.info.id);
+        (vm._ids||[host.info.id]).forEach(id=>msgEls.set(id,el));
+        fr.append(el);
+      }else{const el=buildMsg(m);built.add(m.info.id);fr.append(el)}
+    });
     const first=msgsEl.firstChild;
     if(first)msgsEl.insertBefore(fr,first);else msgsEl.append(fr);
     el=msgEls.get(mid);
@@ -1698,8 +1822,22 @@ function renderQueueBar(){
     h('button',{class:'chip-x',onclick:()=>O.removeQueued(S.sid,i)},O.icon('x')))));
 }
 function autosize(){
-  ta.style.height='auto';
-  ta.style.height=Math.min(ta.scrollHeight,180)+'px';
+  // JUMP FIX: height='auto' collapsed the composer for a frame on EVERY keystroke — the chat
+  // above bounced while typing. Modern WebView supports field-sizing:content (pure CSS growth,
+  // zero JS layout thrash). Fallback: measure via a hidden clone, write height once if changed.
+  if(CSS.supports('field-sizing','content')){ta.style.height='';return}
+  let probe=ta._probe;
+  if(!probe){
+    probe=ta._probe=document.createElement('textarea');
+    probe.tabIndex=-1;probe.setAttribute('aria-hidden','true');
+    probe.style.cssText='position:absolute;visibility:hidden;pointer-events:none;left:-9999px;top:0;overflow:hidden;';
+    document.body.append(probe);
+  }
+  const cs=getComputedStyle(ta);
+  ['font','fontFamily','fontSize','fontWeight','lineHeight','letterSpacing','padding','border','boxSizing','width','whiteSpace','wordWrap','wordBreak'].forEach(k=>{probe.style[k]=cs[k]});
+  probe.value=ta.value+'\u200b';
+  const want=Math.min(Math.max(probe.scrollHeight,34),180);
+  if(ta.offsetHeight!==want){ta.style.height=want+'px';if(stick)scrollEnd()}
 }
 const BUILTINS=[
  {n:'new',d:'Начать новую сессию',i:'plus',run:()=>O.newSession()},

@@ -142,19 +142,39 @@ const writeMsgs=sid=>{
   }).catch(()=>false);
 };
 // Loads hot window plus every archive page, oldest first, and prunes duplicates.
-O.loadCachedMsgs=async sid=>{
+// FIX (sessions open slowly): the hot window (last 250 msgs) loads FIRST and alone — archive
+// pages are fetched lazily in the background, so a 3000-message session opens instantly.
+O.loadCachedMsgs=async(sid,full)=>{
   const s=O.msgs(sid);
-  if(s.list.length)return s.list;
-  const pages=(await O.kv.get('msgs:'+sid+':pages'))||0;
-  const all=[];
-  for(let p=0;p<pages;p++){const pg=await O.kv.get(pageKey(sid,p));if(Array.isArray(pg))all.push(...pg)}
+  if(s.list.length){if(full&&!s._archLoaded)await loadArchives(sid);return s.list}
   const hot=await O.kv.get('msgs:'+sid);
-  if(Array.isArray(hot))all.push(...hot);
   const seen=new Set();
-  all.forEach(m=>{if(!m||!m.info||!m.info.id||seen.has(m.info.id))return;seen.add(m.info.id);s.list.push(m);s.idx.set(m.info.id,m)});
+  const add=m=>{if(!m||!m.info||!m.info.id||seen.has(m.info.id))return;seen.add(m.info.id);s.list.push(m);s.idx.set(m.info.id,m)};
+  if(Array.isArray(hot))hot.forEach(add);
   s.list.sort(cmp);
+  if(full)await loadArchives(sid);
+  else if(!s._archPending){
+    s._archPending=true;
+    // background: older pages arrive without blocking the open; a resync merges them in
+    setTimeout(async()=>{
+      try{await loadArchives(sid);if(S.sid===sid)bus.emit('resync',sid)}catch(_){}
+      s._archPending=false;
+    },50);
+  }
   return s.list;
 };
+async function loadArchives(sid){
+  const s=O.msgs(sid);
+  if(s._archLoaded)return;
+  const pages=(await O.kv.get('msgs:'+sid+':pages'))||0;
+  if(!pages){s._archLoaded=true;return}
+  const seen=new Set(s.list.map(m=>m.info.id));
+  const all=[];
+  for(let p=0;p<pages;p++){const pg=await O.kv.get(pageKey(sid,p));if(Array.isArray(pg))all.push(...pg)}
+  all.forEach(m=>{if(!m||!m.info||!m.info.id||seen.has(m.info.id))return;seen.add(m.info.id);s.list.push(m);s.idx.set(m.info.id,m)});
+  s.list.sort(cmp);
+  s._archLoaded=true;
+}
 // Removes every cached page of a session (delete / profile switch).
 O.dropCachedMsgs=async sid=>{
   const pages=(await O.kv.get('msgs:'+sid+':pages'))||0;
@@ -1177,20 +1197,35 @@ O.openSession=async(sid,fresh)=>{
   if(!s.list.length&&O.chatSkeleton)O.chatSkeleton();
   await O.loadCachedMsgs(sid);
   bus.emit('open',sid);
-  // The server may already be working in this session (widget send, another device, missed SSE):
-  // adopt its live status on open instead of waiting for a restart to reveal it.
-  try{const st=await api('GET','/session/status',null,{timeout:5000});
+  // FIX (slow open): the live-status probe used to block the message fetch behind a 5s timeout.
+  // Run it in parallel — the chat renders from cache instantly, status adopts when it lands.
+  api('GET','/session/status',null,{timeout:5000}).then(st=>{
     if(S.sid===sid&&st&&st[sid]){
       const ns=normStatus(st[sid]),old=S.status[sid];
       S.status[sid]=ns;
       if(!old||old.type!==ns.type){bus.emit('status',sid);if(ns.type!=='idle')O.startLiveSync(sid)}
     }
-  }catch(_){}
+  }).catch(()=>{});
   if(fresh)return;
   const prevCount=s.list.length,prevLast=s.list.length?s.list[s.list.length-1].info.id:'';
   const sdir=O.sessionDir(sid);
-  try{const arr=await api('GET','/session/'+sid+'/message',null,{timeout:120000,dir:sdir});
-    if(S.sid!==sid)return; // the user switched away while the request was in flight
+  // NOTIFICATION-OPEN FIX: opening from a notification right after a cold start raced the booting
+  // server — one failed fetch flipped the whole app to "offline". Retry a few times with a short
+  // pause, and only a persistent failure means offline.
+  let arr=null,lastErr=null;
+  for(let attempt=0;attempt<4;attempt++){
+    try{
+      arr=await api('GET','/session/'+sid+'/message',null,{timeout:30000,dir:sdir});
+      lastErr=null;break;
+    }catch(e){
+      lastErr=e;
+      if(S.sid!==sid)return; // user switched away — not an offline verdict
+      if(e&&e.status&&e.status>=400&&e.status<500&&e.status!==429)break; // real 4xx: no retry
+      await new Promise(r=>setTimeout(r,1200*(attempt+1)));
+    }
+  }
+  if(S.sid!==sid)return;
+  if(arr){
     // A wholesale replace used to wipe richer live tool states with lagging server snapshots —
     // tool cards rendered empty. Merge instead, keeping local knowledge when the snapshot lags.
     for(const m of arr){
@@ -1206,10 +1241,11 @@ O.openSession=async(sid,fresh)=>{
         bus.emit('meta');
       }
     }
-    S.offline=false;
+    S.offline=false;S.up=true;bus.emit('conn');
     const newLast=s.list.length?s.list[s.list.length-1].info.id:'';
     if(s.list.length!==prevCount||newLast!==prevLast)bus.emit('open',sid);
-    saveMsgs(sid)}catch(e){S.offline=true;bus.emit('conn')}
+    saveMsgs(sid);
+  }else if(lastErr){S.offline=true;bus.emit('conn')}
   api('GET','/session/'+sid+'/todo',null,{dir:sdir}).then(t=>{S.todos[sid]=t;bus.emit('todo',sid)}).catch(()=>{});
   api('GET','/session/'+sid+'/diff',null,{dir:sdir}).then(d=>{S.diffs[sid]=d;bus.emit('diff',sid)}).catch(()=>{});
   O.loadPending()};

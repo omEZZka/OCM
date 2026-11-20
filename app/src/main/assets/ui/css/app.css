@@ -634,6 +634,8 @@ a:hover {
   line-height: 1.45;
   color: var(--fg);
   font-weight: 400;
+  /* 2.22.1: native auto-grow where supported — no JS height writes, no typing bounce */
+  field-sizing: content;
 }
 .cbox textarea::placeholder {
   color: #727278;

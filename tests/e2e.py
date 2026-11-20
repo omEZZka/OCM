@@ -497,6 +497,83 @@ try:
       return {g,inside};
     }""")
     chk('visible reasoning stays in the pack',onev['g']==1 and onev['inside'])
+    # ---- 2.22.1: TURN MERGE — several assistant messages of one turn = ONE card, ONE pack ----
+    turn=pg.evaluate("""()=>{
+      const sid='ses_turn';OCM.S.sessions.unshift({id:sid,title:'turn',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;
+      // ids must sort in turn order: upsertMsg sorts lexicographically, tu0 would land AFTER ta*
+      OCM.upsertMsg({id:'t0u',sessionID:sid,role:'user',time:{created:1}});
+      OCM.upsertPart({id:'tup',sessionID:sid,messageID:'t0u',type:'text',text:'сделай задачу'});
+      // three assistant messages, no prose between them — server emits one per tool round
+      OCM.upsertMsg({id:'ta1',sessionID:sid,role:'assistant',time:{created:2,completed:3}});
+      OCM.upsertPart({id:'tp1',sessionID:sid,messageID:'ta1',type:'tool',tool:'bash',state:{status:'completed',input:{command:'ls',description:'Шаг 1'},output:'a',time:{start:1,end:2}}});
+      OCM.upsertMsg({id:'ta2',sessionID:sid,role:'assistant',time:{created:4,completed:5}});
+      OCM.upsertPart({id:'tp2',sessionID:sid,messageID:'ta2',type:'tool',tool:'read',state:{status:'completed',input:{filePath:'/root/x.py'},output:'x',time:{start:2,end:3}}});
+      OCM.upsertPart({id:'tp3',sessionID:sid,messageID:'ta2',type:'reasoning',text:'думаю',time:{end:1}});
+      OCM.upsertMsg({id:'ta3',sessionID:sid,role:'assistant',time:{created:6,completed:7}});
+      OCM.upsertPart({id:'tp4',sessionID:sid,messageID:'ta3',type:'tool',tool:'edit',state:{status:'completed',input:{filePath:'/root/x.py'},metadata:{diff:'--- a\\n+++ b\\n@@\\n-x\\n+y'},time:{start:3,end:4}}});
+      OCM.upsertPart({id:'tp5',sessionID:sid,messageID:'ta3',type:'tool',tool:'bash',state:{status:'completed',input:{command:'make',description:'Сборка'},output:'ok',time:{start:4,end:5}}});
+      OCM.chat.renderAll();
+      const cards=document.querySelectorAll('#msgs .msg.assistant').length;
+      const packs=document.querySelectorAll('#msgs .cmd-group').length;
+      const tools=document.querySelector('#msgs .cmd-group')._parts.filter(p=>p.type==='tool').length;
+      // a live event about the LAST message must update the shared card, not create a new one
+      OCM.upsertPart({id:'tp6',sessionID:sid,messageID:'ta3',type:'tool',tool:'bash',state:{status:'completed',input:{command:'pytest',description:'Тесты'},output:'ok',time:{start:5,end:6}}});
+      OCM.bus.emit('part',sid,OCM.msgs(sid).idx.get('ta3'));
+      const cards2=document.querySelectorAll('#msgs .msg.assistant').length;
+      const packs2=document.querySelectorAll('#msgs .cmd-group').length;
+      const tools2=document.querySelector('#msgs .cmd-group')._parts.filter(p=>p.type==='tool').length;
+      return {cards,packs,tools,cards2,packs2,tools2};
+    }""")
+    chk('turn merge: 3 assistant msgs -> 1 card',turn['cards']==1)
+    chk('turn merge: all tools under 1 arrow',turn['packs']==1 and turn['tools']==4)
+    chk('turn merge: live event keeps 1 card/1 pack',turn['cards2']==1 and turn['packs2']==1 and turn['tools2']==5)
+    # prose in the middle still splits into two packs inside the SAME card
+    turn2=pg.evaluate("""()=>{
+      OCM.upsertPart({id:'tp7',sessionID:'ses_turn',messageID:'ta2',type:'text',text:'Промежуточный вывод.',time:{end:1}});
+      OCM.chat.renderAll();
+      return {cards:document.querySelectorAll('#msgs .msg.assistant').length,packs:document.querySelectorAll('#msgs .cmd-group').length};
+    }""")
+    chk('turn merge: prose splits packs, not cards',turn2['cards']==1 and turn2['packs']==2)
+    pg.evaluate("OCM.S.sid='ses_1';OCM.chat.renderAll()")
+    pg.wait_for_timeout(200)
+    # ---- 2.22.1: active session opens at the tail, not mid-chat ----
+    act=pg.evaluate("""()=>{
+      const sid='ses_act';OCM.S.sessions.unshift({id:sid,title:'act',time:{created:1,updated:Date.now()}});
+      OCM.store.set('readPos.'+sid,{id:'nonexistent',off:0});
+      OCM.S.sid=sid;OCM.S.status[sid]={type:'busy'};
+      for(let i=0;i<40;i++){
+        const id='am'+String(i).padStart(3,'0');
+        OCM.upsertMsg({id,sessionID:sid,role:'user',time:{created:i}});
+        OCM.upsertPart({id:'ap'+i,sessionID:sid,messageID:id,type:'text',text:'строка '.repeat(30)+i});
+      }
+      OCM.chat.renderAll();
+      return new Promise(res=>setTimeout(()=>{
+        const msgs=document.querySelector('#msgs');
+        const atBottom=msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight<160;
+        OCM.S.status[sid]={type:'idle'};OCM.S.sid='ses_1';OCM.chat.renderAll();
+        res({atBottom});
+      },600));
+    }""")
+    chk('active session opens at the live tail',act['atBottom'])
+    # ---- 2.22.1: composer does not collapse while typing (no chat bounce) ----
+    bounce=pg.evaluate("""()=>{
+      const ta=document.querySelector('#composer textarea');
+      const composer=document.querySelector('#composer');
+      ta.value='';ta.dispatchEvent(new Event('input'));
+      const heights=[];
+      for(let i=0;i<10;i++){
+        ta.value+='слово ';
+        ta.dispatchEvent(new Event('input'));
+        heights.push(composer.getBoundingClientRect().height);
+      }
+      // monotonic non-decreasing: the composer must never shrink mid-typing
+      let dips=0;
+      for(let i=1;i<heights.length;i++)if(heights[i]<heights[i-1]-1)dips++;
+      ta.value='';ta.dispatchEvent(new Event('input'));
+      return {dips};
+    }""")
+    chk('typing: composer never collapses (no bounce)',bounce['dips']==0)
     # ---- 2.21 perf: unchanged message events do zero DOM work ----
     perf=pg.evaluate("""()=>{
       const sid=OCM.S.sid;const m=OCM.visibleMsgs(sid).find(x=>x.info.role==='assistant');
@@ -858,14 +935,18 @@ try:
       const pages=await OCM.kv.get('msgs:'+sid+':pages');
       const p0=await OCM.kv.get('msgs:'+sid+':p0');
       OCM.dropMsgs(sid);
-      const back=await OCM.loadCachedMsgs(sid);
+      // hot-first load: instant open with the tail; archives merge in the background
+      const hotOnly=await OCM.loadCachedMsgs(sid);
+      const hotN=hotOnly.length;
+      const back=await OCM.loadCachedMsgs(sid,true);
       const ids=new Set(back.map(m=>m.info.id));
       const ok=back.length===550&&ids.has('m0250')&&ids.has('m0300')&&ids.has('m0549')&&back[0].info.id==='m0000';
       OCM.dropMsgs(sid);await OCM.dropCachedMsgs(sid);
-      return {pages,p0len:p0&&p0.length,ok};
+      return {pages,p0len:p0&&p0.length,ok,hotN};
     }""")
     chk('archive: 550 msgs -> 1 full page + hot window',arch['pages']==1 and arch['p0len']==300)
     chk('archive: messages 251-550 survive reload',arch['ok'])
+    chk('open speed: hot window loads first (250)',arch['hotN']==250)
     # ---- regression: tool state not wiped by lagging snapshot ----
     tool=pg.evaluate("""()=>{
       const sid=OCM.S.sid;
