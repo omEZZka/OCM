@@ -148,7 +148,28 @@ class OpenCodeService : Service() {
     private val busySince = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val sawAnswer = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     private val lastDone = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val lastUserPrompt = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val parentOf = java.util.concurrent.ConcurrentHashMap<String, String>()
+    // Sessions that must NEVER produce a DONE notification: internal side tasks (AI pack titles,
+    // summaries, TOC, smart search, duels, second opinions) and MM role children. The UI marks
+    // them via the 'silent_session' bridge flag; title patterns are a safety net for older UIs.
+    private val silentSessions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val sideTitleRe = Regex("(?i)^(OCM side task|Duel ·|Opinion ·|Child session)")
+    companion object {
+        private val silentStatic = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        /** UI marks internal side-task sessions so they never fire DONE notifications. */
+        @JvmStatic fun markSilentSession(sid: String) {
+            if (sid.isEmpty()) return
+            silentStatic.add(sid)
+            if (silentStatic.size > 400) silentStatic.clear()
+        }
+    }
+    private fun isSilent(sid: String): Boolean {
+        if (silentStatic.contains(sid)) return true
+        if (parentOf.containsKey(sid)) return true // any child session: parent owns the DONE
+        val t = titleCache[sid] ?: ""
+        return sideTitleRe.containsMatchIn(t)
+    }
 
     /** Best-effort human title for a session, used in notifications. */
     private val titleCache = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -191,6 +212,17 @@ class OpenCodeService : Service() {
                         if (parent.isNotEmpty()) parentOf[id] = parent else parentOf.remove(id)
                         val t = cleanTitle(info.optString("title"))
                         if (t.isNotEmpty()) titleCache[id] = t
+                    }
+                }
+            }
+            type == "message.updated" -> {
+                // a USER message = the user actually asked something in this session
+                val info = props.optJSONObject("info")
+                if (info != null && info.optString("role") == "user") {
+                    val msid = info.optString("sessionID").ifEmpty { sid }
+                    if (msid.isNotEmpty()) {
+                        if (lastUserPrompt.size > 300) lastUserPrompt.clear()
+                        lastUserPrompt[msid] = SystemClock.elapsedRealtime()
                     }
                 }
             }
@@ -261,9 +293,15 @@ class OpenCodeService : Service() {
         // a period shorter than 2s with no answer is a tool blip, not a finished task
         if (!answered && now - started < 2000) return
         if (!answered) return
+        // internal side tasks and MM children never notify "task completed"
+        if (isSilent(sid)) return
         // MM child sessions: the parent is still working — the task is NOT done
         val parent = parentOf[sid]
         if (parent != null && busySince.containsKey(parent)) return
+        // The user must have actually prompted this session recently: a spontaneous idle with an
+        // old answer (server housekeeping, compaction, title generation) is not a finished task.
+        val prompted = lastUserPrompt[sid] ?: 0L
+        if (prompted == 0L || now - prompted > 30 * 60_000L) return
         val last = lastDone[sid] ?: 0L
         if (now - last < 8000) return
         if (lastDone.size > 200) lastDone.clear()

@@ -195,16 +195,18 @@ try:
     chk('workspace card rendered','My App' in pg.inner_text('.sheet.full'))
     chk('workspace stored',pg.evaluate("OCM.workspaces().some(w=>w.dir==='/root/app'&&w.name==='My App')"))
     pg.evaluate("OCM.back()")
-    # ---- step plan (toggle from settings) ----
+    # ---- step plan (lives in the mode chip's long-press menu now) ----
     # dismiss the pending permission first: dock-active hides the composer
     pg.evaluate("__push({type:'permission.replied',properties:{requestID:'per_1',sessionID:'ses_1'}})")
     pg.wait_for_timeout(150)
     pg.evaluate("OCM.setPlanMode(true);OCM.bus.emit('planMode')")
     pg.wait_for_timeout(150)
-    chk('plan button visible when enabled',pg.locator('#composer .plan-btn:not(.hide)').count()==1)
+    # composer keeps ONLY + / mode / model / voice / send — no overflow chips
+    chipcount=pg.evaluate("document.querySelectorAll('#composer .cbar-left > *, #composer .cbar-right > *').length")
+    chk('composer: exactly 5 chips',chipcount==5)
     # openPlan needs a session: earlier tests left S.sid empty, so create one deterministically
     pg.evaluate("OCM.S.sid=OCM.S.sessions[0]&&OCM.S.sessions[0].id||'ses_1'")
-    pg.click('#composer .plan-btn')
+    pg.evaluate("OCM.openPlan()")
     pg.wait_for_selector('.sheet.full:has-text("План задачи")')
     pg.fill('.sheet.full textarea','Починить авторизацию')
     pg.fill('.sheet.full .plan-step input','Найти баг')
@@ -219,7 +221,7 @@ try:
     pg.dispatch_event('#composer textarea','input')
     pg.evaluate("OCM.setPlanMode(false);OCM.bus.emit('planMode')")
     pg.wait_for_timeout(150)
-    chk('plan button hidden when disabled',pg.locator('#composer .plan-btn.hide').count()==1)
+    chk('plan mode toggles off',pg.evaluate("OCM.planMode()")==False)
     # ---- media chats ----
     pg.evaluate("""() => {
       const p={id:'testprov',name:'Test Provider',kind:'image',baseURL:'https://example.test/v1',
@@ -624,20 +626,16 @@ try:
     chk('reading position saved',readpos['saved'])
     chk('reading position restored on reopen',readpos['restored'])
     pg.evaluate("OCM.store.remove('readPos.'+OCM.S.sid)")
-    # ---- 2.21: agent avatar pulse + card ----
+    # ---- 2.21: agent pulse on the mode chip + who-is-answering card ----
     pulse=pg.evaluate("""()=>{
-      const av=document.querySelector('.agent-avatar');
+      const av=document.querySelector('#composer .agent-pill');
       OCM.S.status[OCM.S.sid]={type:'busy'};OCM.bus.emit('status',OCM.S.sid);
       const on=av.classList.contains('pulsing');
       OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
       const off=!av.classList.contains('pulsing');
-      av.click();
-      const sheet=[...document.querySelectorAll('.sheet')].some(s=>s.textContent.includes('Кто отвечает'));
-      OCM.back();
-      return {on,off,sheet};
+      return {on,off};
     }""")
-    chk('agent avatar pulses while busy',pulse['on'] and pulse['off'])
-    chk('agent card opens on avatar tap',pulse['sheet'])
+    chk('mode chip pulses while busy',pulse['on'] and pulse['off'])
     # ---- 2.21: night lamp lives in settings, not in the composer ----
     lamp=pg.evaluate("""()=>{
       OCM.setNightLamp(true);
@@ -1194,6 +1192,16 @@ try:
     chk('minimap built before insertion',mm['canvas'] and mm['code'])
     # uiHandshake bridge exists
     chk('uiHandshake bridge',pg.evaluate("typeof OC.uiHandshake==='function'"))
+    # side tasks mark their sessions silent (no DONE notifications)
+    sil=pg.evaluate("""async ()=>{
+      window.__silentSessions=[];
+      const p=OCM.sideAsk('тест');
+      await new Promise(r=>setTimeout(r,150));
+      const marked=(window.__silentSessions||[]).length>0;
+      try{await p}catch(_){}
+      return {marked,fn:typeof OC.silentSession==='function'};
+    }""")
+    chk('side task session marked silent',sil['marked'] and sil['fn'])
     pg.wait_for_timeout(350)
     # ---- MM: approval gate + stage retry helpers ----
     mmx=pg.evaluate("""()=>{

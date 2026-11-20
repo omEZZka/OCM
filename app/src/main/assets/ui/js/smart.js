@@ -191,6 +191,7 @@ O.openDuel=async(prefill)=>{
     col.append(h('div',{class:'duel-head'},O.icon('cpu'),h('b',null,m.mid)),h('div',{class:'duel-body mut'},O.tr('Thinking…','Думает…')));
     const out=col.querySelector('.duel-body');
     const ses=await api('POST','/session',{title:'Duel · '+m.mid},{dir:false});
+    try{if(window.OC&&OC.silentSession)OC.silentSession(ses.id)}catch(_){}
     try{
       await api('POST','/session/'+ses.id+'/prompt_async',{messageID:O.mid(),model:{providerID:m.pid,modelID:m.mid},parts:[{type:'text',text:q.value.trim()}]},{timeout:30000,dir:false});
       const deadline=Date.now()+180000;

@@ -1284,6 +1284,11 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        /** UI marks a session as an internal side task (AI titles, summaries, duels): no DONE notif. */
+        @JavascriptInterface fun silentSession(sid: String) {
+            try { OpenCodeService.markSilentSession(sid) } catch (_: Exception) {}
+        }
+
         /** Actionable notification tied to a session/question (approve, answer, stop from the shade). */
         @JavascriptInterface fun notifyAction(title: String, text: String, sessionId: String, questionId: String) {
             runOnUiThread {

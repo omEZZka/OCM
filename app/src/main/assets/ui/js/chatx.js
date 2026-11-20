@@ -203,7 +203,9 @@ O.openSessionRibbon=()=>{
 // ---- shared: ask the current model in a throwaway session (no chat pollution) ----
 async function sideAsk(prompt,timeoutMs){
   if(!S.model)throw new Error(O.tr('No model selected','Модель не выбрана'));
-  const ses=await api('POST','/session',{title:'OCM side task'});
+  const ses=await api('POST','/session',{title:'OCM side task'},{dir:false});
+  // FIX: side tasks must never fire "task completed" notifications — mark the session silent
+  try{if(window.OC&&OC.silentSession)OC.silentSession(ses.id)}catch(_){}
   try{
     await api('POST','/session/'+ses.id+'/prompt_async',{messageID:O.mid(),model:S.model,parts:[{type:'text',text:prompt}]},{timeout:30000,dir:false});
     const deadline=Date.now()+(timeoutMs||90000);

@@ -94,8 +94,24 @@ O.chatInit=root=>{
       }};
     }));
   },500);
-  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentAvatar,outlineBtn,ctxBtn,planBtn,agentChip,modelChip);
+  // Composer chips: ONLY + / mode / model / voice / send. Outline, context, plan and the avatar
+  // moved into the mode chip's long-press menu — the row overflowed on narrow phones.
+  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentChip,modelChip);
   const cbarRight=h('div',{class:'cbar-right'},micBtn,sendBtn);
+  O.longPress(agentChip,()=>{
+    O.actions(O.tr('Chat tools','Инструменты чата'),[
+      {label:O.tr('Who is answering','Кто отвечает'),sub:O.tr('Model, mode, state, context','Модель, режим, состояние, контекст'),icon:'bot',fn:agentCard},
+      {label:O.tr('Conversation outline','Оглавление диалога'),icon:'list',fn:()=>O.openOutline&&O.openOutline()},
+      {label:O.tr('AI outline','ИИ-оглавление'),icon:'bulb',fn:()=>O.openAiToc&&O.openAiToc()},
+      {label:O.tr('Context snapshot','Снимок контекста'),icon:'eye',fn:()=>O.openContextPreview&&O.openContextPreview()},
+      {label:O.tr('Step-by-step plan','Пошаговый план'),icon:'list',fn:()=>O.openPlan()},
+      {label:O.tr('Session summary','Саммари сессии'),icon:'doc',fn:()=>O.openSessionSummary&&O.openSessionSummary()},
+      {label:O.tr('Session media','Медиа сессии'),icon:'film',fn:()=>O.openSessionRibbon&&O.openSessionRibbon()},
+      {label:O.tr('Project template','Шаблон проекта'),icon:'doc',fn:()=>O.openProjectTpls&&O.openProjectTpls(true)},
+      {label:O.tr('Personal memory','Персональная память'),icon:'memory',fn:()=>O.openUserFacts&&O.openUserFacts()},
+      {label:O.tr('Night lamp','Ночная лампа'),icon:'bulb',fn:()=>O.setNightLamp&&O.setNightLamp(!O.nightLamp())}
+    ]);
+  },500);
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,stickyEl,jumpEl);
@@ -345,13 +361,13 @@ function restoreReadPos(){
   el.classList.add('msg-flash');setTimeout(()=>el.classList.remove('msg-flash'),1200);
   return true;
 }
-// ---- agent pulse + avatar card (06, 43) ----
+// ---- agent pulse + avatar card (06, 43): pulse lives on the MODE chip (avatar left the row) ----
 function syncAgentPulse(){
-  if(!agentAvatar)return;
   const st=S.status[S.sid];
   const busyNow=!!st&&st.type!=='idle';
-  agentAvatar.classList.toggle('pulsing',busyNow);
-  agentAvatar.classList.toggle('waiting',S.perms.some(p=>p.sessionID===S.sid)||S.questions.some(q=>q.sessionID===S.sid));
+  const waiting=S.perms.some(p=>p.sessionID===S.sid)||S.questions.some(q=>q.sessionID===S.sid);
+  if(agentChip){agentChip.classList.toggle('pulsing',busyNow);agentChip.classList.toggle('waiting',waiting)}
+  if(agentAvatar){agentAvatar.classList.toggle('pulsing',busyNow);agentAvatar.classList.toggle('waiting',waiting)}
 }
 function agentCard(){
   const ag=S.agents.find(a=>a.name===S.agent);
@@ -1168,6 +1184,7 @@ O.secondOpinion=async m=>{
       body.append(h('div',{class:'note',style:{marginTop:'8px'}},O.tr('New answer','Новый ответ')),out);
       try{
         const ses=await api('POST','/session',{title:'Opinion · '+x.mid});
+        try{if(window.OC&&OC.silentSession)OC.silentSession(ses.id)}catch(_){}
         await api('POST','/session/'+ses.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:{providerID:x.pid,modelID:x.mid},parts:[{type:'text',text:msgText(user)}]},{timeout:30000});
         const deadline=Date.now()+180000;
         while(Date.now()<deadline){

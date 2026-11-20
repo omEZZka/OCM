@@ -425,6 +425,7 @@ async function mmRunJudge(mm,run,role,userText,results,parentSid,leadMain,onPhas
   try{
     onPhase&&onPhase(O.tr('Judge: ','Судья: ')+role.name);
     const cs=await api('POST','/session',{parentID:parentSid,title:mm.name+' · '+role.name});
+    try{if(window.OC&&OC.silentSession)OC.silentSession(cs.id)}catch(_){}
     const rtext='Ты — «'+(role.name||'Judge')+'», судья команды «'+mm.name+'».\n'+(role.prompt||'')+memBlock(mm)+
       (merge
         ?'\n\nСравни результаты ролей: что верно, что пропущено, что сломано. Затем СВЕДИ их в единый лучший итоговый результат: возьми сильное из каждого, исправь ошибки, убери дубли. Верни сначала краткий вердикт (список замечаний), затем блок «ИТОГ:» со сведённым результатом. Файлы не меняй.'
@@ -505,6 +506,7 @@ async function mmMemoryUpdate(mm,parentID,lead,userText,finalText){
   let sid;
   try{
     ({id:sid}=await api('POST','/session',{parentID,title:mm.name+' · memory'}));
+    try{if(window.OC&&OC.silentSession)OC.silentSession(sid)}catch(_){}
     if(!sid||sid===parentID){sid=null;return}
     const instr=PLAN_TAG+'\nИзвлеки из результата 3–7 коротких фактов, полезных для будущих задач этой команды (решения, соглашения, структура проекта, грабли). Только факты, строками, без вступлений. Если полезных фактов нет — ответь ровно: NONE';
     await api('POST','/session/'+sid+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:lead,parts:[{type:'text',text:instr,synthetic:true},{type:'text',text:'Запрос: '+userText+'\n\nИтог:\n'+finalText.slice(0,6000)}]},{timeout:30000});
@@ -718,6 +720,7 @@ O.mmResume=async()=>{
         rtext=approved;
       }
       const cs=await api('POST','/session',{parentID:sess,title:mm.name+' · '+role.name+' · '+O.tr('resume','возобновление')});
+    try{if(window.OC&&OC.silentSession)OC.silentSession(cs.id)}catch(_){}
       await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:O.mmRoleModels(role).model||lead,parts:[{type:'text',text:rtext}]},{timeout:30000});
       const job={sid:cs.id,role,task:t.task,started:Date.now(),state:'running',prompt:rtext};
       jobs.push(job);run.jobs=jobs.slice();emit();
@@ -872,6 +875,7 @@ O.mmRetryRole=async job=>{
   try{
     O.toast(O.tr('Re-running: ','Перезапускаю: ')+role.name,1800);
     const cs=await api('POST','/session',{parentID:parent,title:mm.name+' · '+role.name+' · '+O.tr('re-run','повтор этапа')});
+    try{if(window.OC&&OC.silentSession)OC.silentSession(cs.id)}catch(_){}
     const rtext=job.prompt||('Ты — «'+role.name+'» в команде «'+mm.name+'».\n'+(role.prompt||'')+memBlock(mm)+'\n\nЗадача: '+(job.task||'')+'\n\nВыполни свою часть и дай конкретный результат.');
     await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model,parts:[{type:'text',text:rtext}]},{timeout:30000});
     const run={abort:false,paused:false};
@@ -1238,6 +1242,7 @@ O.mmSend=async(text,parts)=>{
           rtext=approved;
         }
         const cs=await api('POST','/session',{parentID:sid,title:mm.name+' · '+t.role.name});
+    try{if(window.OC&&OC.silentSession)OC.silentSession(cs.id)}catch(_){}
         await api('POST','/session/'+cs.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:O.mmRoleModels(t.role).model||leadMain,parts:[{type:'text',text:rtext}]},{timeout:30000});
         const job={sid:cs.id,role:t.role,task:t.task,started:Date.now(),prompt:rtext};
         jobs.push(job);run.jobs=jobs;
@@ -1277,6 +1282,7 @@ O.mmSend=async(text,parts)=>{
         run.currentRole=j.role.name+' (retry)';emit();
         try{
           const cs2=await api('POST','/session',{parentID:sid,title:mm.name+' · '+j.role.name+' · '+O.tr('retry','повтор')});
+    try{if(window.OC&&OC.silentSession)OC.silentSession(cs2.id)}catch(_){}
           const rtext='Ты — «'+j.role.name+'» в команде «'+mm.name+'».\n'+(j.role.prompt||'')+
             '\n\nЗадача от координатора: '+j.task+'\nИсходный запрос пользователя: «'+userText+'»\n\nВыполни свою часть и дай конкретный результат.';
           await api('POST','/session/'+cs2.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model,parts:[{type:'text',text:rtext}]},{timeout:30000});

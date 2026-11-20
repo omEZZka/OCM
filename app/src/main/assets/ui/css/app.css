@@ -3573,6 +3573,15 @@ html[data-theme=light] {
   100% { transform: scale(1.75); opacity: 0; }
 }
 .agent-avatar.waiting { border-color: var(--warn); color: var(--warn); }
+/* mode chip carries the pulse now (avatar left the composer row) */
+.agent-pill { position: relative; }
+.agent-pill.pulsing { border-color: color-mix(in srgb, var(--acc) 55%, var(--line)); color: var(--acc); }
+.agent-pill.pulsing::after {
+  content: ''; position: absolute; inset: -2px; border-radius: inherit;
+  border: 2px solid color-mix(in srgb, var(--acc) 55%, transparent);
+  animation: avatarWave 1.8s ease-out infinite; pointer-events: none;
+}
+.agent-pill.waiting { border-color: var(--warn); color: var(--warn); }
 .top-title-dot.busy-pulse { animation: topdot 1.6s infinite; }
 
 /* 05: cinematic scroll */
