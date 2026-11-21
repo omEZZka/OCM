@@ -3842,3 +3842,61 @@ html.night-lamp #msgs { filter: brightness(.92) sepia(.14); }
 .viewer-media { width: 100%; max-height: 62vh; border-radius: 14px; }
 .viewer-hint { text-align: center; }
 .md-preview { line-height: 1.6; }
+
+/* ==========================================================================
+   2.25 PIXEL MASCOT
+   ========================================================================== */
+.mascot {
+  position: absolute;
+  left: 12px; bottom: 8px;
+  z-index: 9;
+  display: flex; align-items: center; justify-content: center;
+  width: var(--ms, 44px); height: var(--ms, 44px);
+  cursor: grab; touch-action: none;
+  filter: drop-shadow(0 3px 6px rgba(0,0,0,.45));
+  transition: transform .16s var(--ease-out);
+  will-change: transform;
+}
+.mascot[data-placed="1"] { bottom: auto; }
+.mascot:active { cursor: grabbing; }
+.mascot-sprite { display: block; line-height: 0; }
+.mascot-sprite svg { display: block; }
+
+/* state motion: bob / wiggle / hop — all transform-only, GPU friendly */
+.mascot[data-state="idle"] .mascot-sprite { animation: mBob 3.4s ease-in-out infinite; }
+.mascot[data-state="thinking"] .mascot-sprite { animation: mThink 1.1s ease-in-out infinite; }
+.mascot[data-state="writing"] .mascot-sprite { animation: mWrite .34s ease-in-out infinite; }
+.mascot[data-state="waiting"] .mascot-sprite { animation: mHop .9s ease-in-out infinite; }
+
+@keyframes mBob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-2px) } }
+@keyframes mThink { 0%,100% { transform: rotate(-4deg) translateY(0) } 50% { transform: rotate(4deg) translateY(-3px) } }
+@keyframes mWrite { 0%,100% { transform: translateY(0) scale(1) } 50% { transform: translateY(-1.5px) scale(1.04) } }
+@keyframes mHop { 0%,100% { transform: translateY(0) } 40% { transform: translateY(-6px) } 60% { transform: translateY(-4px) } }
+
+/* speech/emotion bubble */
+.mascot::after {
+  content: attr(data-emote);
+  position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%);
+  background: var(--card); color: var(--fg);
+  border: 1px solid var(--line2); border-radius: 10px;
+  padding: 2px 7px; font-size: 11px; white-space: nowrap;
+  opacity: 0; transition: opacity .2s; pointer-events: none;
+}
+.mascot[data-emote]:not([data-emote=""])::after { opacity: 1; }
+
+/* settings picker grid */
+.mascot-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+}
+@media (min-width: 560px) { .mascot-grid { grid-template-columns: repeat(6, 1fr); } }
+.mascot-prev {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 4px; border-radius: 12px;
+  border: 1.5px solid var(--line); background: var(--card);
+  transition: transform .1s, border-color .15s;
+}
+.mascot-prev:active { transform: scale(.95); }
+.mascot-prev.on { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
+.mascot-prev span { font-size: 9.5px; color: var(--mut); text-align: center; line-height: 1.15;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.mascot-prev svg { display: block; }

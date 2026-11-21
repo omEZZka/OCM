@@ -116,6 +116,8 @@ O.chatInit=root=>{
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,stickyEl,jumpEl);
   root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,mmFloatBtn,comp);
+  // Pixel mascot lives in the chat layer so it can be dragged anywhere (incl. above the input).
+  if(O.mascotInit){try{O.mascotInit(wrap)}catch(e){console.error('mascot',e)}}
   bus.on('open',()=>{renderAll()});
   // Live-resync snapshot: merge into the DOM incrementally. NEVER force-scroll here — the user
   // may be reading far above; only follow when already glued to the bottom.
@@ -519,6 +521,8 @@ function renderAll(){
     const built=new Set();
     for(let i=start;i<list.length;i++){
       const m=list[i];
+      // hidden transport messages (Continue's synthetic prompt) must never create a card
+      if(!m.parts.some(p=>showPart(m,p))&&!m.info.error)continue;
       // turn merge: only the host assistant message of a turn builds a card
       if(m.info.role==='assistant'&&toolView()!=='cards'){
         const host=turnHost(m);
@@ -528,6 +532,7 @@ function renderAll(){
         (vm._ids||[host.info.id]).forEach(id=>msgEls.set(id,el));
         fr.append(el);
       }else{
+        if(m.info.role==='user'&&!m.parts.some(p=>showPart(m,p)))continue;
         const el=buildMsg(m);built.add(m.info.id);fr.append(el);
       }
     }
@@ -554,6 +559,7 @@ function maybeLoadOlder(){
   const fr=document.createDocumentFragment();
   const built=new Set();
   chunk.forEach(m=>{
+    if(!m.parts.some(p=>showPart(m,p))&&!m.info.error)return;
     if(m.info.role==='assistant'&&toolView()!=='cards'){
       const host=turnHost(m);
       // FIX (audit #2): the turn's card may already exist in a LATER chunk (built is per-chunk).
@@ -597,6 +603,8 @@ function flushPartTimers(){
 }
 function ensureMsg(m){
   const rv=revisionKey();if(rv&&m.info.id>=rv)return;
+  // Invisible transport messages (Continue / Regenerate prompts) get no card at all.
+  if(!m.parts.some(p=>showPart(m,p))&&!m.info.error)return;
   // TURN MERGE: consecutive assistant messages of one turn render as ONE card with ONE pack.
   // The server emits a new assistant message per tool round; the user must not see 5 cards.
   if(m.info.role==='assistant'&&toolView()!=='cards'){
@@ -1162,7 +1170,23 @@ O.regenerateFrom=async m=>{
   if(!user)return O.toast(O.tr('No prompt to repeat','Нет запроса для повтора'),2500);
   const text=msgText(user);
   try{await api('POST','/session/'+sid+'/revert',{messageID:m.info.id})}catch(_){}
+  // Regenerate: no visible repeat of the user's own prompt — resend it as a synthetic part.
+  if(O.resendSynthetic)return O.resendSynthetic(sid,text);
   O.chatSendText(text);
+};
+// Re-sends a prompt as a HIDDEN transport message (no user bubble in the transcript).
+O.resendSynthetic=async(sid,text)=>{
+  sid=sid||S.sid;
+  if(!sid||!S.model)return O.toast(O.tr('Select a model first','Сначала выберите модель'),2500);
+  const mid=O.mid();
+  const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:S.model});
+  m.local=true;m.synthetic=true;
+  m.parts=[{id:'prt_local_res'+mid,sessionID:sid,messageID:mid,type:'text',text:String(text||''),synthetic:true}];
+  try{
+    await api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,parts:m.parts},{timeout:60000});
+    bus.emit('msg',sid,m);
+    O.toast(O.tr('Regenerating…','Перегенерирую…'),1600);
+  }catch(e){O.toast(e.message||String(e),4000)}
 };
 // Second opinion: same question to a different model in a throwaway session, shown side-by-side.
 O.secondOpinion=async m=>{
@@ -1346,11 +1370,22 @@ async function regenerate(m,mode){
     if(!prompt)return O.toast(O.tr('Prompt not found','Запрос не найден'),2500);
     await api('POST','/session/'+S.sid+'/revert',{messageID:m.info.id}).catch(()=>{});
     const steer=mode==='focused'
-      ?'\n\n[Стиль: предельно кратко и по делу, без вступлений, только факты и код.]'
-      :'\n\n[Стиль: смелее в решениях, предложи неочевидные варианты, но без воды.]';
+      ?'[Стиль: предельно кратко и по делу, без вступлений, только факты и код.]'
+      :'[Стиль: смелее в решениях, предложи неочевидные варианты, но без воды.]';
     const mid=O.mid();
-    await api('POST','/session/'+S.sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,
-      parts:[{type:'text',text:prompt+steer}]},{timeout:60000});
+    // Regenerate must NOT post a visible user bubble: the whole payload is synthetic, so the
+    // turn renders only as the new assistant answer (revert removed the old one).
+    const parts=[
+      {type:'text',text:steer,synthetic:true},
+      {type:'text',text:prompt,synthetic:true}
+    ];
+    const lm=O.upsertMsg({id:mid,sessionID:S.sid,role:'user',time:{created:Date.now()},agent:S.agent,model:S.model});
+    lm.local=true;lm.synthetic=true;
+    lm.parts=parts.map((p,i)=>Object.assign({id:'prt_local_regen'+i,sessionID:S.sid,messageID:mid,synthetic:true},p));
+    try{
+      await api('POST','/session/'+S.sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,parts},{timeout:60000});
+      bus.emit('msg',S.sid,lm);
+    }catch(e2){O.toast(e2.message||String(e2),4000);return}
     O.toast(O.tr('Regenerating…','Перегенерирую…'),1800);
   }catch(e){O.toast(e.message||String(e),4000)}
 }
@@ -1542,6 +1577,7 @@ O.jumpToMsg=mid=>{
     const fr=document.createDocumentFragment();
     const built=new Set();
     chunk.forEach(m=>{
+      if(!m.parts.some(p=>showPart(m,p))&&!m.info.error)return;
       if(m.info.role==='assistant'&&toolView()!=='cards'){
         const host=turnHost(m);
         // FIX (audit #2): reuse an existing turn card from another chunk — no duplicates

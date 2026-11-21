@@ -5,7 +5,7 @@ const bus=O.bus={h:{},on(n,f){(this.h[n]=this.h[n]||[]).push(f);return()=>this.o
   emit(n,...a){(this.h[n]||[]).slice().forEach(f=>{try{f(...a)}catch(e){console.error(n,e)}})}};
 const S=O.S={dir:'',sessions:[],sid:null,status:{},perms:[],questions:[],todos:{},diffs:{},
   providers:[],agents:[],commands:[],cfg:{},agent:'build',model:null,variant:null,mcp:{},lsp:[],branch:'',
-  offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false},O.store.get('opts',{}))};
+  offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false,mascot:'deepseek',mascotOn:true,mascotSize:44},O.store.get('opts',{}))};
 O.saveOpts=()=>{O.store.set('opts',S.opts);document.documentElement.dataset.theme=S.opts.theme;document.documentElement.style.setProperty('--fs',S.opts.fs+'px')};
 // Auto theme: follow the Android/system dark-mode preference when enabled.
 // The manual choice is remembered separately so toggling auto off restores it.
@@ -1338,14 +1338,20 @@ O.continueGeneration=async(sid,opts)=>{
   if(tail)parts.push({type:'text',text:'[Предыдущий ответ, оборван на этом месте]:\n…'+tail+'\n…'});
   parts.push({type:'text',text:instr});
   const mid=O.mid();
+  // Continue must NOT post a visible user bubble: the instruction is transport, not a message.
+  // All parts are synthetic → the card is hidden by showPart and renders as nothing.
   const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:S.model});
-  m.local=true;m.parts=parts.map((p,i)=>Object.assign({id:'prt_local_cont'+i,sessionID:sid,messageID:mid},p));
-  m.synthetic=true;
+  m.local=true;m.synthetic=true;
+  m.parts=parts.map((p,i)=>Object.assign({id:'prt_local_cont'+i,sessionID:sid,messageID:mid,synthetic:true},p));
   try{
     await api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,parts},{timeout:60000});
     bus.emit('msg',sid,m);
     O.toast(O.tr('Continuing…','Продолжаю…'),1500);
-  }catch(e){O.toast(e.message||String(e),4000)}
+  }catch(e){
+    O.toast(e.message||String(e),4000);
+    // rolled back: drop the hidden transport message so it never survives a failed send
+    try{const s=O.msgs(sid);s.list=s.list.filter(x=>x.info.id!==mid);s.idx.delete(mid)}catch(_){}
+  }
 };
 
 O.replyPermission=async(p,r)=>{

@@ -1356,6 +1356,81 @@ try:
       return {code,edit};
     }""")
     chk('viewer: text code view + edit',vwt['code'] and vwt['edit'])
+    # ---- 2.25 mascot ----
+    mc=pg.evaluate("""()=>{
+      const el=document.querySelector('.mascot');
+      if(!el)return {missing:true};
+      const sp=el.dataset.species;
+      // states follow the app (no pending permissions allowed to mask the idle state)
+      OCM.S.perms=[];OCM.S.questions=[];
+      OCM.S.status[OCM.S.sid]={type:'busy'};OCM.bus.emit('status',OCM.S.sid);
+      const busyState=el.dataset.state;
+      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
+      const idleState=el.dataset.state;
+      // settings list
+      OCM.openMascotSettings();
+      const sh=[...document.querySelectorAll('.sheet')].pop();
+      const species=sh.querySelectorAll('.mascot-prev').length;
+      // pick another species
+      const cells=[...sh.querySelectorAll('.mascot-prev')];
+      cells[4]&&cells[4].click();
+      const picked=OCM.S.opts.mascot;
+      // size control
+      const sizes=[...sh.querySelectorAll('.seg button')].map(b=>b.textContent);
+      OCM.back();
+      const after=document.querySelector('.mascot');
+      return {sp,busyState,idleState,species,picked,sizes,size:after.style.getPropertyValue('--ms')};
+    }""")
+    chk('mascot rendered with species',bool(mc.get('sp')))
+    chk('mascot shows thinking/writing while busy',mc.get('busyState') in ('thinking','writing','waiting'))
+    chk('mascot idles when finished',mc.get('idleState')=='idle')
+    chk('mascot settings: 24+ species',mc.get('species',0)>=24)
+    chk('mascot settings: species selectable',bool(mc.get('picked')) and mc.get('picked')!=mc.get('sp'))
+    chk('mascot settings: size presets','28px' in (mc.get('sizes') or []))
+    # drag: mascot is absolutely positioned and draggable
+    dr=pg.evaluate("""()=>{
+      const el=document.querySelector('.mascot');
+      el.style.left='40px';el.style.top='80px';el.dataset.placed='1';
+      OCM.store.set('mascotPos',{x:40,y:80});
+      const before={l:el.style.left,t:el.style.top};
+      el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:50,clientY:90,pointerId:1,button:0}));
+      el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:160,clientY:200,pointerId:1,buttons:1}));
+      el.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:160,clientY:200,pointerId:1}));
+      const saved=OCM.store.get('mascotPos',null);
+      return {before,saved,left:el.style.left,top:el.style.top};
+    }""")
+    chk('mascot drags and remembers position',dr['saved'] and dr['saved']['x']!=40)
+    # off switch in settings
+    off=pg.evaluate("""()=>{
+      const before=OCM.S.opts.mascotOn;
+      OCM.S.opts.mascotOn=false;OCM.saveOpts();OCM.mascotRefresh();
+      const hidden=document.querySelector('.mascot').style.display==='none';
+      OCM.S.opts.mascotOn=true;OCM.saveOpts();OCM.mascotRefresh();
+      const shown=document.querySelector('.mascot').style.display!=='none';
+      return {before,hidden,shown};
+    }""")
+    chk('mascot can be hidden and shown',off['hidden'] and off['shown'])
+    # ---- continue / regenerate send no visible user bubble ----
+    cg=pg.evaluate("""async ()=>{
+      const sid='ses_cg';OCM.S.sessions.unshift({id:sid,title:'cg',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;OCM.S.status[sid]={type:'idle'};
+      OCM.upsertMsg({id:'mc1',sessionID:sid,role:'assistant',time:{created:1}});
+      OCM.upsertPart({id:'pc1',sessionID:sid,messageID:'mc1',type:'text',text:'Оборвано'});
+      OCM.chat.renderAll();
+      const before=document.querySelectorAll('#msgs .msg.user').length;
+      await OCM.continueGeneration(sid);
+      await new Promise(r=>setTimeout(r,400));
+      const afterCont=document.querySelectorAll('#msgs .msg.user').length;
+      OCM.chat.renderAll();
+      const afterRender=document.querySelectorAll('#msgs .msg.user').length;
+      const last=OCM.visibleMsgs(sid).filter(m=>m.info.role==='user').pop();
+      const transport=!!(last&&last.synthetic&&last.parts.every(p=>p.synthetic));
+      OCM.S.sid='ses_1';OCM.chat.renderAll();
+      return {before,afterCont,afterRender,transport};
+    }""")
+    chk('continue posts no visible user bubble',cg['afterCont']==cg['before'] and cg['afterRender']==cg['before'])
+    chk('continue uses hidden transport message',cg['transport'])
+
     pg.wait_for_timeout(350)
     pg.wait_for_timeout(350)
     # ---- MM: approval gate + stage retry helpers ----
