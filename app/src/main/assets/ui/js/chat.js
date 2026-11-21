@@ -2009,6 +2009,11 @@ O.chatAttach=list=>{
   });
   renderAtts();
 };
+// Vision attachments (already-shaped file parts with data URLs) from the file viewer / analysis.
+O.chatAttachVision=list=>{
+  (list||[]).slice(0,4).forEach(a=>{if(a&&a.url)atts.push(a)});
+  renderAtts();
+};
 function renderAtts(){attsEl.textContent='';attsEl.classList.toggle('hide',!atts.length);
   atts.forEach((a,i)=>{
     // tap the chip body → preview (013); long-press → OCR for images (014)
@@ -2082,6 +2087,16 @@ async function onSend(modelOverride){
     // OCR text (014) rides along as a hidden part so even text-only models can read the screenshot
     if(a._ocr)parts.push({type:'text',text:'[Текст с изображения '+a.filename+']:\n'+a._ocr.slice(0,8000),synthetic:true});
   });
+  // Screenshots the agent took mid-turn (phone shot) ride along THIS prompt as real attachments.
+  if(O.takeVisionQueue){
+    const vq=O.takeVisionQueue();
+    vq.forEach(v=>{parts.push(v);atts.push(v)});
+    if(vq.length)renderAtts();
+  }
+  // Blind model + image attachments: auto-convert to OCR + vision description (hidden text parts).
+  if(O.visionFallbackParts){
+    try{await O.visionFallbackParts(atts,parts)}catch(_){}
+  }
   if(O.mmActive()&&O.mmSend){clear();try{await O.mmSend(text,parts)}catch(e){O.toast(e.message||String(e),4000)}return}
   if(O.pushPromptHistory)O.pushPromptHistory(text);
   O.runHook('onSend',{text,parts,model:S.model,agent:S.agent});

@@ -47,6 +47,10 @@ O.on('phoneRequest',async d=>{
   }
   try{
     let r;
+    if(cmd==='see'){
+      // vision.js owns 'see' (screenshot + immediate analysis); it answers the CLI itself
+      return;
+    }
     if(['tap','longpress','swipe','text','type','screen','shot','screenshot','find','scroll','waittext'].includes(cmd)){
       r=await phoneAsync(cmd,args);
     }else{

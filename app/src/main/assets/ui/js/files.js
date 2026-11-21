@@ -129,7 +129,11 @@ O.openFile=async n=>{const rel=typeof n==='string'?n:n.path,abs=typeof n==='stri
   const s=O.sheet(O.basename(abs),body,{full:true,actions});
   const paint=()=>{body.textContent='';actions.textContent='';
     if(text==null){
-      if(img)body.append(h('div',{style:{padding:'12px',overflow:'auto'}},h('img',{src:img,style:{maxWidth:'100%'}})));
+      if(img){
+        // vision: analyze this image with the agent (attach for vision models, OCR+describe for blind ones)
+        actions.append(h('button',{class:'ibtn',title:O.tr('Analyze with the agent','Анализировать агентом'),onclick:()=>{s.close();O.analyzeImageFile&&O.analyzeImageFile(abs)}},O.icon('eye')));
+        body.append(h('div',{style:{padding:'12px',overflow:'auto'}},h('img',{src:img,style:{maxWidth:'100%'}})));
+      }
       else if(/\.(mp4|webm|mov)$/i.test(abs))body.append(h('video',{src:O.mediaUrl?O.mediaUrl(abs):'',controls:true,style:{width:'100%'}}));
       else if(/\.(mp3|wav|m4a|ogg|flac)$/i.test(abs))body.append(h('audio',{src:O.mediaUrl?O.mediaUrl(abs):'',controls:true,style:{width:'100%'}}));
       else body.append(h('div',{class:'mut',style:{padding:'20px'}},'Бинарный файл — не отображается'));

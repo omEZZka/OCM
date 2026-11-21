@@ -1202,6 +1202,43 @@ try:
       return {marked,fn:typeof OC.silentSession==='function'};
     }""")
     chk('side task session marked silent',sil['marked'] and sil['fn'])
+    # ---- 2.23 vision pipeline ----
+    vis=pg.evaluate("""async ()=>{
+      // queue a screenshot as a next-prompt attachment
+      __srv.files['/root/shot.png']='x';
+      window.__readDataResult={ok:true,mime:'image/png',data:'aGk='};
+      const q=await OCM.queueVision('/root/shot.png');
+      const qlen=OCM.visionQueue.length;
+      const taken=OCM.takeVisionQueue();
+      const after=OCM.visionQueue.length;
+      // modelSees / visionModel helpers exist
+      const sees=typeof OCM.modelSees==='boolean'||typeof OCM.modelSees()==='boolean';
+      // analyze button exists in the image viewer path
+      const fn=typeof OCM.analyzeImageFile==='function'&&typeof OCM.describeImage==='function'&&typeof OCM.imageToText==='function';
+      return {q,qlen,taken:taken.length,after,sees,fn};
+    }""")
+    chk('vision: screenshot queued for next prompt',vis['q'] and vis['qlen']==1)
+    chk('vision: queue taken once',vis['taken']==1 and vis['after']==0)
+    chk('vision: helpers exist',vis['sees'] and vis['fn'])
+    # phone see answers the CLI with a description (mock vision via side session)
+    see=pg.evaluate("""async ()=>{
+      window.__readDataResult={ok:true,mime:'image/png',data:'aGk='};
+      window.__phoneAnswers=[];
+      OCEvent('phoneRequest',{id:'see1',cmd:'see',args:['что на экране?']});
+      await new Promise(r=>setTimeout(r,4000));
+      const a=(window.__phoneAnswers||[]).find(x=>x.id==='see1');
+      return {answered:!!a,ok:a&&a.p&&a.p.ok};
+    }""")
+    chk('phone see answers CLI',see['answered'])
+    # blind-model fallback converts an image attachment into text parts
+    fb=pg.evaluate("""async ()=>{
+      const caps=OCM.modelSees();
+      const parts=[];
+      window.__ocrResult={ok:true,text:'ЭКРАННЫЙ ТЕКСТ'};
+      await OCM.visionFallbackParts([{mime:'image/png',filename:'s.png',url:'data:image/png;base64,aGk='}],parts);
+      return {caps,parts:parts.length,txt:parts.map(p=>p.text||'').join(' ')};
+    }""")
+    chk('blind fallback produces text or skips for vision model',fb['caps'] or ('ЭКРАННЫЙ ТЕКСТ' in fb['txt']))
     pg.wait_for_timeout(350)
     # ---- MM: approval gate + stage retry helpers ----
     mmx=pg.evaluate("""()=>{

@@ -67,7 +67,8 @@ object PhoneServer {
                 |#   phone text "<visible text>"      (tap by text)
                 |#   phone type "<text>"              (into focused field)
                 |#   phone screen                     (visible texts JSON)
-                |#   phone shot [path]                (screenshot)
+                |#   phone shot [path]                (screenshot; auto-attached to the agent's next prompt)
+                |#   phone see ["question"]           (screenshot + immediate vision analysis; returns description)
                 |#   phone back|home|recents|notifications|quicksettings
                 |#   phone torch on|off
                 |#   phone dnd off|priority|silent

@@ -1078,7 +1078,12 @@ You have the built-in skill to preview web projects directly inside OpenCode Mob
 - \`<button data-action="files">Открыть Файлы</button>\`
 - \`<button data-action="term">Терминал</button>\`
 
-## 5. Diff Statistics Reporting (MANDATORY)
+## 5. Seeing images (vision)
+- \`phone shot [path]\` takes a screenshot; it is AUTOMATICALLY attached to your next prompt — you will see the image itself.
+- \`phone see "optional question"\` takes a screenshot AND returns a vision-model description + OCR text immediately in the command output.
+- Image attachments from the user are visible to you if the model supports vision; otherwise they are auto-converted to OCR text + a vision-model description.
+
+## 6. Diff Statistics Reporting (MANDATORY)
 At the very end of EVERY response, you MUST output a separate line with line additions and deletions:
 +N -M
 (If no files were edited, output: +0 -0)`;
