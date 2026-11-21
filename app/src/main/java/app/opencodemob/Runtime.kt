@@ -78,6 +78,12 @@ object Runtime {
                     val dst = if (arg.startsWith("/")) hostPath(c, uid, arg) else File(f.parentFile, arg)
                     check(f.renameTo(dst)) { "Cannot rename" }
                 }
+                "move", "copy" -> {
+                    val dst = hostPath(c, uid, arg)
+                    if (op == "move") {
+                        if (!f.renameTo(dst)) { copyRecursive(f, dst); rmrf(f) }
+                    } else copyRecursive(f, dst)
+                }
                 "delete" -> rmrf(f)
                 else -> error("Unknown operation")
             }
@@ -215,6 +221,24 @@ object Runtime {
     }
 
     private fun quietDelete(f: File) { try { Files.deleteIfExists(f.toPath()) } catch (_: Exception) {} }
+
+    /** Recursive copy used by the file manager (copy / move across filesystems). */
+    fun copyRecursive(src: File, dst: File) {
+        if (Files.isSymbolicLink(src.toPath())) {
+            val target = Files.readSymbolicLink(src.toPath())
+            dst.parentFile?.mkdirs()
+            try { Files.deleteIfExists(dst.toPath()) } catch (_: Exception) {}
+            Files.createSymbolicLink(dst.toPath(), target)
+            return
+        }
+        if (src.isDirectory) {
+            dst.mkdirs()
+            src.listFiles()?.forEach { child -> copyRecursive(child, File(dst, child.name)) }
+        } else {
+            dst.parentFile?.mkdirs()
+            Files.copy(src.toPath(), dst.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
 
     fun rmrf(f: File) {
         val p = f.toPath()

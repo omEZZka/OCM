@@ -1291,6 +1291,72 @@ try:
     chk('other sessions keep global set',sjb['otherNull'])
     chk('session jailbreak sheet opens',sjb['sheet'])
     chk('session jailbreak clears to global',sjb['cleared'])
+    # ---- 2.24 file manager + viewer ----
+    pg.wait_for_timeout(350)
+    fm=pg.evaluate("""async ()=>{
+      OCM.S.dir='/root';
+      OCM.openFileManager('/root');
+      await new Promise(r=>setTimeout(r,250));
+      const sh=[...document.querySelectorAll('.sheet')].pop();
+      const rows=sh.querySelectorAll('.fm-row').length;
+      const crumbs=sh.querySelectorAll('.fm-crumb').length;
+      const roots=sh.querySelectorAll('.fm-root').length;
+      // enter folder + select mode + clipboard
+      const dirRow=[...sh.querySelectorAll('.fm-row.dir')][0];
+      dirRow&&dirRow.click();
+      await new Promise(r=>setTimeout(r,150));
+      const afterNav=!!sh.querySelector('.fm-crumb.cur');
+      // long-press simulation -> select mode (re-query: navigation re-renders the list)
+      const live=()=>[...document.querySelectorAll('.sheet')].pop();
+      const row=[...live().querySelectorAll('.fm-row')].find(r=>!r.classList.contains('dir'))||live().querySelector('.fm-row');
+      if(row)row.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+      await new Promise(r=>setTimeout(r,700));
+      const selMode=!!live().querySelector('.fm-footer:not(.hide)');
+      const check=!!live().querySelector('.fm-check');
+      // bulk delete via native fs
+      window.__fsOps=[];
+      const del=sh.querySelector('.fm-footer .ibtn[title]');
+      OCM.back();
+      return {rows,crumbs,roots,afterNav,selMode,check};
+    }""")
+    chk('fm: lists files and folders',fm['rows']>=3)
+    chk('fm: breadcrumbs + roots',fm['crumbs']>=1 and fm['roots']>=5)
+    chk('fm: navigate into folder',fm['afterNav'])
+    chk('fm: long-press selects',fm['selMode'] and fm['check'])
+    # copy/move native op support
+    mv=pg.evaluate("""()=>{
+      window.__fsOps=[];
+      const a=OCM.native.fs('copy','/root/a.txt','/root/b.txt');
+      const b=OCM.native.fs('move','/root/b.txt','/root/c.txt');
+      return {ok:a.ok&&b.ok,ops:(window.__fsOps||[]).map(o=>o.op)};
+    }""")
+    chk('fm: copy + move bridge ops',mv['ok'] and mv['ops']==['copy','move'])
+    # viewer opens images with analyze action
+    vw=pg.evaluate("""()=>{
+      OCM.S.dir='/root';
+      OCM.openViewer('/root/shot.png');
+      const sh=[...document.querySelectorAll('.sheet')].pop();
+      const hasImg=!!sh.querySelector('.viewer-img')||!!sh.querySelector('.viewer-stage');
+      const titles=[...sh.querySelectorAll('.ibtn')].map(b=>b.title);
+      const analyze=titles.some(t=>(t||'').includes('Анализировать')||(t||'').toLowerCase().includes('analyze'));
+      OCM.back();
+      return {hasImg,analyze};
+    }""")
+    chk('viewer: image stage opens',vw['hasImg'])
+    chk('viewer: analyze action present',vw['analyze'])
+    # viewer for text has edit + code view
+    vwt=pg.evaluate("""()=>{
+      __srv.files['/root/notes.txt']='привет мир\\nвторая строка';
+      OCM.openViewer('/root/notes.txt');
+      const sh=[...document.querySelectorAll('.sheet')].pop();
+      const code=!!sh.querySelector('.code-view')||!!sh.querySelector('textarea.editor');
+      const titles=[...sh.querySelectorAll('.ibtn')].map(b=>b.title);
+      const edit=titles.some(t=>(t||'')==='Редактировать');
+      OCM.back();
+      return {code,edit};
+    }""")
+    chk('viewer: text code view + edit',vwt['code'] and vwt['edit'])
+    pg.wait_for_timeout(350)
     pg.wait_for_timeout(350)
     # ---- MM: approval gate + stage retry helpers ----
     mmx=pg.evaluate("""()=>{

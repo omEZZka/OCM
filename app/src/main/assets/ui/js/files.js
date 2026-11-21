@@ -12,6 +12,7 @@ O.filesInit=root=>{
   root.append(
     h('div',{class:'pane-h'},
       O.icon('folder'),titleEl,
+      h('button',{class:'ibtn s',title:O.tr('File manager','Файловый менеджер'),onclick:()=>O.openFileManager&&O.openFileManager(S.dir)},O.icon('grid')),
       h('button',{class:'ibtn s',title:'Веб-предпросмотр',onclick:()=>O.openPreview&&O.openPreview(S.dir)},O.icon('globe')),
       h('button',{class:'ibtn s',title:'Новый файл',onclick:()=>newEntry('',false)},O.icon('plus')),
       h('button',{class:'ibtn s',title:'Обновить',onclick:()=>O.refreshFiles(true)},O.icon('refresh'))
@@ -108,7 +109,9 @@ function draw(){
 function nodeActions(n){const isDir=n.type==='directory',abs=absOf(n);
   const isHtml=!isDir&&(n.name.endsWith('.html')||n.name.endsWith('.htm'));
   O.actions(n.name,[
+    {label:O.tr('Open','Открыть'),icon:'eye',fn:()=>isDir?false:(O.openViewer?O.openViewer(abs):O.openFile(abs))},
     {label:'Спросить агента об этом',icon:'at',fn:()=>O.addMention(abs,isDir)},
+    {label:O.tr('Copy / Move','Копировать / переместить'),icon:'copy',fn:()=>O.openFileManager&&O.openFileManager(S.dir)},
     (isDir||isHtml)?{label:'Веб-предпросмотр (внутри)',icon:'globe',fn:()=>O.openPreview(abs)}:null,
     isDir?{label:'Новый файл здесь',icon:'plus',fn:()=>newEntry(n.path,false)}:null,
     isDir?{label:'Новая папка здесь',icon:'folder',fn:()=>newEntry(n.path,true)}:null,
@@ -121,7 +124,13 @@ async function newEntry(dirRel,isDir){const name=await O.ask(isDir?'Новая �
   if(!r.ok)return O.toast(r.err||'Не удалось');if(dirRel)exp.add(dirRel);O.refreshFiles(true)}
 
 // ---- viewer / editor ----
+// openFile: keep the editor for text, but images/video/audio get the proper VIEWER (zoom, pinch,
+// analyze, share). Old behaviour showed a bare <img> with no actions.
 O.openFile=async n=>{const rel=typeof n==='string'?n:n.path,abs=typeof n==='string'?(n.startsWith('/')?n:S.dir+'/'+n):absOf(n);
+  if(O.openViewer&&(/\.(png|jpe?g|webp|gif|bmp|svg|heic|mp4|webm|mov|mkv|avi|mp3|wav|m4a|ogg|flac|opus)$/i.test(abs))){
+    if(O.workspaceRememberFile)O.workspaceRememberFile(abs);
+    O.openViewer(abs);return;
+  }
   if(O.workspaceRememberFile)O.workspaceRememberFile(abs);
   const body=h('div',{style:{display:'flex',flexDirection:'column',height:'100%',margin:'-10px -12px -16px'}},h('div',{class:'mut',style:{padding:'20px'}},'Загрузка...'));
   let text=null,editing=false,img=null;
