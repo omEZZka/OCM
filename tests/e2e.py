@@ -755,8 +755,10 @@ try:
     chk('walking is smooth (no jitter)',pace['reversals']<=2)
     idle=pg.evaluate("""async ()=>{
       OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
-      OCM.mascotTick&&OCM.mascotTick(OCM.S.sid);
+      OCM.mascotSetRoam&&OCM.mascotSetRoam(true);
+      OCM.mascotWalkNow&&OCM.mascotWalkNow();   // deterministic: start a stroll right now
       const el=document.querySelector('.mascot');
+      await new Promise(r=>setTimeout(r,300));
       const xs=[];
       for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,150));xs.push(parseFloat(el.style.left)||0)}
       const uniq=new Set(xs.map(v=>Math.round(v)));
@@ -779,9 +781,9 @@ try:
       if(!OCM.S.sid){try{await OCM.newSession()}catch(e){}}
       OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
       OCM.mascotSetRoam&&OCM.mascotSetRoam(true);
+      OCM.mascotWalkNow&&OCM.mascotWalkNow();   // deterministic start
       const el=document.querySelector('.mascot');
-      // wait until the pet actually starts a stroll (the AI may be resting)
-      for(let w=0;w<60;w++){const a=OCM.mascotAI&&OCM.mascotAI();if(a&&a.walking)break;await new Promise(r=>setTimeout(r,150))}
+      await new Promise(r=>setTimeout(r,300));
       const log=[];
       for(let i=0;i<50;i++){await new Promise(r=>setTimeout(r,160));log.push({x:Math.round(parseFloat(el.style.left)||0),flip:el.classList.contains('flip')})}
       let bad=0,n=0;
@@ -792,6 +794,55 @@ try:
       return {n,bad};
     }""")
     chk('mascot faces the way it walks',face['n']>0 and face['bad']==0)
+    # ---- 2.28 mascot mind ----
+    mind=pg.evaluate("""()=>{
+      if(!OCM.S.sid)return {skip:true};
+      const a=OCM.mascotAI&&OCM.mascotAI();
+      const mm=OCM.mascotMemory();
+      OCM.petMascot();OCM.giveMascotTreat();
+      const after=OCM.mascotMemory();
+      return {ai:!!a,hasDecision:!!(a&&a.decision!==undefined),circadian:a&&a.circadian,
+        affGrew:(after.affection||0)>(mm.affection||0),fed:after.fed>0};
+    }""")
+    if not mind.get('skip'):
+        chk('mascot exposes its decision (transparent AI)',mind['hasDecision'])
+        chk('mascot memory: petting/feeding raises affection',mind['affGrew'] and mind['fed'])
+        chk('mascot has circadian mood',mind['circadian'] in ('sleepy','bright','lazy','awake'))
+    talk=pg.evaluate("""async ()=>{
+      OCM.mascotNap&&OCM.mascotNap();
+      const el=document.querySelector('.mascot');
+      const napped=el.dataset.nap==='1';
+      el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:40,clientY:300,pointerId:5,button:0}));
+      el.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:40,clientY:300,pointerId:5}));
+      await new Promise(r=>setTimeout(r,200));
+      return {napped,wokeUp:!el.dataset.nap};
+    }""")
+    chk('mascot can nap and wake on tap',talk['napped'] and talk['wokeUp'])
+    prop=pg.evaluate("""()=>{
+      const el=document.querySelector('.mascot');
+      // pretend a bash tool is running (stop the poller so it cannot reset the status)
+      const sid=OCM.S.sid;
+      OCM.stopLiveSync&&OCM.stopLiveSync();
+      OCM.S.status[sid]={type:'busy'};
+      OCM.upsertMsg({id:'mtool2',sessionID:sid,role:'assistant',time:{created:Date.now()}});
+      OCM.upsertPart({id:'ptool2',sessionID:sid,messageID:'mtool2',type:'tool',tool:'bash',state:{status:'running',input:{command:'ls'}}});
+      OCM.S.status[sid]={type:'busy'};
+      OCM.mascotTick&&OCM.mascotTick(sid);
+      return new Promise(res=>{
+        setTimeout(()=>{
+          const socket=el.querySelector('.mascot-prop');
+          const shown=!!socket&&socket.children.length>0&&socket.style.display!=='none';
+          OCM.S.status[sid]={type:'idle'};OCM.bus.emit('status',sid);
+          res({hasProp:shown});
+        },1400);
+      });
+    }""")
+    chk('mascot holds the running tool',prop['hasProp'])
+    mindcard=pg.evaluate("""()=>{OCM.openMascotMind();const sh=[...document.querySelectorAll('.sheet')].pop();
+      const t=sh?sh.textContent:'';const has=t.includes('Текущее решение')&&t.includes('Симпатия');
+      OCM.back();return {has}}""")
+    chk('mascot mind card opens',mindcard['has'])
+
 
     roam=pg.evaluate("""()=>{
       OCM.mascotSetRoam(false);

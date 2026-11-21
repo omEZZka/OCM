@@ -680,6 +680,13 @@ function tick(sid){
   const st=deriveFor(S.sid);
   O.setMascotStateFor(S.sid,st);
   setState(st);
+  // keep the "tool in paws" badge in sync with the running step
+  try{
+    const busyNow=!!(S.status[S.sid]&&S.status[S.sid].type!=='idle');
+    const w=busyNow?workProp():null;
+    setProp(w&&w.prop);
+    if(w)lastDecision=w.label;
+  }catch(_){}
 }
 O.mascotTick=tick;
 
@@ -695,15 +702,17 @@ const GRAV=1250, BOUNCE=0.18, FRICTION=0.9, MAXV=1500, WALK=52;
 
 function physBounds(){
   const pane=el&&el.parentNode;
-  if(!pane)return{x0:4,x1:300,ground:300};
+  if(!pane)return{x0:4,x1:300,ground:300,ceil:4};
   const size=el.offsetWidth||44;
   const w=pane.clientWidth||300,h=pane.clientHeight||400;
   const kb=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--kb'))||0;
   const composerEl=document.getElementById('composer');
   const ch=composerEl?composerEl.offsetHeight:84;
   const gap=8;
-  const ground=Math.max(4,Math.min(h-size-4, h-ch-kb-gap-size));
-  return{x0:4,x1:Math.max(4,w-size-4),ground};
+  // 20. free roaming: it may walk the whole chat area; the ledge is only its *default* ground
+  const free=S.opts.mascotFree!==false;
+  const ledge=Math.max(4,Math.min(h-size-4, h-ch-kb-gap-size));
+  return{x0:4,x1:Math.max(4,w-size-4),ground:ledge,ceil:free?4:ledge};
 }
 
 function setPos(){
@@ -748,7 +757,11 @@ function step(){
   }
   if(PHYS.x<b.x0){PHYS.x=b.x0;PHYS.vx=0;PHYS.dir=-1/1*0+1;face(1)}
   if(PHYS.x>b.x1){PHYS.x=b.x1;PHYS.vx=0;face(-1)}
-  if(PHYS.y<4){PHYS.y=4;PHYS.vy=Math.abs(PHYS.vy)*0.3}
+  if(PHYS.y<b.ceil){PHYS.y=b.ceil;PHYS.vy=Math.abs(PHYS.vy)*0.3}
+  // 12. perch next to the newest answer: glide to just under the last assistant card
+  if(PHYS.perch!=null&&!PHYS.held&&PHYS.vy===0){
+    if(Math.abs(PHYS.y-PHYS.perch)>1)PHYS.y+=(PHYS.perch-PHYS.y)*0.18;
+  }
 
   // ---- walking AI: pick a target on the ledge, face it, stroll there, then think ----
   if(PHYS.walking&&!PHYS.held&&PHYS.vy===0){
@@ -809,7 +822,145 @@ function personality(sid){
   let h=0;for(let i=0;i<sid.length;i++)h=(h*31+sid.charCodeAt(i))|0;
   return Math.abs(h%100)/100;
 }
-let aiTimer=null,lastEventAt=0,eventKinds={};
+// ===========================================================================
+// MASCOT MIND — a small but real decision loop.
+//   • memory   : affection, fed/played counters, last strolled time (per device, per pet)
+//   • context  : what the agent is doing, tool in use, errors, idle time, time of day
+//   • decisions: walk / rest / work / approach the last answer / point at a hint
+//   • visible  : every decision has a reason, shown in the "what is it doing" card
+// ===========================================================================
+const MEM_KEY=k=>'mascot.mem.'+k;
+function mem(key){
+  const k=MEM_KEY(key||S.opts.mascot||'deepseek');
+  return Object.assign({affection:0,fed:0,played:0,strokeAt:0,seenAt:0,trips:0},O.store.get(k,{}));
+}
+function memSet(key,patch){
+  const k=MEM_KEY(key||S.opts.mascot||'deepseek');
+  const m=Object.assign(mem(key),patch);
+  O.store.set(k,m);return m;
+}
+O.mascotMemory=()=>mem();
+O.mascotAffection=()=>mem().affection;
+O.giveMascotTreat=()=>{const m=memSet(null,{fed:mem().fed+1,affection:Math.min(100,mem().affection+6)});return m};
+O.petMascot=()=>{const m=memSet(null,{strokeAt:Date.now(),affection:Math.min(100,mem().affection+2)});return m};
+
+// --- circadian: sleepy at night, brisk in the morning, lazy after lunch ---
+function hour(){return new Date().getHours()}
+function circadian(){
+  const hh=hour();
+  if(hh>=23||hh<6)return{mood:'sleepy',speed:0.35,walk:0.12};
+  if(hh>=6&&hh<10)return{mood:'bright',speed:1.25,walk:0.9};
+  if(hh>=13&&hh<16)return{mood:'lazy',speed:0.7,walk:0.35};
+  return{mood:'awake',speed:1,walk:0.7};
+}
+
+// --- what accessory/pose does the current work deserve? ---
+function workProp(){
+  const sid=S.sid||'local';
+  const msgs=O.msgs(sid).list;
+  for(let i=msgs.length-1;i>=0&&i>=msgs.length-40;i--){
+    const m=msgs[i];
+    for(let j=(m.parts||[]).length-1;j>=0;j--){
+      const p=m.parts[j];
+      if(p.type!=='tool')continue;
+      const st=p.state||{};
+      if(st.status!=='running'&&st.status!=='pending')continue;
+      if(p.tool==='bash')return{prop:'terminal',label:O.tr('runs a command','выполняет команду')};
+      if(p.tool==='read'||p.tool==='list'||p.tool==='glob'||p.tool==='grep')return{prop:'search',label:O.tr('searches the code','ищет в коде')};
+      if(p.tool==='edit'||p.tool==='write'||p.tool==='patch')return{prop:'edit',label:O.tr('edits files','правит файлы')};
+      if(p.tool==='webfetch'||p.tool==='websearch')return{prop:'globe',label:O.tr('browses the web','смотрит в сеть')};
+      if(p.tool==='task')return{prop:'bot',label:O.tr('delegates to a subagent','зовёт субагента')};
+    }
+  }
+  if(O.planMode&&O.planMode())return{prop:'list',label:O.tr('follows the plan','идёт по плану')};
+  if(O.dryRun&&O.dryRun())return{prop:'shield',label:O.tr('is in dry-run','в режиме dry-run')};
+  const jb=O.sessionJbIds?O.sessionJbIds(sid):null;
+  if(jb&&jb.size)return{prop:'shield',label:O.tr('has a jailbreak','с джейлбрейком')};
+  return null;
+}
+// recent error the pet could point out
+function lastError(){
+  const sid=S.sid||'local';
+  const msgs=O.msgs(sid).list;
+  for(let i=msgs.length-1;i>=0&&i>=msgs.length-8;i--){
+    const m=msgs[i];
+    if(m.info&&m.info.error&&m.info.error.name!=='MessageAbortedError')
+      return (m.info.error.data&&m.info.error.data.message)||m.info.error.name||'';
+    for(const p of m.parts||[]){
+      if(p.type==='tool'&&p.state&&p.state.status==='error')
+        return String(p.state.error||p.state.output||'').slice(0,120);
+    }
+  }
+  return '';
+}
+
+// --- contextual lines: the pet says something useful, not noise ---
+const PHRASES={
+  welcome:[
+    ['Привет! Я рядом, если что.','Hi! I am right here if you need me.'],
+    ['Погнали? Я слежу за задачей.','Ready when you are — I am watching the task.']
+  ],
+  thinking:[
+    ['Думаю вместе с агентом…','Thinking along with the agent…'],
+    ['Секунду, он собирает контекст','One moment, it is gathering context']
+  ],
+  writing:[
+    ['Пишет — не мешаю','Writing — I will stay quiet'],
+    ['Код пошёл, я рядом','Code is flowing, I am here']
+  ],
+  waiting:[
+    ['Он ждёт твоего ответа 👀','It is waiting for your answer'],
+    ['Тут нужно твоё решение','This one needs your call']
+  ],
+  error:[
+    ['Упс, что-то сломалось — глянь','Oops, something broke — take a look'],
+    ['Ошибка. Хочешь, разберём?','An error. Want to dig in?']
+  ],
+  sleepy:[
+    ['Уже поздно… я подремлю','It is late… I will nap'],
+    ['Глаза слипаются, но я тут','My eyes are closing, but I am here']
+  ],
+  hungry:[
+    ['Покормишь? Я проголодался','Could you feed me? I am hungry'],
+    ['Я бы съел что-нибудь…','I could eat something…']
+  ],
+  happy:[
+    ['Ты лучший!','You are the best!'],
+    ['Мне нравится работать с тобой','I like working with you']
+  ],
+  hint_continue:[
+    ['Ответ оборвался — нажми «Продолжить»','The answer was cut — press Continue'],
+    ['Тут можно продолжить генерацию','You can continue generation here']
+  ],
+  hint_compact:[
+    ['Контекст почти полон — стоит сжать','Context is nearly full — compact it'],
+    ['Скоро не хватит места, сожми сессию','Room is running out, compact the session']
+  ]
+};
+function say(kind){
+  const set=PHRASES[kind];if(!set)return;
+  const pair=set[Math.floor(Math.random()*set.length)];
+  speak(O.tr(pair[1],pair[0]),kind);
+}
+// speech bubble that lasts a few seconds (separate from the permanent "working" bubble)
+let sayTimer=null;
+function speak(text,kind){
+  if(!el||!O.chatAnim||O.chatAnim()===false)return;
+  if(!bubbleEl){bubbleEl=h('div',{class:'mascot-bubble say'});el.append(bubbleEl)}
+  bubbleEl._kind='say';
+  bubbleEl.classList.add('say');
+  bubbleEl.innerHTML='<span class="mascot-say">'+O.esc(text)+'</span>';
+  clearTimeout(sayTimer);
+  sayTimer=setTimeout(()=>{
+    if(!bubbleEl)return;
+    const st=state;
+    bubbleEl.classList.remove('say');
+    if(BUBBLE[st]){bubbleEl._kind=st;bubbleEl.innerHTML=BUBBLE[st]}
+    else{bubbleEl.remove();bubbleEl=null}
+  },4200);
+}
+
+let aiTimer=null,lastEventAt=0,eventKinds={},lastDecision='',idleSince=Date.now(),lastHintAt=0;
 function startAI(){
   stopAI();
   const p=personality(S.sid);           // per-session temperament
@@ -818,46 +969,202 @@ function startAI(){
     if(!el||!el.isConnected)return;
     if(S.opts.mascotRoam===false){stopWalking();return}
     if(PHYS.held||drag)return;
+    if(napUntil&&Date.now()<napUntil){stopWalking();lastDecision=O.tr('sleeps','спит');return}
     const sid=S.sid||'local';
     const st=S.status[sid];
     const busy=!!st&&st.type!=='idle';
     const mood=O.mascotStateFor(sid);
+    const circ=circadian();
+    // the pet holds the running tool even if the status briefly flaps to idle
+    const runningProp=workProp();
+    if(runningProp)setProp(runningProp.prop);
+    const m=mem();
     PHYS.busy=busy;
-    // Busy → the pet stays put and works (coding bubble). Free time → it wanders.
-    if(busy){
+    if(!busy)idleSince=idleSince||Date.now();else idleSince=0;
+
+    // ---------- 1. WORK MODE: stand and hold the right tool ----------
+    if(busy||runningProp){
       if(PHYS.walking)stopWalking();
+      setProp(runningProp&&runningProp.prop);
+      if(runningProp)lastDecision=runningProp.label;
+      // 14. costumes by mode are handled by the prop; the agent's output brings the pet closer
       return;
     }
-    if(mood==='waiting'){if(PHYS.walking)stopWalking();return}
-    // Idle: stroll most of the time, with a short pause between trips.
-    const pause=pausedUntil();
+    setProp(null);
+
+    // ---------- 2. HINTS: point at the non-obvious next action ----------
     const now=Date.now();
-    if(now<pause)return;
-    if(!PHYS.walking&&now-lastPlan>900){
-      lastPlan=now;
-      // curiosity after a new message; personality adds eagerness
-      const eager=0.55+p*0.35+(Date.now()-lastEventAt<8000?0.25:0);
-      if(Math.random()<eager)startWalking();
+    if(now-lastHintAt>45000){
+      if(O.canContinue&&O.canContinue(sid)){
+        lastHintAt=now;lastDecision=O.tr('points at Continue','подсказывает «Продолжить»');
+        say('hint_continue');return;
+      }
+      const u=O.contextUsage?O.contextUsage(sid):null;
+      if(u&&u.pct!=null&&u.pct>=80){
+        lastHintAt=now;lastDecision=O.tr('warns about context','предупреждает о контексте');
+        say('hint_compact');return;
+      }
     }
+
+    // ---------- 3. ERRORS: react and look at the message ----------
+    const err=lastError();
+    if(err&&now-lastEventAt<45000&&eventKinds.error){
+      eventKinds.error=0;
+      lastDecision=O.tr('noticed an error','заметил ошибку');
+      say('error');
+      el.classList.remove('shake');void el.offsetWidth;el.classList.add('shake');
+      return;
+    }
+
+    // ---------- 4. WAITING: sit still and watch ----------
+    if(mood==='waiting'){if(PHYS.walking)stopWalking();lastDecision=O.tr('waits with you','ждёт вместе с тобой');return}
+
+    // ---------- 5. BOREDOM: long idle → wander more, approach the last answer ----------
+    const boredFor=idleSince?now-idleSince:0;
+    if(boredFor>5*60*1000&&Math.random()<0.25){
+      lastDecision=O.tr('is bored and roams','скучает и гуляет');
+      if(!PHYS.walking)startWalking();
+      return;
+    }
+    // sits next to the newest answer after a reply arrives
+    if(lastEventAt&&now-lastEventAt<12000&&Math.random()<0.4){
+      lastDecision=O.tr('checks the new answer','подходит к свежему ответу');
+      if(!PHYS.walking)startWalking();
+      return;
+    }
+
+    // ---------- 6. FREE TIME: stroll depends on temperament, clock and affection ----------
+    const pause=pausedUntil();
+    if(now<pause)return;
+    if(!PHYS.walking&&now-lastPlan>1200){
+      lastPlan=now;
+      let eager=(0.62+p*0.3)*circ.walk;
+      eager+=Math.min(0.25,m.affection/400);          // loved pets move more confidently
+      if(circ.mood==='sleepy')eager*=0.35;
+      if(Math.random()<eager){
+        memSet(null,{trips:m.trips+1});
+        lastDecision=O.tr('takes a stroll','идёт гулять');
+        startWalking();
+      }else lastDecision=O.tr('rests','отдыхает');
+    }
+    // hungry pet asks for food occasionally
+    if(m.fed===0&&now-m.seenAt>30*60*1000&&Math.random()<0.02){say('hungry')}
   };
   tickAI();
-  aiTimer=setInterval(tickAI,700);
-  // small introspection hook (used by tests and the "what is it doing" tooltip)
-  O.mascotAI=()=>({mood:O.mascotStateFor(S.sid||'local'),
+  aiTimer=setInterval(tickAI,900);
+  O.mascotAI=()=>({
+    mood:O.mascotStateFor(S.sid||'local'),
     busy:!!(S.status[S.sid||'local']&&S.status[S.sid||'local'].type!=='idle'),
-    personality:p,walking:PHYS.walking,target:PHYS.target,x:Math.round(PHYS.x)});
+    personality:p,walking:PHYS.walking,target:PHYS.target,x:Math.round(PHYS.x),
+    decision:lastDecision,circadian:circadian().mood,affection:mem().affection,
+    prop:PHYS.prop||null,events:{...eventKinds}
+  });
 }
 function pausedUntil(){return PHYS.pauseUntil||0}
 function stopAI(){if(aiTimer){clearInterval(aiTimer);aiTimer=null}}
-// Event curiosity: the mascot notices new answers/errors and reacts with a look or a hop.
+// Event curiosity: the mascot notices new answers/errors and reacts.
 function noticeMascot(kind){
   lastEventAt=Date.now();
   eventKinds[kind]=(eventKinds[kind]||0)+1;
   if(!el||PHYS.held)return;
+  if(kind==='answer'){perchAtLastAnswer();if(Math.random()<0.5)say('happy')}
   if(kind==='error'&&O.chatAnim&&O.chatAnim()){
     el.classList.remove('landed');void el.offsetWidth;el.classList.add('landed');
   }
 }
+// 12. the pet sits next to the newest answer for a while
+function perchAtLastAnswer(){
+  if(S.opts.mascotFree===false||!el)return;
+  try{
+    const last=O.lastAssistant&&O.lastAssistant(S.sid);
+    if(!last)return;
+    const node=document.querySelector('.msg.assistant[data-id="'+last.msg.info.id+'"]');
+    if(!node)return;
+    const pane=el.parentNode;if(!pane)return;
+    const pr=pane.getBoundingClientRect(),nr=node.getBoundingClientRect();
+    const size=el.offsetWidth||44;
+    const y=Math.max(4,Math.min(pane.clientHeight-size-4,nr.bottom-pr.top-size-6));
+    PHYS.perch=y;
+    setTimeout(()=>{PHYS.perch=null;schedulePhys()},9000);
+    schedulePhys();
+  }catch(_){}
+}
+O.mascotPerch=perchAtLastAnswer;
+// accessory in the pet's paws (a small SVG badge beside the sprite)
+function setProp(name){
+  if(!el)return;
+  if(PHYS.prop===name)return;
+  PHYS.prop=name;
+  let p=el.querySelector('.mascot-prop');
+  if(!p){p=h('div',{class:'mascot-prop'});el.append(p)}
+  p.textContent='';
+  if(name){p.append(O.icon(name));p.style.display='';}else p.style.display='none';
+}
+
+// Gaze: tilt/shift the sprite slightly toward the point of interest (no sprite redraw needed).
+let gazeX=0;
+function gazeAt(px,py){
+  if(!el||!el.isConnected)return;
+  const r=el.getBoundingClientRect();
+  const cx=r.left+r.width/2,cy=r.top+r.height/2;
+  const dx=Math.max(-1,Math.min(1,(px-cx)/Math.max(120,window.innerWidth*0.5)));
+  const dy=Math.max(-1,Math.min(1,(py-cy)/Math.max(120,window.innerHeight*0.5)));
+  gazeX=dx;
+  const sp=el.querySelector('.mascot-sprite');
+  if(!sp)return;
+  sp.style.transform='translate('+(dx*2.2).toFixed(2)+'px,'+(dy*1.2).toFixed(2)+'px) rotate('+(dx*4).toFixed(1)+'deg)';
+  // Gaze may mirror the pet ONLY while it stands still; during a stroll the walking
+  // direction owns the facing, otherwise it would turn backwards mid-step.
+  if(!PHYS.walking){
+    const wantFlip=(dx>0.25)?(BASE_FACING!==1):(dx<-0.25?(BASE_FACING!==-1):null);
+    if(wantFlip!==null)el.classList.toggle('flip',wantFlip);
+  }
+}
+function jumpMascot(){
+  if(!el)return;
+  PHYS.vy=-520;PHYS.held=false;
+  el.classList.remove('landed');void el.offsetWidth;el.classList.add('landed');
+  if(S.opts.mascotSound!==false)sound('hop');
+  memSet(null,{played:mem().played+1,affection:Math.min(100,mem().affection+1)});
+  speak(O.tr('Wheee!','Урааа!'),'happy');
+  schedulePhys();
+}
+let napUntil=0;
+function napMascot(){
+  if(!el)return;
+  napUntil=Date.now()+30000;
+  stopWalking();
+  el.dataset.nap='1';
+  speak(O.tr('Zzz… wake me with a tap','Ззз… разбуди тапом'),'sleepy');
+  setTimeout(()=>{delete el.dataset.nap},30000);
+}
+// tiny synthesized sounds (WebAudio, no assets)
+let audioCtx=null;
+function sound(kind){
+  if(S.opts.mascotSound===false)return;
+  try{
+    audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+    const c=audioCtx,now=c.currentTime;
+    const notes=kind==='hop'?[[660,0,.09],[880,.07,.1]]:kind==='purr'?[[180,0,.18],[150,.12,.16]]:[[720,0,.07]];
+    notes.forEach(([f,d,dur])=>{
+      const o=c.createOscillator(),g=c.createGain();
+      o.type='sine';o.frequency.setValueAtTime(f,now+d);
+      g.gain.setValueAtTime(0.0001,now+d);
+      g.gain.exponentialRampToValueAtTime(0.05,now+d+0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001,now+d+dur);
+      o.connect(g);g.connect(c.destination);o.start(now+d);o.stop(now+d+dur+.03);
+    });
+  }catch(_){}
+}
+O.mascotJump=jumpMascot;
+// Force a stroll now (used by the menu "take a walk" and by tests). Clears naps and rests.
+O.mascotWalkNow=()=>{
+  napUntil=0;if(el)delete el.dataset.nap;
+  PHYS.pauseUntil=0;PHYS.nextThink=0;
+  startWalking();chooseTarget(physBounds(),false);
+  return O.mascotAI?O.mascotAI():null;
+};
+O.mascotNap=napMascot;
 
 O.mascotInit=parent=>{
   el=h('div',{class:'mascot',title:O.tr('Drag me · tap for options','Перетащи · тап — настройки')});
@@ -897,12 +1204,42 @@ O.mascotInit=parent=>{
     }
   }catch(_){}
   setTimeout(()=>{const b=physBounds();PHYS.y=document.getElementById('composer')?b.ground:PHYS.y;setPos()},300);
+  // ---- 01 gaze: the body leans toward the pointer / the input field while typing ----
+  let lastPointerAt=0;
+  const trackPointer=e=>{
+    if(!O.chatAnim||O.chatAnim()===false)return;
+    if(!el||!el.isConnected||PHYS.held)return;
+    const t=e.touches?e.touches[0]:e;
+    if(!t)return;
+    lastPointerAt=Date.now();
+    gazeAt(t.clientX,t.clientY);
+  };
+  document.addEventListener('pointermove',trackPointer,{passive:true});
+  document.addEventListener('touchmove',trackPointer,{passive:true});
+  // while typing it looks at the text area on purpose
+  const lookAtComposer=()=>{
+    const ta=document.querySelector('#composer textarea');
+    if(!ta)return;
+    const r=ta.getBoundingClientRect();
+    gazeAt(r.left+r.width/2,r.top+r.height/2);
+  };
+  // ---- 02 double tap: jump / triple: sleep ----
+  let taps=0,tapTimer=null;
+  const onTapBurst=()=>{
+    taps++;
+    clearTimeout(tapTimer);
+    tapTimer=setTimeout(()=>{taps=0},420);
+    if(taps===2){jumpMascot();taps=0}
+    else if(taps>=3){napMascot();taps=0}
+  };
+
   const host=()=>parent.getBoundingClientRect();
   const onDown=e=>{
     if(e.button!=null&&e.button!==0)return;
     const t=e.touches?e.touches[0]:e;
     const r=el.getBoundingClientRect();
     drag={ox:t.clientX-r.left,oy:t.clientY-r.top,moved:false,sx:t.clientX,sy:t.clientY,lx:t.clientX,ly:t.clientY,lt:Date.now(),vx:0,vy:0};
+    if(el.dataset.nap){delete el.dataset.nap;napUntil=0;speak(O.tr('I am awake!','Я проснулся!'),'happy')}
     PHYS.held=true;stopAI();stopWalking();PHYS.vx=0;PHYS.vy=0;
     try{el.setPointerCapture&&el.setPointerCapture(e.pointerId)}catch(_){}
   };
@@ -936,7 +1273,9 @@ O.mascotInit=parent=>{
       setTimeout(()=>{if(!PHYS.held&&PHYS.vy===0)O.store.set('mascotPos',{x:PHYS.x,y:PHYS.y})},900);
       if(O.native.haptic)O.native.haptic('tick');
       if(S.sid)startAI();
-    }else mascotMenu();
+    }
+    else if(O.store.get('mascotDblTap',true)) onTapBurst();
+    else mascotMenu();
   };
   el.addEventListener('pointerdown',onDown);
   el.addEventListener('pointermove',onMove,{passive:false});
@@ -956,6 +1295,10 @@ O.mascotInit=parent=>{
   // walk back and forth over the input while the agent is generating
   bus.on('mascotState',(sid,st)=>{if(!el||sid!==S.sid)return;startAI()});
   bus.on('status',()=>{if(el)startAI()});
+  // feed the mind with real events: answers, errors, tool activity
+  bus.on('msg',(sid,m)=>{if(sid!==S.sid||!m||!m.info)return;if(m.info.role==='assistant'&&(!m.info.time||!m.info.time.completed))noticeMascot('answer')});
+  bus.on('part',(sid,m,p)=>{if(sid!==S.sid||!p)return;if(p.type==='tool'&&p.state&&p.state.status==='error')noticeMascot('error')});
+  bus.on('serror',()=>noticeMascot('error'));
   bus.on('open',()=>{tick();const p=O.store.get('mascotPos',null);if(p){el.style.left=p.x+'px';el.style.top=p.y+'px'}});
   O.mascotBubble=st=>paintBubble(st);
   O.mascotSetRoam=on=>{S.opts.mascotRoam=!!on;O.saveOpts();if(on)startAI();else{stopAI();stopWalking()}};
@@ -970,7 +1313,12 @@ O.mascotInit=parent=>{
   startAI();
 };
 function mascotMenu(){
+  const ai=O.mascotAI?O.mascotAI():{};
   O.actions(O.mascotName(S.opts.mascot||'deepseek'),[
+    {label:O.tr('What is it doing?','Что он делает?'),sub:(ai.decision||'—')+(ai.circadian?' · '+ai.circadian:''),icon:'eye',fn:()=>O.openMascotMind()},
+    {label:O.tr('Take a walk','Пройтись'),icon:'drag',fn:()=>{O.mascotWalkNow();O.toast(O.tr('Off it goes','Пошёл гулять'),1200)}},
+    {label:O.tr('Pet it','Погладить'),icon:'thumbUp',fn:()=>{O.petMascot();speak(O.tr('Purr…','Мурр…'),'happy');sound('purr')}},
+    {label:O.tr('Give a treat','Дать вкусняшку'),icon:'star',fn:()=>{O.giveMascotTreat();speak(O.tr('Yum!','Ням!'),'happy');sound('hop')}},
     {label:O.tr('Change mascot','Сменить маскота'),icon:'palette',fn:()=>O.openMascotSettings()},
     {label:O.tr('Size','Размер'),sub:(S.opts.mascotSize||44)+'px',icon:'sliders',fn:()=>O.openMascotSettings()},
     {label:S.opts.mascotOn?O.tr('Hide mascot','Скрыть маскота'):O.tr('Show mascot','Показать маскота'),icon:'eye',fn:()=>{S.opts.mascotOn=!S.opts.mascotOn;O.saveOpts();O.mascotRefresh&&O.mascotRefresh()}},
@@ -978,6 +1326,38 @@ function mascotMenu(){
     {label:O.tr('Reset position','Сбросить позицию'),icon:'undo',fn:()=>{O.store.remove('mascotPos');if(el){const b=physBounds();PHYS.x=b.x0+8;PHYS.y=b.ground;setPos()}}}
   ]);
 }
+// ---- 18. transparent AI: show the current decision and the memory that shaped it ----
+O.openMascotMind=()=>{
+  const ai=O.mascotAI?O.mascotAI():{};
+  const m=mem();
+  const c=circadian();
+  const body=h('div');
+  const row=(icon,label,val)=>h('div',{class:'settings-row'},
+    h('div',{class:'settings-row-icon'},O.icon(icon)),
+    h('div',{class:'settings-row-text'},h('b',null,label),h('span',{style:{whiteSpace:'normal'}},String(val))));
+  const pct=Math.min(100,Math.round((m.affection||0)));
+  body.append(
+    h('div',{class:'settings-card'},
+      row('bot',O.tr('Current decision','Текущее решение'),ai.decision||O.tr('idle','простой')),
+      row('zap',O.tr('Mood','Настроение'),ai.mood||'idle'),
+      row('refresh',O.tr('State of the agent','Состояние агента'),ai.busy?O.tr('working','работает'):O.tr('free','свободен')),
+      row('bulb',O.tr('Time of day','Время суток'),(ai.circadian||c.mood)),
+      row('drag',O.tr('Walking','Идёт гулять'),ai.walking?O.tr('yes','да'):O.tr('no','нет')),
+      row('shield',O.tr('Holds in paws','Держит в лапах'),ai.prop||O.tr('nothing','ничего'))),
+    h('div',{class:'settings-card'},
+      row('thumbUp',O.tr('Affection','Симпатия'),pct+'/100'),
+      row('star',O.tr('Treats eaten','Съедено вкусняшек'),m.fed||0),
+      row('play',O.tr('Games played','Игр сыграно'),m.played||0),
+      row('branch',O.tr('Strolls','Прогулок'),m.trips||0),
+      row('info',O.tr('Temperament','Характер'),'#'+(ai.personality!=null?ai.personality.toFixed(2):'—')+' · '+(ai.personality>0.66?O.tr('lively','живой'):ai.personality>0.33?O.tr('balanced','уравновешенный'):O.tr('calm','спокойный')))),
+    h('div',{class:'note'},O.tr('Everything here is decided locally: no tokens, no network.','Всё это решается локально: без токенов и сети.')),
+    h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
+      h('button',{class:'btn grow',onclick:()=>{O.petMascot();O.toast(O.tr('Petted','Погладил'),1200)}},O.icon('thumbUp'),O.tr('Pet','Погладить')),
+      h('button',{class:'btn grow',onclick:()=>{O.giveMascotTreat();O.toast(O.tr('Fed','Покормил'),1200)}},O.icon('star'),O.tr('Feed','Покормить')),
+      h('button',{class:'btn grow',onclick:()=>{O.mascotSetRoam&&O.mascotSetRoam(S.opts.mascotRoam===false);O.toast(O.tr('Roaming changed','Прогулки переключены'),1200)}},O.icon('drag'),O.tr('Roam','Гулять')))
+  );
+  O.sheet(O.tr('Mascot mind','Разум маскота'),body,{full:true});
+};
 O.openMascotSettings=()=>{
   const body=h('div');
   const gridFor=keys=>{
@@ -997,6 +1377,8 @@ O.openMascotSettings=()=>{
         S.opts.mascotOn!==false,v=>{S.opts.mascotOn=v;O.saveOpts();O.mascotRefresh&&O.mascotRefresh()}),
       O.toggleRow('drag',O.tr('Walks around','Гуляет'),O.tr('The mascot decides when to stroll along the input (more often while generating)','Маскот сам решает, когда пройтись по полю ввода (чаще во время генерации)'),
         S.opts.mascotRoam!==false,v=>O.mascotSetRoam&&O.mascotSetRoam(v)),
+      O.toggleRow('note',O.tr('Sounds','Звуки'),O.tr('Tiny synth squeak when it hops or is petted','Писк при прыжке и поглаживании'),
+        S.opts.mascotSound!==false,v=>{S.opts.mascotSound=v;O.saveOpts()}),
       h('div',{class:'grp'},O.tr('Size','Размер')),
       h('div',{class:'seg'},[28,36,44,56,72,96].map(n=>h('button',{class:S.opts.mascotSize===n?'on':'',
         onclick:()=>{S.opts.mascotSize=n;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()}},n+'px'))),
