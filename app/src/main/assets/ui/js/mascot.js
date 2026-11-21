@@ -309,6 +309,7 @@ const USE={
 //              huge eyes, six curly legs.
 // Letters: o=outline d=dark b=base l=light w=white e=eye/glow a=accent
 const CUSTOM={
+  // DeepSeek: pixel whale (rounded head, small eye, tapering body, forked fluke, water spout)
   deepseek:[
     '................',
     '.......w........',
@@ -316,58 +317,60 @@ const CUSTOM={
     '....ooooooo.....',
     '..oobllllbboo...',
     '.obllllllllbbo..',
-    '.obllelllelllbo.',
     '.oblllllllllbbo.',
-    'ooblllllllllbbbo',
-    'obbllllllllbbbo.',
-    '.obbbllllbbbbo..',
-    '..oobbbbbbbboo..',
-    '....oooboo.obbo.',
-    '......obbo..obbo',
-    '.......oo....oo.',
-    '................'
-  ],
-  anime:[
-    '................',
-    '.....hhhhhh.....',
-    '...hhhhhhhhhh...',
-    '..hhhhhhhhhhhh..',
-    '.hhssssssssshhh.',
-    '.hssssssssssssh.',
-    '.hswwesswewwsh..',
-    '.hswpesswepwsh..',
-    '.hssssssssssssh.',
-    '..hsspsssspssh..',
-    '...ssssssssss...',
-    '...aaaaaaass....',
-    '..aaaaaaaaaa....',
-    '..aa.aaaa.aa....',
-    '....ss....ss....',
-    '................'
-  ],
-  claude:[
-    '................',
-    '.....oooooo.....',
+    '.oblelllllllbbo.',
+    '.obllllllllbbbbo',
+    '..oblllllbbbboo.',
     '...oobbbbbboo...',
-    '..obbbbbbbbbbo..',
-    '.obbbbbbbbbbbbo.',
-    '.obwweebbweewbo.',
-    '.obwpeebbweepbo.',
-    '.obbbbbbbbbbbbo.',
-    '.obbdbbbbbbdbbo.',
-    '..obbbbbbbbbbo..',
-    '..obobobobobbo..',
-    '.obo.obo.obo.bo.',
-    '.ob...ob...ob...',
-    '..o....o....o...',
+    '.....ooooo......',
+    '................',
+    '................',
+    '................',
+    '................'
+  ],
+  // Qwen: violet swirl marked with a Q
+  qwen:[
+    '................',
+    '......oooo......',
+    '....oobbbboo....',
+    '...obllllllbo...',
+    '..obllllllllbo..',
+    '..obllwwwwllbo..',
+    '.oblllwwwwlllbo.',
+    '.oblllwwwwlllbo.',
+    '.oblllllwllllbo.',
+    '.oblllllwwlllbo.',
+    '.oblllllwwllbbo.',
+    '..obllllllbbqo..',
+    '..obbllllbbboq..',
+    '...oobbbbooo.qq.',
+    '.....oooo....q..',
+    '................'
+  ],
+  // Hacker cat: grey cat, green visor eyes, hoodie collar
+  hacker_cat:[
+    '................',
+    '..oo........oo..',
+    '..obo......obo..',
+    '..obboooooobbo..',
+    '.obllllllllllbo.',
+    '.obllllllllllbo.',
+    '.obgggllllgggbo.',
+    '.obgggllllgggbo.',
+    '.obllllllllllbo.',
+    '..obllllllllbo..',
+    '..okkkkkkkkkko..',
+    '..obllllllllbo..',
+    '...obllllllbo...',
+    '...ob.o..o.bо...',
     '................',
     '................'
   ]
 };
 const CUSTOM_COL={
-  anime:{o:'#5b3a2a',d:'#2b1d2e',h:'#2b1d2e',s:'#ffd8b5',w:'#ffffff',e:'#3a5a7a',p:'#c0607a',a:'#ff6fae',b:'#ffd8b5',l:'#fff0e0'},
-  deepseek:{o:'#1b2a6b',d:'#2f47b8',b:'#4d6bfe',l:'#9db2ff',w:'#ffffff',e:'#0b1030',a:'#a8b8ff'},
-  claude:{o:'#6b3524',d:'#a55b3f',b:'#d97757',l:'#f0a882',w:'#ffffff',e:'#3a1a10',p:'#3a1a10',a:'#ffd9c2'}
+  deepseek:{o:'#16225c',d:'#22307a',b:'#4d6bfe',l:'#8fa7ff',w:'#ffffff',e:'#0b1030',a:'#a8b8ff'},
+  qwen:{o:'#2b1a4a',b:'#7c5cff',l:'#b9a6ff',w:'#ffffff',q:'#e8dcff',e:'#2b1a4a'},
+  hacker_cat:{o:'#171720',b:'#8f97ab',l:'#cdd5e6',g:'#4ade80',k:'#4ade80',e:'#0d1f12'}
 };
 
 
@@ -452,8 +455,9 @@ const SK_NAMES={chilly:'Chilly — кот',buddy:'Buddy — пёс',hamm:'Hamm �
 // game sprites served as their own animated GIFs — no pixel reconstruction.
 const ART=window.OCM_MASCOT_ART||{pets:{},brand:{}};
 function realSvg(key,size,state){
-  // DeepSeek must be PIXEL art (not the sharp logo), so it falls through to the pixel sprite.
-  if(key==='deepseek')return null;
+  // No brand-logo mascots: every AI mascot is a pixel sprite, so Claude's raster stickers
+  // (which brought a black plate in WebView) are gone entirely.
+  return null;
   // Claude: the real Clawd sticker for the current state (idle/thinking/writing/waiting/error)
   if(key==='claude'&&ART.clawd){
     const src=ART.clawd[state]||ART.clawd.idle;
@@ -586,13 +590,15 @@ function svgFor(key,frame,size){
 }
 O.mascotSvg=svgFor;
 // (legacy pixel ids kept for the hand-drawn fallback set)
-const REAL_PETS=Object.keys(ART.pets);
-// Creature mascots (hand-drawn pixel art) — must stay in the list, before Soul Knight pets.
-const CREATURES=['hacker_cat','fox','penguin','capybara','shiba','hamster','octopus','axolotl','dragon','phoenix','frog','ninja_penguin','robo_cat','robo_dog','drone','android','term_ghost','ghost','demon','samurai','ninja','mage','witch','alchemist','knight','slime','goblin','gnome','elf','orc','troll','unicorn','pegasus','griffin','cerberus','chimera','minotaur','centaur','mermaid','siren','harpy','guardian','cherub','astronaut','alien','ufo','spacecat','star','moon','sun','golem'];
-const ORDER=['deepseek','claude','anime'].concat(CREATURES).concat(REAL_PETS);
+const REAL_PETS=Object.keys(ART.pets).filter(k=>ART.pets[k]&&ART.pets[k].uri);
+// Only three hand-drawn mascots stay (all the other drawn creatures were removed on request).
+const PIXEL_PETS=['deepseek','qwen','hacker_cat'];
+const ORDER=PIXEL_PETS.concat(REAL_PETS);
 const SK_ORDER=REAL_PETS;
 const NAME={deepseek:'DeepSeek кит',claude:'Claude искра',anime:'Аниме-девушка',hacker_cat:'Кот-хакер',fox:'Лисёнок',penguin:'Пингвин',capybara:'Капибара',shiba:'Шиба-ину',hamster:'Хомяк',octopus:'Осьминог',axolotl:'Аксолотль',dragon:'Дракончик',phoenix:'Феникс',frog:'Лягушка',ninja_penguin:'Пингвин-ниндзя',robo_cat:'Робот-кот',robo_dog:'Робот-собака',drone:'Дрон',android:'Андроид',term_ghost:'Терминал-дух',ghost:'Призрак',demon:'Демонёнок',samurai:'Самурай',ninja:'Ниндзя',mage:'Маг',witch:'Ведьмочка',alchemist:'Алхимик',knight:'Рыцарь',slime:'Слайм',goblin:'Гоблин',gnome:'Гном',elf:'Эльф',orc:'Орк',troll:'Тролль',unicorn:'Единорог',pegasus:'Пегас',griffin:'Грифон',cerberus:'Цербер',chimera:'Химера',minotaur:'Минотавр',centaur:'Кентавр',mermaid:'Русалка',siren:'Сирена',harpy:'Гарпия',guardian:'Ангел-хранитель',cherub:'Херувим',astronaut:'Астронавт',alien:'Инопланетянин',ufo:'НЛО',spacecat:'Космокот',star:'Звёздочка',moon:'Луна',sun:'Солнышко',golem:'Голем'};
+const PIXEL_NAMES={deepseek:'DeepSeek — кит',qwen:'Qwen — спираль',hacker_cat:'Кот-хакер'};
 O.mascotName=k=>{
+  if(PIXEL_NAMES[k])return PIXEL_NAMES[k];
   if(ART.pets[k])return ART.pets[k].name;
   if(ART.brand[k])return ART.brand[k].name;
   return NAME[k]||SK_NAMES[k]||k;
@@ -608,6 +614,27 @@ const EMOTE={
 };
 const emoteSvg=st=>EMOTE[st]?'<svg viewBox="0 0 20 20" width="15" height="15">'+EMOTE[st]+'</svg>':'';
 
+// --------------------------------------------------------------- coding bubble
+// While the agent generates, a small speech bubble with an animated code glyph floats above
+// the mascot. Pure SVG (no emoji, no images) so it matches any theme and never blinks.
+const BUBBLE={
+  thinking:'<svg viewBox="0 0 40 26" width="40" height="26"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="10" cy="13" r="1.7" fill="currentColor" stroke="none" opacity=".35"><animate attributeName="opacity" values=".35;1;.35" dur="1.2s" repeatCount="indefinite"/></circle><circle cx="20" cy="13" r="1.7" fill="currentColor" stroke="none" opacity=".35"><animate attributeName="opacity" values=".35;1;.35" dur="1.2s" begin=".2s" repeatCount="indefinite"/></circle><circle cx="30" cy="13" r="1.7" fill="currentColor" stroke="none" opacity=".35"><animate attributeName="opacity" values=".35;1;.35" dur="1.2s" begin=".4s" repeatCount="indefinite"/></circle></g></svg>',
+  writing:'<svg viewBox="0 0 44 26" width="44" height="26"><rect x="1" y="2" width="42" height="22" rx="5" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".55"/><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9l-3.5 4 3.5 4"/><path d="M35 9l3.5 4-3.5 4"/><path d="M25 8.5l-5 9"/></g><circle cx="16" cy="22.5" r="1.1" fill="currentColor"><animate attributeName="opacity" values="1;.15;1" dur="1s" repeatCount="indefinite"/></circle></svg>',
+  jailbreak:'<svg viewBox="0 0 26 26" width="26" height="26"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 4h10a1.6 1.6 0 011.6 1.6v15L13 17.2 6.4 20.6V5.6A1.6 1.6 0 018 4z"/><path d="M10 9h6M10 12.5h4"/></g></svg>'
+};
+let bubbleEl=null;
+function paintBubble(st){
+  if(!el)return;
+  const want=(st==='thinking'||st==='writing'||st==='jailbreak')?BUBBLE[st]:null;
+  if(!want){if(bubbleEl){bubbleEl.remove();bubbleEl=null}return}
+  if(!bubbleEl){
+    bubbleEl=h('div',{class:'mascot-bubble'});
+    el.append(bubbleEl);
+  }
+  if(bubbleEl._kind!==st){bubbleEl._kind=st;bubbleEl.innerHTML=want}
+  bubbleEl.classList.toggle('jail',st==='jailbreak');
+}
+
 // --------------------------------------------------------------- component
 let el,sprite,emoteEl,frame=0,frameTimer=null,state='idle',drag=null;
 const cache=new Map();
@@ -619,7 +646,7 @@ function html(key,fr,size){
   cache.set(k,v);return v;
 }
 function renderSprite(){
-  const sp=S.opts.mascot&&(PAL[S.opts.mascot]||CUSTOM[S.opts.mascot]||SK_ART[S.opts.mascot]||ART.pets[S.opts.mascot]||ART.brand[S.opts.mascot])?S.opts.mascot:'deepseek';
+  const sp=S.opts.mascot&&(CUSTOM[S.opts.mascot]||SK_ART[S.opts.mascot]||ART.pets[S.opts.mascot])?S.opts.mascot:'deepseek';
   sprite.innerHTML=html(sp,frame%3,S.opts.mascotSize||44);
   el.dataset.state=state;el.dataset.species=sp;
   if(emoteEl)emoteEl.innerHTML=emoteSvg(state);
@@ -632,7 +659,7 @@ function startFrames(){
 function setState(s){
   if(state===s)return;
   state=s;
-  if(el){el.dataset.state=s;if(emoteEl)emoteEl.innerHTML=emoteSvg(s);startFrames()}
+  if(el){el.dataset.state=s;if(emoteEl)emoteEl.innerHTML=emoteSvg(s);startFrames();paintBubble(s)}
 }
 // Per-session mascot state: the animation belongs to the SESSION, not to the app.
 // Switching chats restores that chat's own state instead of leaking the previous one.
@@ -685,12 +712,19 @@ function setPos(){
   el.style.top=PHYS.y+'px';
   el.dataset.placed='1';
 }
+// The pixel art is drawn facing LEFT (head/eye on the left, tail on the right), so walking
+// to the RIGHT requires a mirror. Getting this backwards is exactly what made the pet walk
+// tail-first.
+const BASE_FACING=-1;   // -1 = artwork faces left
 function face(dir){
-  if(!el)return;
-  if(dir===PHYS.dir)return;
+  if(!el||!dir)return;
   PHYS.dir=dir;
-  // the sprite is drawn facing right, so turning is just a horizontal flip
-  el.classList.toggle('flip',dir<0);
+  // Turning = mirroring the WHOLE body (never the animated sprite, whose transform would
+  // override the mirror and make the pet walk backwards).
+  const needFlip=(dir!==BASE_FACING);
+  el.classList.toggle('flip',needFlip);
+  const b=el.querySelector('.mascot-bubble');
+  if(b)b.style.transform='translateX(-50%) scaleX('+(dir<0?-1:1)+')';
 }
 
 const FIXED=1/60;
@@ -718,35 +752,22 @@ function step(){
 
   // ---- walking AI: pick a target on the ledge, face it, stroll there, then think ----
   if(PHYS.walking&&!PHYS.held&&PHYS.vy===0){
-    if(PHYS.target==null||PHYS.x===PHYS.target||Date.now()>PHYS.nextThink){
-      chooseTarget(b);
-    }else{
-      const d=PHYS.target-PHYS.x;
-      if(Math.abs(d)<3){PHYS.x=PHYS.target;PHYS.vx=0;PHYS.nextThink=Date.now()+1200+Math.random()*2600}
-      else{face(d>0?1:-1);PHYS.vx=PHYS.dir*WALK}
-    }
+    if(PHYS.target==null||Date.now()>PHYS.nextThink){chooseTarget(b,PHYS.busy)}
+    const d=(PHYS.target==null?0:PHYS.target-PHYS.x);
+    if(PHYS.target==null||Math.abs(d)<2.5){
+      PHYS.vx=0;
+      if(PHYS.target!=null&&Math.abs(d)<2.5){
+        PHYS.x=PHYS.target;PHYS.target=null;
+        const rest=2600+Math.random()*4200;
+        PHYS.pauseUntil=Date.now()+rest;                      // stand and look around
+        PHYS.nextThink=Date.now()+rest;
+        if(Math.random()<0.35)stopWalking();                  // sometimes it just sits down
+      }
+    }else{face(d>0?1:-1);PHYS.vx=PHYS.dir*WALK}
   }
   setPos();
   if(PHYS.held||PHYS.vy!==0||PHYS.vx!==0||PHYS.walking)schedulePhys();
 }
-function chooseTarget(b){
-  const room=b.x1-b.x0;
-  if(!room||room<8){PHYS.target=null;return}
-  // never aim at the very edge (that is what made it stare into the wall)
-  const margin=Math.min(24,Math.max(8,room*0.12));
-  const lo=b.x0+margin, hi=b.x1-margin;
-  let t=lo+Math.random()*(hi-lo);
-  if(Math.abs(t-PHYS.x)<room*0.35)t=PHYS.x+(t>PHYS.x?1:-1)*room*0.45;
-  PHYS.target=Math.min(hi,Math.max(lo,t));
-  face(PHYS.target>PHYS.x?1:-1);
-  PHYS.nextThink=Date.now()+9000;   // safety net if it cannot reach the target
-}
-function schedulePhys(){
-  if(PHYS.raf)return;
-  PHYS.raf=requestAnimationFrame(step);
-}
-
-// Walking is a WILL: the mascot decides on its own when to stroll, and generating makes it likelier.
 function startWalking(){
   if(PHYS.walking)return;
   PHYS.walking=true;
@@ -759,35 +780,84 @@ function stopWalking(){
   PHYS.target=null;
   PHYS.vx=0;
 }
-// "AI": each session gets its own temperament, so the same pet behaves differently per chat.
-let aiTimer=null,aiSeed=0;
+function chooseTarget(b,busy){
+  const room=b.x1-b.x0;
+  if(!room||room<8){PHYS.target=null;return}
+  // never aim at the very edge (that is what made it stare into the wall)
+  const margin=Math.min(24,Math.max(8,room*0.12));
+  const lo=b.x0+margin, hi=b.x1-margin;
+  const maxStep=busy?room*0.22:room*0.75;    // while generating it only shifts a little
+  let t=lo+Math.random()*(hi-lo);
+  if(Math.abs(t-PHYS.x)>maxStep)t=PHYS.x+Math.sign(t-PHYS.x)*maxStep;
+  if(Math.abs(t-PHYS.x)<room*0.18)t=PHYS.x+((t>PHYS.x?1:-1))*room*0.22;
+  PHYS.target=Math.min(hi,Math.max(lo,t));
+  face(PHYS.target>PHYS.x?1:-1);
+  PHYS.nextThink=Date.now()+9000;   // safety net if it cannot reach the target
+}
+function schedulePhys(){
+  if(PHYS.raf)return;
+  PHYS.raf=requestAnimationFrame(step);
+}
+
+// Walking is a WILL. The mascot has moods and an agenda:
+//   idle      → strolls often (it is bored)
+//   generating→ mostly stays put and works (coding bubble), only short repositioning
+//   waiting   → stands still and watches you
+//   jailbreak → restless, paces quickly
 function personality(sid){
   if(!sid)return 0.5;
   let h=0;for(let i=0;i<sid.length;i++)h=(h*31+sid.charCodeAt(i))|0;
-  return Math.abs(h%100)/100;     // 0..1
+  return Math.abs(h%100)/100;
 }
+let aiTimer=null,lastEventAt=0,eventKinds={};
 function startAI(){
   stopAI();
-  const p=personality(S.sid);
+  const p=personality(S.sid);           // per-session temperament
+  let lastPlan=0;
   const tickAI=()=>{
-    if(!el||!el.isConnected||!S.sid)return;
-    if(S.opts.mascotRoam===false)return;               // user can disable roaming
-    if(PHYS.held||drag)return;                          // never walk during a drag
-    const st=S.status[S.sid];
+    if(!el||!el.isConnected)return;
+    if(S.opts.mascotRoam===false){stopWalking();return}
+    if(PHYS.held||drag)return;
+    const sid=S.sid||'local';
+    const st=S.status[sid];
     const busy=!!st&&st.type!=='idle';
-    // busy → strolls often; idle → now and then; waiting → stays put and looks at you
-    const chance=busy?0.85:(O.mascotStateFor(S.sid)==='waiting'?0.05:0.18+p*0.3);
-    if(Math.random()<chance){
-      if(!PHYS.walking)startWalking();
-      chooseTarget(physBounds());
-    }else if(PHYS.walking&&!busy){
-      stopWalking();
+    const mood=O.mascotStateFor(sid);
+    PHYS.busy=busy;
+    // Busy → the pet stays put and works (coding bubble). Free time → it wanders.
+    if(busy){
+      if(PHYS.walking)stopWalking();
+      return;
+    }
+    if(mood==='waiting'){if(PHYS.walking)stopWalking();return}
+    // Idle: stroll most of the time, with a short pause between trips.
+    const pause=pausedUntil();
+    const now=Date.now();
+    if(now<pause)return;
+    if(!PHYS.walking&&now-lastPlan>900){
+      lastPlan=now;
+      // curiosity after a new message; personality adds eagerness
+      const eager=0.55+p*0.35+(Date.now()-lastEventAt<8000?0.25:0);
+      if(Math.random()<eager)startWalking();
     }
   };
   tickAI();
-  aiTimer=setInterval(tickAI,4200);
+  aiTimer=setInterval(tickAI,700);
+  // small introspection hook (used by tests and the "what is it doing" tooltip)
+  O.mascotAI=()=>({mood:O.mascotStateFor(S.sid||'local'),
+    busy:!!(S.status[S.sid||'local']&&S.status[S.sid||'local'].type!=='idle'),
+    personality:p,walking:PHYS.walking,target:PHYS.target,x:Math.round(PHYS.x)});
 }
+function pausedUntil(){return PHYS.pauseUntil||0}
 function stopAI(){if(aiTimer){clearInterval(aiTimer);aiTimer=null}}
+// Event curiosity: the mascot notices new answers/errors and reacts with a look or a hop.
+function noticeMascot(kind){
+  lastEventAt=Date.now();
+  eventKinds[kind]=(eventKinds[kind]||0)+1;
+  if(!el||PHYS.held)return;
+  if(kind==='error'&&O.chatAnim&&O.chatAnim()){
+    el.classList.remove('landed');void el.offsetWidth;el.classList.add('landed');
+  }
+}
 
 O.mascotInit=parent=>{
   el=h('div',{class:'mascot',title:O.tr('Drag me · tap for options','Перетащи · тап — настройки')});
@@ -882,11 +952,12 @@ O.mascotInit=parent=>{
   bus.on('jailbreak',()=>tick());
   bus.on('sessionJailbreak',sid=>tick(sid));
   // switching session: restore THAT session's own mascot state
-  bus.on('open',()=>{if(el)setState(O.mascotStateFor(S.sid))});
+  bus.on('open',()=>{if(el){setState(O.mascotStateFor(S.sid));paintBubble(O.mascotStateFor(S.sid))}});
   // walk back and forth over the input while the agent is generating
   bus.on('mascotState',(sid,st)=>{if(!el||sid!==S.sid)return;startAI()});
   bus.on('status',()=>{if(el)startAI()});
   bus.on('open',()=>{tick();const p=O.store.get('mascotPos',null);if(p){el.style.left=p.x+'px';el.style.top=p.y+'px'}});
+  O.mascotBubble=st=>paintBubble(st);
   O.mascotSetRoam=on=>{S.opts.mascotRoam=!!on;O.saveOpts();if(on)startAI();else{stopAI();stopWalking()}};
   O.mascotRefresh=()=>{
     el.style.display=S.opts.mascotOn?'':'none';
@@ -895,6 +966,7 @@ O.mascotInit=parent=>{
     setTimeout(()=>{const b=physBounds();PHYS.y=b.ground;PHYS.x=Math.min(PHYS.x,b.x1);setPos()},40);
   };
   tick();
+  paintBubble(state);
   startAI();
 };
 function mascotMenu(){
@@ -929,9 +1001,8 @@ O.openMascotSettings=()=>{
       h('div',{class:'seg'},[28,36,44,56,72,96].map(n=>h('button',{class:S.opts.mascotSize===n?'on':'',
         onclick:()=>{S.opts.mascotSize=n;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()}},n+'px'))),
       h('div',{class:'grp'},O.tr('Assistants','Ассистенты')),
-      gridFor(['deepseek','claude','anime']),
-      h('div',{class:'grp'},O.tr('Creatures','Существа')+' ('+CREATURES.length+')'),
-      gridFor(CREATURES),
+      h('div',{class:'grp'},O.tr('AI mascots','Маскоты ИИ')+' ('+PIXEL_PETS.length+')'),
+      gridFor(PIXEL_PETS),
       h('div',{class:'grp'},O.tr('Soul Knight pets — in-game sprites','Питомцы Soul Knight — игровые спрайты')+' ('+REAL_PETS.length+')'),
       gridFor(REAL_PETS)
     );

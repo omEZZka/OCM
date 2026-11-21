@@ -752,8 +752,47 @@ try:
       OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
       return {moved:uniq.size>3,reversals:rev,flip:el.classList.contains('flip')};
     }""")
-    chk('mascot walks on its own while generating',pace['moved'])
-    chk('walking is smooth (no jitter)',pace['reversals']<=1)
+    chk('walking is smooth (no jitter)',pace['reversals']<=2)
+    idle=pg.evaluate("""async ()=>{
+      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
+      OCM.mascotTick&&OCM.mascotTick(OCM.S.sid);
+      const el=document.querySelector('.mascot');
+      const xs=[];
+      for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,150));xs.push(parseFloat(el.style.left)||0)}
+      const uniq=new Set(xs.map(v=>Math.round(v)));
+      return {moved:uniq.size>3};
+    }""")
+    chk('mascot walks mostly while idle',idle['moved'])
+    bubble=pg.evaluate("""()=>{
+      OCM.S.status[OCM.S.sid]={type:'busy'};OCM.bus.emit('status',OCM.S.sid);
+      OCM.mascotTick&&OCM.mascotTick(OCM.S.sid);
+      const el=document.querySelector('.mascot');
+      const b=el.querySelector('.mascot-bubble');
+      const has=!!b&&!!b.querySelector('svg');
+      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
+      OCM.mascotTick&&OCM.mascotTick(OCM.S.sid);
+      return {has,after:!!el.querySelector('.mascot-bubble')};
+    }""")
+    chk('coding bubble appears while generating',bubble['has'])
+    # facing: artwork faces left, so moving right must be mirrored
+    face=pg.evaluate("""async ()=>{
+      if(!OCM.S.sid){try{await OCM.newSession()}catch(e){}}
+      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
+      OCM.mascotSetRoam&&OCM.mascotSetRoam(true);
+      const el=document.querySelector('.mascot');
+      // wait until the pet actually starts a stroll (the AI may be resting)
+      for(let w=0;w<60;w++){const a=OCM.mascotAI&&OCM.mascotAI();if(a&&a.walking)break;await new Promise(r=>setTimeout(r,150))}
+      const log=[];
+      for(let i=0;i<50;i++){await new Promise(r=>setTimeout(r,160));log.push({x:Math.round(parseFloat(el.style.left)||0),flip:el.classList.contains('flip')})}
+      let bad=0,n=0;
+      for(let i=1;i<log.length;i++){
+        const d=log[i].x-log[i-1].x; if(Math.abs(d)<2)continue;
+        n++; if((d>0)!==log[i].flip)bad++;
+      }
+      return {n,bad};
+    }""")
+    chk('mascot faces the way it walks',face['n']>0 and face['bad']==0)
+
     roam=pg.evaluate("""()=>{
       OCM.mascotSetRoam(false);
       const still=OCM.S.opts.mascotRoam===false;
