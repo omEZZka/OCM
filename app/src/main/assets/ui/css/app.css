@@ -3873,16 +3873,22 @@ html.night-lamp #msgs { filter: brightness(.92) sepia(.14); }
 @keyframes mWrite { 0%,100% { transform: translateY(0) scale(1) } 50% { transform: translateY(-1.5px) scale(1.04) } }
 @keyframes mHop { 0%,100% { transform: translateY(0) } 40% { transform: translateY(-6px) } 60% { transform: translateY(-4px) } }
 
-/* speech/emotion bubble */
-.mascot::after {
-  content: attr(data-emote);
-  position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%);
-  background: var(--card); color: var(--fg);
-  border: 1px solid var(--line2); border-radius: 10px;
-  padding: 2px 7px; font-size: 11px; white-space: nowrap;
-  opacity: 0; transition: opacity .2s; pointer-events: none;
+/* emotion badge: SVG icon, no emoji */
+.mascot-emote {
+  position: absolute; top: -7px; right: -7px;
+  width: 16px; height: 16px; display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--card); color: var(--acc);
+  border: 1px solid var(--line2);
+  box-shadow: 0 1px 4px rgba(0,0,0,.35);
+  opacity: 0; transform: scale(.7);
+  transition: opacity .18s, transform .18s var(--ease-out);
+  pointer-events: none;
 }
-.mascot[data-emote]:not([data-emote=""])::after { opacity: 1; }
+.mascot-emote svg { display: block; }
+.mascot-emote:not(:empty) { opacity: 1; transform: scale(1); }
+.mascot[data-state="waiting"] .mascot-emote { color: var(--warn); }
+
 
 /* settings picker grid */
 .mascot-grid {
