@@ -3848,8 +3848,9 @@ html.night-lamp #msgs { filter: brightness(.92) sepia(.14); }
    ========================================================================== */
 .mascot {
   position: absolute;
-  left: 12px; bottom: 8px;
-  z-index: 9;
+  left: 12px; bottom: 84px;  /* sits just above the composer, inside the chat pane */
+  z-index: 12;
+  will-change: left, top;
   display: flex; align-items: center; justify-content: center;
   width: var(--ms, 44px); height: var(--ms, 44px);
   cursor: grab; touch-action: none;

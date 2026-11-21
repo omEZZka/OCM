@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION_NAME: "2.25.1"
+  VERSION_NAME: "2.26.0"
 
 jobs:
   build:
@@ -94,13 +94,14 @@ jobs:
             echo
             echo "Core: opencode $(grep opencode_core runtime-info.txt | cut -d= -f2) (1.x line) + Linux rootfs proot"
             echo
-            echo "2.25.1 — маскоты перерисованы:"
-            echo "- Все 54 вида переделаны на ручной пиксель-арт 16x16: чёткий тёмный контур, база + светлый блик + мягкая тень, крупные читаемые чиби-глаза с блеском и румянец"
-            echo "- 6 базовых силуэтов (кошка, круглый зверёк, птица, призрак, блоб, вытянутый) + слои аксессуаров: уши, рога, шляпы, шлемы, очки, маски, плащи, крылья, хвосты, мечи, посохи, ореол"
-            echo "- Свои палитры у каждого вида, аккуратные оттенки вместо «клякс»"
-            echo "- Эмодзи в эмоциях убраны: думает / пишет / ждёт / ошибка — SVG-иконки"
-            echo "- Анимация: моргание (закрытые глаза), радость (прищур) и паузы; кэш спрайтов, чтобы не грузить UI"
+            echo "2.26.0 — маскоты по референсам + питомцы Soul Knight:"
+            echo "- DeepSeek и Claude перерисованы по официальным логотипам: синий кит с фонтанчиком и вилочным хвостом; терракотовая искра в виде милого осьминожка. Аниме-девушка — чиби с тёмными волосами и розовым платьем"
+            echo "- Исправлено «проваливание» маскота в поле ввода: он больше не живёт в прокручиваемом списке сообщений, а стоит в панели чата над композером (печать на него не влияет)"
+            echo "- Добавлены 33 питомца Soul Knight с ручными спрайтами: Chilly, Buddy, Hamm, Blue, Robo, Panda, BonBon, Can'bellied Pig, Pigeon, Inherited Bug, Mini Tengu, Peanut, Snow, Officer Chilly, Blani, Rosemary Cat, 10% Off, Director Pepper, Glitchy Roachy, Chilly Cube, Mecha Chilly, Tap, Mad Monki, Douwa, Lai Cai, Toastie, Lil Drillmaster, Kapikapi, Mahhmot, Zongzi Bro, Slimy, Meower, Full Of Fortune"
+            echo "- Настройки → Маскот: три секции (Ассистенты / Существа / Питомцы Soul Knight), размер 28–72px, вкл/выкл"
+            echo "- Максимальный размер маскота поднят, кэш спрайтов, эмодзи в эмоциях заменены SVG-иконками"
             echo
+            echo "Telegram: https://t.me/OpenCodeMob"            echo
             echo "Telegram: https://t.me/OpenCodeMob"            echo
             echo "Telegram: https://t.me/OpenCodeMob"
           } > notes.md

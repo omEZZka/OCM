@@ -300,6 +300,152 @@ const USE={
   golem:['armor','cracks']
 };
 
+
+// ---------------------------------------------------------------------------
+// Hand-drawn signature sprites (16x16, 5 tones) — modelled after the real logos:
+//   DeepSeek = the blue whale from the official mark (big rounded head, small eye,
+//              tapering body, forked tail, water spout).
+//   Claude   = the terracotta spark drawn as a cute octopus: round mantle,
+//              huge eyes, six curly legs.
+// Letters: o=outline d=dark b=base l=light w=white e=eye/glow a=accent
+const CUSTOM={
+  deepseek:[
+    '................',
+    '.......w........',
+    '......w.w.......',
+    '....ooooooo.....',
+    '..oobllllbboo...',
+    '.obllllllllbbo..',
+    '.obllelllelllbo.',
+    '.oblllllllllbbo.',
+    'ooblllllllllbbbo',
+    'obbllllllllbbbo.',
+    '.obbbllllbbbbo..',
+    '..oobbbbbbbboo..',
+    '....oooboo.obbo.',
+    '......obbo..obbo',
+    '.......oo....oo.',
+    '................'
+  ],
+  anime:[
+    '................',
+    '.....hhhhhh.....',
+    '...hhhhhhhhhh...',
+    '..hhhhhhhhhhhh..',
+    '.hhssssssssshhh.',
+    '.hssssssssssssh.',
+    '.hswwesswewwsh..',
+    '.hswpesswepwsh..',
+    '.hssssssssssssh.',
+    '..hsspsssspssh..',
+    '...ssssssssss...',
+    '...aaaaaaass....',
+    '..aaaaaaaaaa....',
+    '..aa.aaaa.aa....',
+    '....ss....ss....',
+    '................'
+  ],
+  claude:[
+    '................',
+    '.....oooooo.....',
+    '...oobbbbbboo...',
+    '..obbbbbbbbbbo..',
+    '.obbbbbbbbbbbbo.',
+    '.obwweebbweewbo.',
+    '.obwpeebbweepbo.',
+    '.obbbbbbbbbbbbo.',
+    '.obbdbbbbbbdbbo.',
+    '..obbbbbbbbbbo..',
+    '..obobobobobbo..',
+    '.obo.obo.obo.bo.',
+    '.ob...ob...ob...',
+    '..o....o....o...',
+    '................',
+    '................'
+  ]
+};
+const CUSTOM_COL={
+  anime:{o:'#5b3a2a',d:'#2b1d2e',h:'#2b1d2e',s:'#ffd8b5',w:'#ffffff',e:'#3a5a7a',p:'#c0607a',a:'#ff6fae',b:'#ffd8b5',l:'#fff0e0'},
+  deepseek:{o:'#1b2a6b',d:'#2f47b8',b:'#4d6bfe',l:'#9db2ff',w:'#ffffff',e:'#0b1030',a:'#a8b8ff'},
+  claude:{o:'#6b3524',d:'#a55b3f',b:'#d97757',l:'#f0a882',w:'#ffffff',e:'#3a1a10',p:'#3a1a10',a:'#ffd9c2'}
+};
+
+
+// ---------------------------------------------------------------------------
+// Soul Knight pets (33 picked) — drawn in the same 16x16 5-tone style.
+// Each pet is its own hand-authored sprite so it reads like the real pet.
+const SK_ART={
+  chilly:['................','..hh........hh..','..hhh......hhh..','..hhhhhhhhhhhh..','.hhbbbbbbbbbbhh.','.hbbbbbbbbbbbbh.','.hbwwebbbwewwbh.','.hbwpebbbwepwbh.','.hbbbbbbbbbbbbh.','..hbbpbbbbpbbh..','...bbbbbbbbbb...','...bbbbbbbbbb...','...bb.hh.hh.bb..','...bb..hh..bb...','................','................'],
+  buddy:['................','..ab........ab..','..abb......bba..','..abbbbbbbbbba..','.abbbbbbbbbbbba.','.abbwwebbweewba.','.abbwpebbwepwba.','.abbbbbbbbbbbba.','..abbbpbbbpbba..','...bbbbbbbbbb...','...bbbbbbbbbb...','...bb.bb.bb.bb..','...bb..bb..bb...','................','................','................'],
+  hamm:['................','...p........p...','..pp........pp..','..pppppppppppp..','.ppbbbbbbbbbbpp.','.pbbbbbbbbbbbbp.','.pbwwebbbbwewbp.','.pbwpebbbbwepbp.','.pbbbbbbbbbbbbp.','..pbbpbbbbpbbp..','...bbbbbbbbbb...','...bbbbbbbbbb...','...bb.pp.pp.bb..','....b..pp..b....','................','................'],
+  blue:['................','................','......oooo......','....oobbbboo....','...obbbbbbbbo...','..obbbbbbbbbbo..','..obwwebbweewbo.','..obwpebbwepbo..','..obbbbbbbbbbo..','..obbbbbbbbbbo..','...obbbbbbbbo...','....oobbbboo....','......oooo......','................','................','................'],
+  robo:['................','....m......m....','....mm....mm....','..mmmmmmmmmmmm..','.mmbbbbbbbbbbmm.','.mbbbbbbbbbbbbm.','.mbeebbbbeeebbm.','.mbeebbbbeeebbm.','.mbbbbbbbbbbbbm.','..mbbbammabbbm..','...bbbbbbbbbb...','...bbbbbbbbbb...','...mm.bb.bb.mm..','................','................','................'],
+  panda:['................','...k........k...','..kk........kk..','..kkkkkkkkkkkk..','.kkwwwwwwwwwwkk.','.kwwwwwwwwwwwwk.','.kwwkkkwwkkkwwk.','.kwwkkkwwkkkwwk.','.kwwwwwwwwwwwwk.','..kwwkwwwwkwwk..','...wwwwwwwwww...','...wwwwkkwwww...','...ww.kk.kk.ww..','...w..kk..kk.w..','................','................'],
+  bonbon:['................','..ll........ll..','..lll......lll..','..llllllllllll..','.llbbbbbbbbbbll.','.lbbbbbbbbbbbbbl','.lbwwebbbbwewbl.','.lbwpebbbbwepbl.','.lbbbbbbbbbbbbbl','..lbbpbbbbpbbl..','...bbbbbbbbbb...','...bbbbbbbbbb...','...bb.ll.ll.bb..','...bb..ll..bb...','................','................'],
+  canpig:['................','..p..........p..','..pp........pp..','..pppppppppppp..','.ppbbbbbbbbbbpp.','.pbbbbbbbbbbbbp.','.pbwwebbbbwewbp.','.pbwpebbbbwepbp.','.pbbbbbbbbbbbbp.','..pbbpbbbbpbbp..','...bbbbbbbbbb...','..bbbbbbbbbbbb..','..bb.pppppp.bb..','..b..pppppp..b..','................','................'],
+  pigeon:['................','.....gggggg.....','....gwwwwwwg....','...gwwbbwwwwg...','..gwwbbwwwwwwg..','..gwwebbbbbeeg..','...gwbbwwbbwg...','....gwwwwwwg....','.....gggggg.....','......gggg......','......gggg......','.....gg..gg.....','.....g....g.....','................','................','................'],
+  bug:['................','...o........o...','..oao......oao..','..oaao....oao...','...oaoooooao....','..ooobbbbbooo...','.obbwweewwbbbo..','.obbbbbbbbbbo...','..oobbbbbboo....','....ooboo.......','.....oobbo......','......oobbo.....','.......oobo.....','........oo......','................','................'],
+  tengu:['................','....a......a....','...aa......aa...','...aaaa..aaaa...','..aaaaaaaaaaaa..','.aabbbbbbbbbbaa.','.abwwebbbbwewba.','.abwpebbbbwepba.','.abbbbbbbbbbbba.','..abbbpppbbbba..','...bbbbbbbbbb...','...bbbbbbbbbb...','...aa.bb.bb.aa..','................','................','................'],
+  peanut:['................','....a......a....','...aa......aa...','...aaaaaaaaaa...','..abbbbbbbbbba..','.abbbbbbbbbbbba.','.abwwebbbbewbаа.','.abwpebbbbewbаа.','.abbbbbbbbbbbba.','..abbbbbbbbbba..','...bbbbbbbbbb...','...bbbbbbbbbb...','...aa.bb.bb.aa..','................','................','................'],
+  snow:['................','.....wwwwww.....','....wwwwwwww....','...wwwwwwwwww...','..wwwwwkkwwwww..','..wwwwkkkkwwww..','..wwwwkkkkwwww..','..wweewwwweeww..','..wwwwkwwkwwww..','...wwwwwwwwww...','...wwwwwwwwww...','...ww.ww.ww.ww..','...ww..ww..ww...','................','................','................'],
+  officer:['................','..hh........hh..','..hhh......hhh..','..hhhhhhhhhhhh..','.hhbbbbbbbbbbhh.','.hbbbbbbbbbbbbh.','.hbwwebbbwewwbh.','.hbwpebbbwepwbh.','.haaaaaaaaabbh..','..hbbpbbbbpbbh..','...bbbbbbbbbb...','...bbbbbbbbbb...','...bb.hh.hh.bb..','...bb..hh..bb...','................','................'],
+  blani:['................','.......f........','......fff.......','.....fffff......','....fffffff.....','...fffffffff....','..ffyfffffyff...','..ffffffffff....','..ffffffyfff....','...ffffffff.....','....ffffff......','.....ffff.......','................','................','................','................'],
+  rosemary:['................','..ee........ee..','..eee......eee..','..hhhhhhhhhhhh..','.hhbbbbbbbbbbhh.','.hbbbbbbbbbbbbh.','.hbwwbbbbbbbwbh.','.hbpebbbbbbe pbh','.hbbbbbbbbbbbbh.','..hbbbbbbbbbbh..','...hbhbhbhbhb...','...h.b.h.b.h....','................','................','................','................'],
+  discount:['................','....aaaaaa......','...ayyyyyyaa....','..ayyyyyyyyyа...','..aykkkkkkkya...','..aykwwwwkkya...','..aykwkkkkkkya..','..aykkkkkkkya...','..ayyyyyyyyyа...','...ayyyyyyyya...','....aaaaaaaa....','................','................','................','................','................'],
+  pepper:['................','....r......r....','...rr......rr...','...rrrrrrrrrr...','..rbbbbbbbbbbr..','..rbbbbbbbbbbr..','..rbwwebbweebr..','..rbwpebbwepbr..','..rbbbbbbbbbr...','...rbbppppbr....','...bbbbbbbbbb...','...bbbbbbbbbb...','...rr.bb.bb.rr..','................','................','................'],
+  roachy:['................','..k..........k..','.kkk.ooooo..kkk.','..kkobbbbbo.kk..','..oobbbbbbboo...','.oobbeebbeeboo..','.obbbbbbbbbbbo..','.obbbbbbbbbbbo..','.oobbbbbbbbboo..','..o.obbo.obbo...','....o.bo..o.bo..','...o..bo...o.bо.','......o.....o...','................','................','................'],
+  chillycube:['................','..oooooooooooo..','..obbbbbbbbbbo..','..obbbbbbbbbbo..','..obwwebbweebo..','..obwpebbwepbo..','..obbbbbbbbbbo..','..obbbbbbbbbbo..','..obbbbbbbbbbo..','..obbbbbbbbbbo..','..oooooooooooo..','................','................','................','................','................'],
+  mechachilly:['................','..mm........mm..','..mmm......mmm..','..mmmmmmmmmmmm..','.mmbbbbbbbbbbmm.','.mbbbbbbbbbbbbm.','.mbeebbbbeebbm..','.mbeebbbbeebbм..','.mbbbbbbbbbbbbm.','..mbbeebeebbmm..','...bbbbbbbbbb...','...bbbbbbbbbb...','...mm.bb.bb.mm..','................','................','................'],
+  tap:['................','....aaaaaaaa....','...awwwwwwwa....','..awwbbbbbwwa...','..awbwewwbwwa...','..awbbbbbbbwa...','..awwwwwwwwa....','...awwwwwwa.....','....aaaaaa......','................','................','................','................','................','................','................'],
+  monki:['................','..kk........kk..','..kkk......kkk..','..kkbbbbbbbbkk..','.kkbbbbbbbbbbkk.','.kbbwwebbweebbk.','.kbbwpebbwepbbk.','.kbbbbbbbbbbbbk.','..kbbppppppbbk..','...bbbbbbbbbb...','...bbbbbbbbbb...','...bb.bb.bb.bb..','...bb..bb..bb...','................','................','................'],
+  douwa:['................','....yyyyyyyy....','...ywwwwwwwwy...','..ywwbbbbbbwwy..','..ywbbbbbbbbwy..','..ybwewbbbwewy..','..ybbbbbbbbby...','..ybbbppppbbby..','...ywwwwwwwwy...','....yyyyyyyy....','...y.y.y.y.y.y..','..y..y.y.y..y...','................','................','................','................'],
+  laicai:['................','...r........r...','..rr........rr..','..rrrrrrrrrrrr..','.rrbbbbbbbbbbrr.','.rbwwebbbbewbrr.','.rbwpebbbbewbrr.','.rrbbbbbbbbbbrr.','..rrbbppppbbrr..','...rrrrrrrrrr...','...rbbbbbbbbr...','...rrrrrrrrrr...','...r..rrrr..r...','................','................','................'],
+  toastie:['................','..aaaaaaaaaaaa..','.abbbbbbbbbbbba.','.abwwebbbbewbba.','.abwpebbbbewbba.','.abbbbbbbbbbbba.','.abbbbbbbbbbbba.','.aaaaaaaaaaaaaa.','..aaaaaaaaaaaa..','...a.a.a.a.a.a..','................','................','................','................','................','................'],
+  drill:['................','.....kkkkkk.....','....kkbbbbkk....','...kkbbbbbbkk...','...kbbbwwbbbk...','...kbbbeebbbk...','...kkbbbbbbkk...','....kkbbbbkk....','.....kkkkkk.....','....dd....dd....','...ddd....ddd...','................','................','................','................','................'],
+  kapikapi:['................','..ee........ee..','..eee......eee..','..eeeeeeeeeeee..','.eebbbbbbbbbbee.','.ebbbbbbbbbbbbbe','.ebkkbbbbbbkkbbe','.ebkkbbbbbbkkbbe','.ebbbbbbbbbbbbbe','..eebbbbbbbbee..','...bbbbbbbbbb...','...bbbbbbbbbb...','...ee......ee...','................','................','................'],
+  mahhmot:['................','....a......a....','...aa......aa...','...aaaaaaaaaa...','..abbbbbbbbbba..','.abbbbbbbbbbbba.','.abbkkkkkkkkbba.','.abbkwwkkwwkbba.','.abbkkkkkkkkbba.','..abbbkkkkbbba..','...bbbbbbbbbb...','...bbbbbbbbbb...','...aa.bb.bb.aa..','................','................','................'],
+  zongzibro:['................','....t......t....','...tt......tt...','...tttttttttt...','..tbbbbbbbbbtt..','..tbbbbbbbbbbt..','..tbbwweewwbbt..','..tbbwpeepwbbt..','..tbbbbbbbbbbt..','...tbbppppbbt...','...tbbbbbbbbtt..','...ttbbbbbbtt...','....tt....tt....','................','................','................'],
+  slimy:['................','................','......gggg......','....ggbbbbgg....','...gbbbbbbbbg...','..gbbbbbbbbbbg..','..gbwwebbweebg..','..gbwpebbwepbg..','..gbbbbbbbbbbg..','..gbbbbbbbbbbg..','...gbbbbbbbbg...','....ggbbbbgg....','......gggg......','................','................','................'],
+  meower:['................','..ff........ff..','..fff......fff..','..ffffffffff....','.ffbbbbbbbbff...','.fbwwebbweebf...','.fbwpebbwepbf...','.ffbbbbbbbbff...','..ffbbppbbff....','...ffbbbbff.....','....ffffff......','.....ffff.......','................','................','................','................'],
+  fortune:['................','....y......y....','...yy......yy...','...yyyyyyyyyy...','..ybbbbbbbbbby..','.ybbbbbbbbbbbby.','.ybbkkkkkkkkbby.','.ybbkwwkkwwkbby.','.ybbkkkkkkkkbby.','..ybbkkkkkkbby..','...bbbbbbbbbb...','...bbbbbbbbbb...','...yy.bb.bb.yy..','................','................','................']
+};
+const SK_COL={
+  chilly:{o:'#2b1a10',h:'#e0883c',b:'#f2a45c',w:'#ffffff',e:'#2b1a10',p:'#2b1a10'},
+  buddy:{o:'#3a2415',a:'#8b5a3a',b:'#c99a63',w:'#ffffff',e:'#2b1a10',p:'#2b1a10'},
+  hamm:{o:'#5c2a34',p:'#ff9ad5',b:'#ffb8d8',w:'#ffffff',e:'#2b1a10'},
+  blue:{o:'#145c33',b:'#4ade80',w:'#ffffff',e:'#145c33'},
+  robo:{o:'#3a4150',m:'#8b93a7',b:'#c4ccd8',e:'#38bdf8',a:'#ff5d5d'},
+  panda:{o:'#2b2b2b',k:'#2b2b2b',w:'#f6f6f6'},
+  bonbon:{o:'#5b3a5a',l:'#ffffff',b:'#f0b8d8',w:'#ffffff',e:'#2b1a2b'},
+  canpig:{o:'#5c2a34',p:'#ff9ad5',b:'#ffc0e0',w:'#ffffff',e:'#2b1a10'},
+  pigeon:{o:'#4a5568',g:'#8b93a7',w:'#e8eef5',b:'#5b6b8a',e:'#2b3140'},
+  bug:{o:'#3a2a12',a:'#c8a06a',b:'#6b8f3a',w:'#ffe066',e:'#3a2a12'},
+  tengu:{o:'#5c2a2a',a:'#e8452f',b:'#c99a63',w:'#ffffff',e:'#2b1a10'},
+  peanut:{o:'#6b4a1c',a:'#c8a06a',b:'#e8c08a',w:'#ffffff',e:'#3a2412'},
+  snow:{o:'#5b6b8a',w:'#eef6ff',k:'#c8a06a',e:'#2b3140'},
+  officer:{o:'#2b1a10',h:'#e0883c',b:'#f2a45c',a:'#3a5a9a',w:'#ffffff',e:'#2b1a10'},
+  blani:{o:'#7a2f10',f:'#ff9f43',y:'#ffe066'},
+  rosemary:{o:'#3a2a4a',h:'#8b93a7',b:'#c4ccd8',e:'#6b2a5a',w:'#ffffff'},
+  discount:{o:'#6b5a1c',a:'#ffd166',y:'#ffe9a8',k:'#8b6b2a',w:'#ffffff'},
+  pepper:{o:'#5c1a1a',r:'#e8452f',b:'#ff9f7a',w:'#ffffff',e:'#2b1a10'},
+  roachy:{o:'#2b2a12',k:'#5b6b3a',b:'#8b9a4a',e:'#ffe066'},
+  chillycube:{o:'#1f4a52',b:'#7ad8e8',w:'#ffffff',e:'#1f4a52'},
+  mechachilly:{o:'#2b3140',m:'#5b6b8a',b:'#a8b4c4',e:'#38bdf8'},
+  tap:{o:'#5b3a12',a:'#ffd166',b:'#8b6b2a',w:'#fff3c4',e:'#2b1a10'},
+  monki:{o:'#3a2412',k:'#8b5a3a',b:'#c99a63',w:'#ffffff',e:'#2b1a10'},
+  douwa:{o:'#6b5a1c',y:'#ffd166',b:'#c8a06a',w:'#ffffff',e:'#2b1a10'},
+  laicai:{o:'#5c1a1a',r:'#e8452f',b:'#ff9f7a',w:'#ffffff',e:'#2b1a10'},
+  toastie:{o:'#6b4a1c',a:'#e8c08a',b:'#fff0c8',w:'#ffffff',e:'#3a2412'},
+  drill:{o:'#2b3140',k:'#5b6b8a',b:'#a8b4c4',d:'#8b6b3a',e:'#38bdf8'},
+  kapikapi:{o:'#5c3a12',e:'#8b6b3a',b:'#8b6b3a',k:'#3a2412'},
+  mahhmot:{o:'#2b1a12',a:'#8b6b3a',b:'#5b4a3a',k:'#2b1a10',w:'#ffe066'},
+  zongzibro:{o:'#1f4a33',t:'#2b6b4a',b:'#4a8f5f',w:'#ffffff',e:'#1f2a1a'},
+  slimy:{o:'#145c33',g:'#4ade80',b:'#7ddc8f',w:'#ffffff',e:'#145c33'},
+  meower:{o:'#4a5568',f:'#8b93a7',b:'#c4ccd8',w:'#ffffff',e:'#2b3140'},
+  fortune:{o:'#6b5a1c',y:'#ffd166',b:'#fff0b8',k:'#8b6b2a',w:'#ffffff'}
+};
+const SK_NAMES={chilly:'Chilly — кот',buddy:'Buddy — пёс',hamm:'Hamm — свинка',blue:'Blue — слайм',robo:'Robo — робот',panda:'Panda — панда',bonbon:'BonBon — кролик',canpig:"Can'bellied Pig — свинка",pigeon:'Pigeon — голубь',bug:'Inherited Bug — жук',tengu:'Mini Tengu — тэнгу',peanut:'Peanut — арахис',snow:'Snow — снежок',officer:'Officer Chilly — кот-офицер',blani:'Blani — огонёк',rosemary:'Rosemary Cat — кот-призрак',discount:'10% Off — скидка',pepper:'Director Pepper — директор',roachy:'Glitchy Roachy — глюк-жук',chillycube:'Chilly Cube — кубик',mechachilly:'Mecha Chilly — меха-кот',tap:'Tap — тап',monki:'Mad Monki — обезьяна',douwa:'Douwa — дува',laicai:'Lai Cai — Лай Цай',toastie:'Toastie — тостик',drill:'Lil Drillmaster — бурильщик',kapikapi:'Kapikapi — капибара',mahhmot:'Mahhmot — махмот',zongzibro:'Zongzi Bro — цзунцзы-брат',slimy:'Slimy — слизень',meower:'Meower — мяуэр',fortune:'Full Of Fortune — золотая свинья'};
+
 // --------------------------------------------------------------- rendering
 function shade(hex,amt){
   const h6=String(hex).replace('#','');
@@ -373,8 +519,31 @@ function grid(key,frame){
   });
   return g;
 }
+function customGrid(key,frame){
+  const sk=SK_ART[key];
+  const rows=sk||CUSTOM[key];if(!rows)return null;
+  const pal=(sk?SK_COL[key]:CUSTOM_COL[key])||{};
+  const g=[];
+  for(let y=0;y<16;y++){
+    const row=rows[y]||'................';
+    g.push(row.split('').map(ch=>ch==='.'?null:(pal[ch]||pal.b||'#888888')));
+  }
+  // frame 1: close the eyes (blink); frame 2: sparkle above the head
+  if(frame===1){
+    for(let y=0;y<16;y++)for(let x=0;x<16;x++){
+      const c=g[y][x];
+      if(c&&(c===pal.w||c===pal.e))g[y][x]=pal.e||'#222';
+    }
+  }
+  if(frame===2){
+    for(const [x,y,ch] of [[2,1,'w'],[13,1,'w'],[7,0,'w'],[9,0,'w']]){
+      if(g[y]&&g[y][x]===null&&pal[ch])g[y][x]=pal[ch];
+    }
+  }
+  return g;
+}
 function svgFor(key,frame,size){
-  const g=grid(key,frame);
+  const g=customGrid(key,frame)||grid(key,frame);
   const px=size/SIZE;
   const byColor=new Map();
   for(let y=0;y<SIZE;y++)for(let x=0;x<SIZE;x++){
@@ -391,9 +560,10 @@ function svgFor(key,frame,size){
   return '<svg viewBox="0 0 16 16" width="'+size+'" height="'+size+'" shape-rendering="crispEdges">'+out+'</svg>';
 }
 O.mascotSvg=svgFor;
-const ORDER=['deepseek','claude','anime','hacker_cat','fox','penguin','capybara','shiba','hamster','octopus','axolotl','dragon','phoenix','frog','ninja_penguin','robo_cat','robo_dog','drone','android','term_ghost','ghost','demon','samurai','ninja','mage','witch','alchemist','knight','slime','goblin','gnome','elf','orc','troll','unicorn','pegasus','griffin','cerberus','chimera','minotaur','centaur','mermaid','siren','harpy','guardian','cherub','astronaut','alien','ufo','spacecat','star','moon','sun','golem'];
+const SK_ORDER=['chilly','buddy','hamm','blue','robo','panda','bonbon','canpig','pigeon','bug','tengu','peanut','snow','officer','blani','rosemary','discount','pepper','roachy','chillycube','mechachilly','tap','monki','douwa','laicai','toastie','drill','kapikapi','mahhmot','zongzibro','slimy','meower','fortune'];
+const ORDER=['deepseek','claude','anime','hacker_cat','fox','penguin','capybara','shiba','hamster','octopus','axolotl','dragon','phoenix','frog','ninja_penguin','robo_cat','robo_dog','drone','android','term_ghost','ghost','demon','samurai','ninja','mage','witch','alchemist','knight','slime','goblin','gnome','elf','orc','troll','unicorn','pegasus','griffin','cerberus','chimera','minotaur','centaur','mermaid','siren','harpy','guardian','cherub','astronaut','alien','ufo','spacecat','star','moon','sun','golem'].concat(SK_ORDER);
 const NAME={deepseek:'DeepSeek кит',claude:'Claude искра',anime:'Аниме-девушка',hacker_cat:'Кот-хакер',fox:'Лисёнок',penguin:'Пингвин',capybara:'Капибара',shiba:'Шиба-ину',hamster:'Хомяк',octopus:'Осьминог',axolotl:'Аксолотль',dragon:'Дракончик',phoenix:'Феникс',frog:'Лягушка',ninja_penguin:'Пингвин-ниндзя',robo_cat:'Робот-кот',robo_dog:'Робот-собака',drone:'Дрон',android:'Андроид',term_ghost:'Терминал-дух',ghost:'Призрак',demon:'Демонёнок',samurai:'Самурай',ninja:'Ниндзя',mage:'Маг',witch:'Ведьмочка',alchemist:'Алхимик',knight:'Рыцарь',slime:'Слайм',goblin:'Гоблин',gnome:'Гном',elf:'Эльф',orc:'Орк',troll:'Тролль',unicorn:'Единорог',pegasus:'Пегас',griffin:'Грифон',cerberus:'Цербер',chimera:'Химера',minotaur:'Минотавр',centaur:'Кентавр',mermaid:'Русалка',siren:'Сирена',harpy:'Гарпия',guardian:'Ангел-хранитель',cherub:'Херувим',astronaut:'Астронавт',alien:'Инопланетянин',ufo:'НЛО',spacecat:'Космокот',star:'Звёздочка',moon:'Луна',sun:'Солнышко',golem:'Голем'};
-O.mascotName=k=>NAME[k]||k;
+O.mascotName=k=>NAME[k]||SK_NAMES[k]||k;
 
 // emotes (SVG only, no emoji)
 const EMOTE={
@@ -415,7 +585,7 @@ function html(key,fr,size){
   cache.set(k,v);return v;
 }
 function renderSprite(){
-  const sp=S.opts.mascot&&PAL[S.opts.mascot]?S.opts.mascot:'deepseek';
+  const sp=S.opts.mascot&&(PAL[S.opts.mascot]||SK_ART[S.opts.mascot])?S.opts.mascot:'deepseek';
   sprite.innerHTML=html(sp,frame%3,S.opts.mascotSize||44);
   el.dataset.state=state;el.dataset.species=sp;
   if(emoteEl)emoteEl.innerHTML=emoteSvg(state);
@@ -503,24 +673,31 @@ function mascotMenu(){
 }
 O.openMascotSettings=()=>{
   const body=h('div');
+  const gridFor=keys=>{
+    const grid=h('div',{class:'mascot-grid'});
+    keys.forEach(k=>{
+      const prev=h('div',{class:'mascot-prev'+(S.opts.mascot===k?' on':''),title:O.mascotName(k),
+        html:svgFor(k,0,44)+'<span>'+O.esc(O.mascotName(k))+'</span>'});
+      prev.onclick=()=>{S.opts.mascot=k;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()};
+      grid.append(prev);
+    });
+    return grid;
+  };
   const draw=()=>{
     body.textContent='';
     body.append(
       O.toggleRow('bot',O.tr('Show mascot','Показывать маскота'),O.tr('A pixel companion above the composer','Пиксельный компаньон над полем ввода'),
         S.opts.mascotOn!==false,v=>{S.opts.mascotOn=v;O.saveOpts();O.mascotRefresh&&O.mascotRefresh()}),
       h('div',{class:'grp'},O.tr('Size','Размер')),
-      h('div',{class:'seg'},[28,36,44,56,72].map(n=>h('button',{class:S.opts.mascotSize===n?'on':'',
+      h('div',{class:'seg'},[28,36,44,56,72,96].map(n=>h('button',{class:S.opts.mascotSize===n?'on':'',
         onclick:()=>{S.opts.mascotSize=n;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()}},n+'px'))),
-      h('div',{class:'grp'},O.tr('Species','Вид')+' ('+ORDER.length+')')
+      h('div',{class:'grp'},O.tr('Assistants','Ассистенты')),
+      gridFor(['deepseek','claude','anime']),
+      h('div',{class:'grp'},O.tr('Creatures','Существа')+' ('+(ORDER.length-SK_ORDER.length-3)+')'),
+      gridFor(ORDER.filter(k=>SK_NAMES[k]===undefined).slice(3)),
+      h('div',{class:'grp'},O.tr('Soul Knight pets','Питомцы Soul Knight')+' ('+SK_ORDER.length+')'),
+      gridFor(SK_ORDER)
     );
-    const grid=h('div',{class:'mascot-grid'});
-    ORDER.forEach(k=>{
-      const prev=h('div',{class:'mascot-prev'+(S.opts.mascot===k?' on':''),title:O.mascotName(k),
-        html:svgFor(k,0,44)+'<span>'+O.esc(O.mascotName(k))+'</span>'});
-      prev.onclick=()=>{S.opts.mascot=k;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()};
-      grid.append(prev);
-    });
-    body.append(grid);
   };
   draw();
   O.sheet(O.tr('Mascot','Маскот'),body,{full:true});

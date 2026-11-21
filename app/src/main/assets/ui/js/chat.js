@@ -116,8 +116,10 @@ O.chatInit=root=>{
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,stickyEl,jumpEl);
   root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,mmFloatBtn,comp);
-  // Pixel mascot lives in the chat layer so it can be dragged anywhere (incl. above the input).
-  if(O.mascotInit){try{O.mascotInit(wrap)}catch(e){console.error('mascot',e)}}
+  // FIX (mascot fell into the composer): it used to be a child of the scrollable #msgs wrapper,
+  // so typing (which reflows/scrolls the list) shifted and clipped it under the input. It now
+  // lives in the chat pane itself, above everything, and only moves when dragged.
+  if(O.mascotInit){try{O.mascotInit(root)}catch(e){console.error('mascot',e)}}
   bus.on('open',()=>{renderAll()});
   // Live-resync snapshot: merge into the DOM incrementally. NEVER force-scroll here — the user
   // may be reading far above; only follow when already glued to the bottom.
