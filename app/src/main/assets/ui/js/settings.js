@@ -31,10 +31,28 @@ O.openSettings=()=>{
   const quick=h('div',{class:'settings-quick'});
   const body=h('div',null,sq,quick,tabs,panes.main,panes.agent,panes.system);
   const s=O.sheet(O.tr('Settings','Настройки'),body,{hud:true});
+  const ORDER=['main','agent','system'];
+  let curPane='main';
   const show=pane=>{
-    ['main','agent','system'].forEach(k=>{panes[k].classList.toggle('hide',k!==pane)});
+    curPane=pane;
+    ORDER.forEach(k=>{panes[k].classList.toggle('hide',k!==pane)});
     tabs.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.pane===pane));
+    // intuitive: a short slide-in tells the eye which direction the tab moved
+    const p=panes[pane];
+    p.classList.remove('pane-slide');void p.offsetWidth;p.classList.add('pane-slide');
   };
+  // Swipe left/right anywhere on the settings body switches tabs (search mode excluded).
+  O.swipe(body,d=>{
+    if(sq.value.trim())return; // searching shows all tabs at once — no swipe nav
+    const i=ORDER.indexOf(curPane);
+    if(d==='left'&&i<ORDER.length-1){show(ORDER[i+1])}
+    else if(d==='right'&&i>0){show(ORDER[i-1])}
+  },{threshold:56});
+  // one-time hint that tabs are swipeable
+  if(!O.store.get('settingsSwipeHint',false)){
+    O.store.set('settingsSwipeHint',true);
+    setTimeout(()=>O.toast(O.tr('Swipe left/right to switch tabs','Свайп влево/вправо — переключение вкладок'),2600),600);
+  }
   [['main',O.tr('Main','Основное')],['agent',O.tr('Agent','Агент')],['system',O.tr('System','Система')]]
     .forEach(([k,label])=>tabs.append(h('button',{'data-pane':k,onclick:()=>{sq.value='';filterSettings('');show(k)}},label)));
   show('main');
@@ -53,6 +71,7 @@ O.openSettings=()=>{
     const all=[panes.main,panes.agent,panes.system];
     if(!needle){
       quick.classList.remove('hide');tabs.classList.remove('hide');
+      const cnt0=body.querySelector('.settings-count');if(cnt0)cnt0.textContent='';
       all.forEach(p=>{[...p.children].forEach(c=>c.classList.remove('hide'));
         p.querySelectorAll('.settings-row').forEach(r=>r.classList.remove('hide'));
         p.querySelectorAll('.settings-card').forEach(c=>c.classList.remove('hide'))});
@@ -61,7 +80,7 @@ O.openSettings=()=>{
       return;
     }
     quick.classList.add('hide');tabs.classList.add('hide');
-    let any=false;
+    let any=false,hits=0;
     all.forEach(p=>{
       p.classList.remove('hide');
       let paneHas=false;
@@ -72,7 +91,7 @@ O.openSettings=()=>{
             const txt=(r.textContent||'').toLowerCase();
             const hit=txt.includes(needle);
             r.classList.toggle('hide',!hit);
-            if(hit)cardHas=true;
+            if(hit){cardHas=true;hits++}
           });
           block.classList.toggle('hide',!cardHas);
           if(cardHas)paneHas=true;
@@ -82,6 +101,10 @@ O.openSettings=()=>{
       });
       if(paneHas)any=true;else p.classList.add('hide');
     });
+    // intuitive: show how many settings matched, right under the search field
+    let cnt=body.querySelector('.settings-count');
+    if(!cnt){cnt=h('div',{class:'settings-count mut s'});sq.after(cnt)}
+    cnt.textContent=hits?O.tr(hits+' settings found','Найдено настроек: '+hits):'';
     let none=body.querySelector('.settings-none');
     if(!any){if(!none){none=h('div',{class:'note settings-none'},O.tr('Nothing found','Ничего не найдено'));body.append(none)}}
     else if(none)none.remove();
@@ -1016,6 +1039,48 @@ O.getActiveJailbreakIds=()=>{
   return new Set();
 };
 
+// ---- per-session jailbreaks: override the global set for ONE chat only ----
+O.sessionJbIds=sid=>{
+  const m=O.store.get('sessionJailbreaks',{});
+  const v=m[sid||S.sid];
+  return Array.isArray(v)?new Set(v):null; // null = follow global
+};
+O.setSessionJb=(sid,ids)=>{
+  const m=O.store.get('sessionJailbreaks',{});
+  if(ids===null)delete m[sid];else m[sid]=Array.from(ids);
+  O.store.set('sessionJailbreaks',m);
+  if(O.updateReadmeForModel)O.updateReadmeForModel(S.model?S.model.modelID:null);
+  bus.emit('sessionJb');
+};
+O.openSessionJailbreaks=sid=>{
+  sid=sid||S.sid;
+  if(!sid)return O.toast(O.tr('Open a session first','Сначала откройте сессию'),2000);
+  const all=O.getJailbreaks();
+  const body=h('div');
+  const draw=()=>{
+    body.textContent='';
+    const cur=O.sessionJbIds(sid);
+    body.append(h('div',{class:'note'},cur
+      ?O.tr('This chat uses ITS OWN jailbreak set. Other chats keep the global one.','Этот чат использует СВОЙ набор джейлбрейков. Остальные чаты — глобальный.')
+      :O.tr('This chat follows the global jailbreak set. Toggle any below to make it session-only.','Этот чат следует глобальному набору. Переключите любой ниже — и набор станет только для этой сессии.')));
+    if(!all.length)body.append(h('div',{class:'note'},O.tr('No custom jailbreaks yet — create one in Settings → Agent.','Своих джейлбрейков пока нет — создайте в Настройки → Агент.')));
+    all.forEach(j=>{
+      const on=cur?cur.has(j.id):O.isJailbreakActive(j.id);
+      body.append(O.toggleRow('shield',j.title+(j.model&&j.model!=='Все модели'?' · '+j.model:''),
+        (j.prompt||'').slice(0,80),on,v=>{
+          const base=O.sessionJbIds(sid)||O.getActiveJailbreakIds();
+          const next=new Set(base);
+          v?next.add(j.id):next.delete(j.id);
+          O.setSessionJb(sid,next);
+          draw();
+        }));
+    });
+    if(cur)body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{O.setSessionJb(sid,null);draw();O.toast(O.tr('Back to global set','Снова глобальный набор'),1600)}},O.icon('undo'),O.tr('Use global set','Использовать глобальный набор')));
+  };
+  draw();
+  O.sheet(O.tr('Jailbreaks for this chat','Джейлбрейки этого чата'),body,{full:true});
+};
+
 O.isJailbreakActive=id=>O.getActiveJailbreakIds().has(id);
 
 O.toggleJailbreak=id=>{
@@ -1033,7 +1098,9 @@ O.toggleJailbreak=id=>{
 };
 
 O.getActiveJailbreaks=currentModelID=>{
-  const activeIds=O.getActiveJailbreakIds();
+  // per-session override wins over the global set (only for the ACTIVE session)
+  const sess=O.sessionJbIds?O.sessionJbIds(S.sid):null;
+  const activeIds=sess||O.getActiveJailbreakIds();
   if(!activeIds.size)return [];
   const all=O.getJailbreaks();
   return all.filter(j=>activeIds.has(j.id)&&(

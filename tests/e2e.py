@@ -1239,6 +1239,58 @@ try:
       return {caps,parts:parts.length,txt:parts.map(p=>p.text||'').join(' ')};
     }""")
     chk('blind fallback produces text or skips for vision model',fb['caps'] or ('ЭКРАННЫЙ ТЕКСТ' in fb['txt']))
+    # ---- 2.23.1: settings swipe + per-session jailbreaks ----
+    sw=pg.evaluate("""()=>{
+      OCM.openSettings();
+      const sh=[...document.querySelectorAll('.sheet')].pop();
+      // the swipe listener lives on the inner body (parent of the tabs), not on .sh-b
+      const body=sh.querySelector('.settings-tabs').parentNode;
+      const mk=(type,x,y)=>{const t=new Touch({identifier:1,target:body,clientX:x,clientY:y});
+        body.dispatchEvent(new TouchEvent(type,{touches:type==='touchend'?[]:[t],changedTouches:[t],bubbles:true,cancelable:true}))};
+      mk('touchstart',300,300);mk('touchend',120,305);
+      const agentOn=[...sh.querySelectorAll('.settings-tabs button')].find(b=>b.dataset.pane==='agent').classList.contains('on');
+      mk('touchstart',120,300);mk('touchend',300,305);
+      const mainOn=[...sh.querySelectorAll('.settings-tabs button')].find(b=>b.dataset.pane==='main').classList.contains('on');
+      OCM.back();
+      return {agentOn,mainOn};
+    }""")
+    chk('settings: swipe left -> agent tab',sw['agentOn'])
+    chk('settings: swipe right -> main tab',sw['mainOn'])
+    # search hit counter (wait for the closed sheet to detach so selectors hit the live one)
+    pg.wait_for_timeout(350)
+    pg.evaluate("OCM.openSettings()")
+    pg.wait_for_timeout(200)
+    pg.evaluate("""()=>{
+      const sh=[...document.querySelectorAll('.sheet')].pop();
+      const sq=sh.querySelector('.settings-search');
+      sq.value='бэкап';sq.dispatchEvent(new Event('input'));
+    }""")
+    pg.wait_for_timeout(250)
+    cnt=pg.evaluate("(()=>{const sh=[...document.querySelectorAll('.sheet')].pop();return (sh.querySelector('.settings-count')||{}).textContent||''})()")
+    chk('settings: search shows hit count','Найдено' in cnt or 'found' in cnt)
+    pg.evaluate("OCM.back()")
+    # per-session jailbreak override
+    sjb=pg.evaluate("""()=>{
+      const l=OCM.store.get('custom_jailbreaks',[]);
+      l.push({id:'jb_t1',title:'Тест JB',prompt:'правило JB',model:'Все модели'});
+      OCM.store.set('custom_jailbreaks',l);
+      const sid=OCM.S.sid||'ses_1';
+      OCM.setSessionJb(sid,new Set(['jb_t1']));
+      const own=OCM.getActiveJailbreaks().some(j=>j.id==='jb_t1');
+      const ids=OCM.sessionJbIds(sid);
+      // other sessions unaffected: switch sid, global set has no jb_t1
+      const other=OCM.sessionJbIds('ses_other');
+      OCM.openSessionJailbreaks(sid);
+      const sheet=[...document.querySelectorAll('.sheet')].some(s=>s.textContent.includes('Джейлбрейки этого чата'));
+      OCM.back();
+      OCM.setSessionJb(sid,null);
+      const cleared=OCM.sessionJbIds(sid)===null;
+      return {own,has:ids&&ids.has('jb_t1'),otherNull:other===null,sheet,cleared};
+    }""")
+    chk('session jailbreak overrides global',sjb['own'] and sjb['has'])
+    chk('other sessions keep global set',sjb['otherNull'])
+    chk('session jailbreak sheet opens',sjb['sheet'])
+    chk('session jailbreak clears to global',sjb['cleared'])
     pg.wait_for_timeout(350)
     # ---- MM: approval gate + stage retry helpers ----
     mmx=pg.evaluate("""()=>{
