@@ -3957,3 +3957,8 @@ html.night-lamp #msgs { filter: brightness(.92) sepia(.14); }
   0% { transform: scale(1.16,.78) } 45% { transform: scale(.94,1.08) } 100% { transform: none }
 }
 .mascot.flip .mascot-sprite { transform: scaleX(-1); }
+/* walking is smooth: the state bob must not fight the horizontal movement */
+.mascot[data-placed="1"][data-state="idle"] .mascot-sprite,
+.mascot[data-placed="1"][data-state="thinking"] .mascot-sprite,
+.mascot[data-placed="1"][data-state="writing"] .mascot-sprite { animation: none; }
+.mascot .mascot-sprite { transition: transform .18s var(--ease-out); }

@@ -736,7 +736,7 @@ try:
       return new Promise(res=>setTimeout(()=>{
         const landed=parseFloat(el.style.top)||0;
         res({before,lifted,landed,missing:false});
-      },900));
+      },2600));
     }""")
     chk('mascot has a gravity body',not ph.get('missing'))
     chk('mascot falls back onto the input ledge',ph['landed']>ph['lifted'])
@@ -744,13 +744,38 @@ try:
       OCM.S.status[OCM.S.sid]={type:'busy'};OCM.bus.emit('status',OCM.S.sid);
       OCM.mascotTick&&OCM.mascotTick(OCM.S.sid);
       const el=document.querySelector('.mascot');
-      const x0=parseFloat(el.style.left)||0;
-      await new Promise(r=>setTimeout(r,1200));
-      const x1=parseFloat(el.style.left)||0;
+      const xs=[];
+      for(let i=0;i<26;i++){await new Promise(r=>setTimeout(r,120));xs.push(parseFloat(el.style.left)||0)}
+      const uniq=new Set(xs.map(v=>Math.round(v)));
+      // jitter check: no direction reversals inside a single stroll beyond the endpoint
+      let rev=0;for(let i=2;i<xs.length;i++){const a=xs[i-1]-xs[i-2],b=xs[i]-xs[i-1];if(a*b<0&&Math.abs(a)>1&&Math.abs(b)>1)rev++}
       OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
-      return {x0,x1,moved:Math.abs(x1-x0)>2};
+      return {moved:uniq.size>3,reversals:rev,flip:el.classList.contains('flip')};
     }""")
-    chk('mascot paces while generating',pace['moved'])
+    chk('mascot walks on its own while generating',pace['moved'])
+    chk('walking is smooth (no jitter)',pace['reversals']<=1)
+    roam=pg.evaluate("""()=>{
+      OCM.mascotSetRoam(false);
+      const still=OCM.S.opts.mascotRoam===false;
+      OCM.mascotSetRoam(true);
+      return {still,back:OCM.S.opts.mascotRoam===true};
+    }""")
+    chk('mascot roaming can be switched off',roam['still'] and roam['back'])
+    mime=pg.evaluate("""()=>{
+      const pets=window.OCM_MASCOT_ART.pets;let ok=0,bad=0;
+      for(const k in pets){
+        const u=pets[k].uri;const m=u.slice(5,u.indexOf(';'));
+        const b64=u.split(',')[1];
+        const head=atob(b64.slice(0,16));
+        const isRiff=head.slice(0,4)==='RIFF'&&head.slice(8,12)==='WEBP';
+        const isGif=head.slice(0,3)==='GIF';
+        const declared=m==='image/webp'?'webp':m==='image/gif'?'gif':m==='image/png'?'png':'?';
+        const real=isRiff?'webp':isGif?'gif':'png';
+        if(declared===real)ok++;else bad++;
+      }
+      return {ok,bad};
+    }""")
+    chk('every pet sprite declares its real format (no black boxes)',mime['bad']==0)
 
 
     pg.evaluate("OCM.back()")

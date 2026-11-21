@@ -662,8 +662,9 @@ O.mascotTick=tick;
 //  • while the agent generates it paces left/right along the top of the input
 //  • dragging lifts it (no gravity), releasing drops it with the throw's velocity
 // ---------------------------------------------------------------------------
-const PHYS={x:0,y:0,vx:0,vy:0,ground:0,held:false,raf:0,dir:1,pacing:false};
-const GRAV=2400, BOUNCE=0.32, FRICTION=0.86, MAXV=2600;
+const PHYS={x:0,y:0,vx:0,vy:0,ground:0,held:false,raf:0,dir:1,walking:false,target:null,nextThink:0};
+// Gentler gravity: a soft arc that settles quickly instead of slamming into the ledge.
+const GRAV=1250, BOUNCE=0.18, FRICTION=0.9, MAXV=1500, WALK=52;
 
 function physBounds(){
   const pane=el&&el.parentNode;
@@ -673,8 +674,7 @@ function physBounds(){
   const kb=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--kb'))||0;
   const composerEl=document.getElementById('composer');
   const ch=composerEl?composerEl.offsetHeight:84;
-  // The ledge is the line just ABOVE the composer: the body must never cover the input.
-  const gap=10;
+  const gap=8;
   const ground=Math.max(4,Math.min(h-size-4, h-ch-kb-gap-size));
   return{x0:4,x1:Math.max(4,w-size-4),ground};
 }
@@ -685,61 +685,109 @@ function setPos(){
   el.style.top=PHYS.y+'px';
   el.dataset.placed='1';
 }
+function face(dir){
+  if(!el)return;
+  if(dir===PHYS.dir)return;
+  PHYS.dir=dir;
+  // the sprite is drawn facing right, so turning is just a horizontal flip
+  el.classList.toggle('flip',dir<0);
+}
 
+const FIXED=1/60;
 function step(){
   PHYS.raf=0;
   if(!el||!el.isConnected)return;
   const b=physBounds();
   const landing=b.ground;
   if(!PHYS.held){
-    PHYS.vy+=GRAV/60;
+    PHYS.vy+=GRAV*FIXED;
     if(PHYS.vy>MAXV)PHYS.vy=MAXV;
-    PHYS.y+=PHYS.vy/60;
-    PHYS.x+=PHYS.vx/60;
+    PHYS.y+=PHYS.vy*FIXED;
+    PHYS.x+=PHYS.vx*FIXED;
     PHYS.vx*=FRICTION;
-    if(Math.abs(PHYS.vx)<3)PHYS.vx=0;
+    if(Math.abs(PHYS.vx)<2)PHYS.vx=0;
     if(PHYS.y>=landing){
       PHYS.y=landing;
-      if(Math.abs(PHYS.vy)>240){PHYS.vy=-PHYS.vy*BOUNCE}else{PHYS.vy=0}
-      // squash on impact, then settle
-      el.classList.remove('landed');void el.offsetWidth;el.classList.add('landed');
+      if(PHYS.vy>150){PHYS.vy=-PHYS.vy*BOUNCE;el.classList.remove('landed');void el.offsetWidth;el.classList.add('landed')}
+      else{PHYS.vy=0}
     }
   }
-  if(PHYS.x<b.x0){PHYS.x=b.x0;PHYS.vx=Math.abs(PHYS.vx)*0.5}
-  if(PHYS.x>b.x1){PHYS.x=b.x1;PHYS.vx=-Math.abs(PHYS.vx)*0.5}
-  if(PHYS.y<4){PHYS.y=4;PHYS.vy=Math.abs(PHYS.vy)*0.4}
+  if(PHYS.x<b.x0){PHYS.x=b.x0;PHYS.vx=0;PHYS.dir=-1/1*0+1;face(1)}
+  if(PHYS.x>b.x1){PHYS.x=b.x1;PHYS.vx=0;face(-1)}
+  if(PHYS.y<4){PHYS.y=4;PHYS.vy=Math.abs(PHYS.vy)*0.3}
+
+  // ---- walking AI: pick a target on the ledge, face it, stroll there, then think ----
+  if(PHYS.walking&&!PHYS.held&&PHYS.vy===0){
+    if(PHYS.target==null||PHYS.x===PHYS.target||Date.now()>PHYS.nextThink){
+      chooseTarget(b);
+    }else{
+      const d=PHYS.target-PHYS.x;
+      if(Math.abs(d)<3){PHYS.x=PHYS.target;PHYS.vx=0;PHYS.nextThink=Date.now()+1200+Math.random()*2600}
+      else{face(d>0?1:-1);PHYS.vx=PHYS.dir*WALK}
+    }
+  }
   setPos();
-  const moving=PHYS.held||PHYS.vy!==0||PHYS.vx!==0||PHYS.pacing;
-  if(moving)schedulePhys();
+  if(PHYS.held||PHYS.vy!==0||PHYS.vx!==0||PHYS.walking)schedulePhys();
+}
+function chooseTarget(b){
+  const room=b.x1-b.x0;
+  if(!room||room<8){PHYS.target=null;return}
+  // never aim at the very edge (that is what made it stare into the wall)
+  const margin=Math.min(24,Math.max(8,room*0.12));
+  const lo=b.x0+margin, hi=b.x1-margin;
+  let t=lo+Math.random()*(hi-lo);
+  if(Math.abs(t-PHYS.x)<room*0.35)t=PHYS.x+(t>PHYS.x?1:-1)*room*0.45;
+  PHYS.target=Math.min(hi,Math.max(lo,t));
+  face(PHYS.target>PHYS.x?1:-1);
+  PHYS.nextThink=Date.now()+9000;   // safety net if it cannot reach the target
 }
 function schedulePhys(){
   if(PHYS.raf)return;
   PHYS.raf=requestAnimationFrame(step);
 }
 
-// Pacing: while the agent works the mascot walks back and forth over the input.
-let paceTimer=null;
-function startPacing(){
-  if(PHYS.pacing)return;
-  PHYS.pacing=true;
-  clearInterval(paceTimer);
-  const walk=()=>{
-    if(!el||!el.isConnected||!PHYS.pacing)return;
-    const b=physBounds();
-    PHYS.dir=PHYS.dir||1;
-    PHYS.vx=PHYS.dir*130;
-    if(PHYS.x>=b.x1-1){PHYS.dir=-1;el.classList.add('flip')}
-    if(PHYS.x<=b.x0+1){PHYS.dir=1;el.classList.remove('flip')}
-    schedulePhys();
-  };
-  paceTimer=setInterval(walk,220);
-  walk();
+// Walking is a WILL: the mascot decides on its own when to stroll, and generating makes it likelier.
+function startWalking(){
+  if(PHYS.walking)return;
+  PHYS.walking=true;
+  PHYS.target=null;
+  PHYS.nextThink=0;
+  schedulePhys();
 }
-function stopPacing(){
-  PHYS.pacing=false;
-  clearInterval(paceTimer);paceTimer=null;
+function stopWalking(){
+  PHYS.walking=false;
+  PHYS.target=null;
   PHYS.vx=0;
 }
+// "AI": each session gets its own temperament, so the same pet behaves differently per chat.
+let aiTimer=null,aiSeed=0;
+function personality(sid){
+  if(!sid)return 0.5;
+  let h=0;for(let i=0;i<sid.length;i++)h=(h*31+sid.charCodeAt(i))|0;
+  return Math.abs(h%100)/100;     // 0..1
+}
+function startAI(){
+  stopAI();
+  const p=personality(S.sid);
+  const tickAI=()=>{
+    if(!el||!el.isConnected||!S.sid)return;
+    if(S.opts.mascotRoam===false)return;               // user can disable roaming
+    if(PHYS.held||drag)return;                          // never walk during a drag
+    const st=S.status[S.sid];
+    const busy=!!st&&st.type!=='idle';
+    // busy → strolls often; idle → now and then; waiting → stays put and looks at you
+    const chance=busy?0.85:(O.mascotStateFor(S.sid)==='waiting'?0.05:0.18+p*0.3);
+    if(Math.random()<chance){
+      if(!PHYS.walking)startWalking();
+      chooseTarget(physBounds());
+    }else if(PHYS.walking&&!busy){
+      stopWalking();
+    }
+  };
+  tickAI();
+  aiTimer=setInterval(tickAI,4200);
+}
+function stopAI(){if(aiTimer){clearInterval(aiTimer);aiTimer=null}}
 
 O.mascotInit=parent=>{
   el=h('div',{class:'mascot',title:O.tr('Drag me · tap for options','Перетащи · тап — настройки')});
@@ -785,7 +833,7 @@ O.mascotInit=parent=>{
     const t=e.touches?e.touches[0]:e;
     const r=el.getBoundingClientRect();
     drag={ox:t.clientX-r.left,oy:t.clientY-r.top,moved:false,sx:t.clientX,sy:t.clientY,lx:t.clientX,ly:t.clientY,lt:Date.now(),vx:0,vy:0};
-    PHYS.held=true;stopPacing();PHYS.vx=0;PHYS.vy=0;
+    PHYS.held=true;stopAI();stopWalking();PHYS.vx=0;PHYS.vy=0;
     try{el.setPointerCapture&&el.setPointerCapture(e.pointerId)}catch(_){}
   };
   const onMove=e=>{
@@ -814,9 +862,10 @@ O.mascotInit=parent=>{
       // hand it back to gravity with the release velocity
       PHYS.held=false;PHYS.vx=vx;PHYS.vy=vy;
       schedulePhys();
+      if(S.sid)setTimeout(startAI,1400);
       setTimeout(()=>{if(!PHYS.held&&PHYS.vy===0)O.store.set('mascotPos',{x:PHYS.x,y:PHYS.y})},900);
       if(O.native.haptic)O.native.haptic('tick');
-      if(S.sid&&deriveFor(S.sid)!=='idle')startPacing();
+      if(S.sid)startAI();
     }else mascotMenu();
   };
   el.addEventListener('pointerdown',onDown);
@@ -835,13 +884,10 @@ O.mascotInit=parent=>{
   // switching session: restore THAT session's own mascot state
   bus.on('open',()=>{if(el)setState(O.mascotStateFor(S.sid))});
   // walk back and forth over the input while the agent is generating
-  bus.on('mascotState',(sid,st)=>{
-    if(!el||sid!==S.sid)return;
-    if(st==='thinking'||st==='writing')startPacing();
-    else if(st==='idle')stopPacing();
-  });
-  bus.on('status',()=>{const st=S.status[S.sid];if(!st||st.type==='idle')stopPacing()});
+  bus.on('mascotState',(sid,st)=>{if(!el||sid!==S.sid)return;startAI()});
+  bus.on('status',()=>{if(el)startAI()});
   bus.on('open',()=>{tick();const p=O.store.get('mascotPos',null);if(p){el.style.left=p.x+'px';el.style.top=p.y+'px'}});
+  O.mascotSetRoam=on=>{S.opts.mascotRoam=!!on;O.saveOpts();if(on)startAI();else{stopAI();stopWalking()}};
   O.mascotRefresh=()=>{
     el.style.display=S.opts.mascotOn?'':'none';
     el.style.setProperty('--ms',(S.opts.mascotSize||44)+'px');
@@ -849,13 +895,15 @@ O.mascotInit=parent=>{
     setTimeout(()=>{const b=physBounds();PHYS.y=b.ground;PHYS.x=Math.min(PHYS.x,b.x1);setPos()},40);
   };
   tick();
+  startAI();
 };
 function mascotMenu(){
   O.actions(O.mascotName(S.opts.mascot||'deepseek'),[
     {label:O.tr('Change mascot','Сменить маскота'),icon:'palette',fn:()=>O.openMascotSettings()},
     {label:O.tr('Size','Размер'),sub:(S.opts.mascotSize||44)+'px',icon:'sliders',fn:()=>O.openMascotSettings()},
     {label:S.opts.mascotOn?O.tr('Hide mascot','Скрыть маскота'):O.tr('Show mascot','Показать маскота'),icon:'eye',fn:()=>{S.opts.mascotOn=!S.opts.mascotOn;O.saveOpts();O.mascotRefresh&&O.mascotRefresh()}},
-    {label:O.tr('Reset position','Сбросить позицию'),icon:'undo',fn:()=>{O.store.remove('mascotPos');if(el){el.style.left='';el.style.top='';delete el.dataset.placed}}}
+    {label:S.opts.mascotRoam===false?O.tr('Let it walk around','Пусть гуляет'):O.tr('Keep it still','Пусть сидит на месте'),icon:'drag',fn:()=>O.mascotSetRoam&&O.mascotSetRoam(S.opts.mascotRoam===false)},
+    {label:O.tr('Reset position','Сбросить позицию'),icon:'undo',fn:()=>{O.store.remove('mascotPos');if(el){const b=physBounds();PHYS.x=b.x0+8;PHYS.y=b.ground;setPos()}}}
   ]);
 }
 O.openMascotSettings=()=>{
@@ -875,6 +923,8 @@ O.openMascotSettings=()=>{
     body.append(
       O.toggleRow('bot',O.tr('Show mascot','Показывать маскота'),O.tr('A pixel companion above the composer','Пиксельный компаньон над полем ввода'),
         S.opts.mascotOn!==false,v=>{S.opts.mascotOn=v;O.saveOpts();O.mascotRefresh&&O.mascotRefresh()}),
+      O.toggleRow('drag',O.tr('Walks around','Гуляет'),O.tr('The mascot decides when to stroll along the input (more often while generating)','Маскот сам решает, когда пройтись по полю ввода (чаще во время генерации)'),
+        S.opts.mascotRoam!==false,v=>O.mascotSetRoam&&O.mascotSetRoam(v)),
       h('div',{class:'grp'},O.tr('Size','Размер')),
       h('div',{class:'seg'},[28,36,44,56,72,96].map(n=>h('button',{class:S.opts.mascotSize===n?'on':'',
         onclick:()=>{S.opts.mascotSize=n;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()}},n+'px'))),
