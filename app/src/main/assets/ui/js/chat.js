@@ -170,9 +170,12 @@ O.chatInit=root=>{
       // FIX (audit #9): peek + commit AFTER a successful send; if the agent became busy again
       // during the delay, the item stays queued instead of vanishing.
       const next=O.peekPrompt(S.sid);
-      if(next&&(next.text||(next.atts&&next.atts.length)))setTimeout(()=>{
-        if(busy())return;
-        if(O.chatSendText(next.text,{atts:next.atts,mentions:next.mentions}))O.commitPrompt(S.sid);
+      if(next&&(next.text||(next.atts&&next.atts.length)))setTimeout(async()=>{
+        // Wait for the status to really be idle (a retry/continuation may still be running).
+        for(let i=0;i<10&&busy();i++)await new Promise(r=>setTimeout(r,300));
+        if(busy())return;                       // keep it queued, try again on the next idle
+        const ok=await O.chatSendText(next.text,{atts:next.atts,mentions:next.mentions,fromQueue:true});
+        if(ok!==false)O.commitPrompt(S.sid);
       },400);
     }
     if(O.autoCompact&&O.autoCompact()){
@@ -232,6 +235,28 @@ O.chatInit=root=>{
     }
     else O.toast(t,4000)}}});
   O.on('voice',d=>{if(d&&d.text){ta.value=(ta.value?ta.value+' ':'')+d.text;onInput();ta.focus()}});
+  // Keyboard-aware overlay offset: visualViewport shrinks while the soft keyboard is open. Keep the
+  // mascot glued above the input instead of letting it fall behind the keyboard.
+  const syncKeyboard=()=>{
+    try{
+      const vv=window.visualViewport;
+      const gap=vv?Math.max(0,Math.round(window.innerHeight-vv.height-vv.offsetTop)):0;
+      document.documentElement.style.setProperty('--kb',(gap>80?gap:0)+'px');
+    }catch(_){}
+  };
+  if(window.visualViewport){
+    visualViewport.addEventListener('resize',syncKeyboard,{passive:true});
+    visualViewport.addEventListener('scroll',syncKeyboard,{passive:true});
+  }
+  window.addEventListener('resize',syncKeyboard,{passive:true});
+  ta.addEventListener('focus',()=>setTimeout(syncKeyboard,250));
+  ta.addEventListener('blur',()=>setTimeout(syncKeyboard,250));
+  // the mascot body lives on the composer ledge: keep it glued when the box grows
+  const reMascot=()=>{try{O.mascotReanchor&&O.mascotReanchor()}catch(_){}};
+  ta.addEventListener('input',()=>setTimeout(reMascot,30));
+  window.addEventListener('resize',()=>setTimeout(reMascot,80),{passive:true});
+  setTimeout(reMascot,400);
+  syncKeyboard();
   fsTip=h('div',{id:'fs-tip'});document.body.append(fsTip);
   initPinch();initSelectionThreads();initVoiceWave(micBtn);
   bus.on('perm',syncAgentPulse);
@@ -2073,10 +2098,10 @@ function renderAtts(){attsEl.textContent='';attsEl.classList.toggle('hide',!atts
   updateSend();saveDraftNow()}
 let sending=false;
 // modelOverride (audit #8): one-shot model for THIS send, no global mutation/timer race.
-async function onSend(modelOverride){
+async function onSend(modelOverride,fromQueue){
   const sendModel=modelOverride||S.model;
   // A double tap (or a queued click after a slow frame) must never send the prompt twice.
-  if(sending)return;
+  if(sending)return false;
   if(busy()&&!ta.value.trim()&&!atts.length){
     // Smart stop (47): abort, then the same button becomes "continue from the cut" via the bar.
     try{await api('POST','/session/'+S.sid+'/abort',{});O.toast(O.tr('Stopped — «Continue» resumes from the cut','Остановлено — «Продолжить» доскажет с места обрыва'),2600)}catch(e){O.toast(e.message)}
@@ -2098,11 +2123,13 @@ async function onSend(modelOverride){
     if(/^opencode(\s+tui)?\s*$/i.test(cmd)){O.toast('Приложение уже является интерфейсом OpenCode. TUI — во вкладке «Терминал» → Shell, агент — во вкладке «Чат»',6000);clear();return}
     clear();try{const sid=await sess();O.maybeAutoTitle(sid,text);api('POST','/session/'+sid+'/shell',{agent:S.agent,model:S.model,command:cmd},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}
   // (7) While the agent is busy a typed message goes to the queue instead of interrupting.
-  if(busy()&&(text||atts.length)&&O.enqueuePrompt&&S.sid){
+  // FIX (queue never sent): a queued item arriving here while the session still looks busy
+  // used to be re-queued forever. fromQueue items always go straight to the model.
+  if(!fromQueue&&busy()&&(text||atts.length)&&O.enqueuePrompt&&S.sid){
     O.enqueuePrompt(S.sid,text,draftEx());
     clear();
     O.toast(O.tr('Queued — will send when the agent finishes','В очереди — отправится, когда агент закончит'),2500);
-    return;
+    return false;
   }
   const parts=[];
   if(O.updateReadmeForModel && S.model && S.model.modelID){
@@ -2116,6 +2143,10 @@ async function onSend(modelOverride){
   if(factsTxt)parts.push({type:'text',text:factsTxt,synthetic:true});
   const tplTxt=O.tplTextFor?O.tplTextFor(S.sid):'';
   if(tplTxt)parts.push({type:'text',text:tplTxt,synthetic:true});
+  // Session-scoped jailbreak: injected here (not into the shared AGENTS.md), so it only ever
+  // applies to this chat.
+  const jbTxt=O.jailbreakPromptFor?O.jailbreakPromptFor(S.sid):'';
+  if(jbTxt)parts.push({type:'text',text:jbTxt,synthetic:true});
   // dry-run: propose, never execute
   if(O.dryRun&&O.dryRun())parts.push({type:'text',text:'[РЕЖИМ DRY-RUN: не выполняй команды и не изменяй файлы. Покажи план действий и точные команды/diff, которые ты бы выполнил, и дождись подтверждения.]',synthetic:true});
   if(text)parts.push({type:'text',text});
@@ -2126,6 +2157,9 @@ async function onSend(modelOverride){
     if(a._ocr)parts.push({type:'text',text:'[Текст с изображения '+a.filename+']:\n'+a._ocr.slice(0,8000),synthetic:true});
   });
   // Screenshots the agent took mid-turn (phone shot) ride along THIS prompt as real attachments.
+  // Lightweight file tree cached for this session's project folder (token-cheap navigation).
+  const ft=O.fileTreeFor&&O.fileTreeFor(S.sid);
+  if(ft&&ft.text)parts.push({type:'text',text:'[Дерево файлов проекта '+ft.dir+']\n'+ft.text,synthetic:true});
   if(O.takeVisionQueue){
     const vq=O.takeVisionQueue();
     vq.forEach(v=>{parts.push(v);atts.push(v)});
@@ -2186,6 +2220,7 @@ async function onSend(modelOverride){
     if(sentTries.length)O._fallback={sid:sentSid,mid:sentMid,parts,tries:sentTries};
     if(usedModel&&sendModel&&(usedModel.providerID!==sendModel.providerID||usedModel.modelID!==sendModel.modelID)){O.setLastFallback({model:usedModel.modelID,at:Date.now()});O.toast(O.tr('Answered by fallback model: ','Ответила резервная модель: ')+usedModel.modelID,2500)}
     else if(O.setLastFallback)O.setLastFallback(null);
+    return true;
   }catch(e){
     if(O.clearInflight)O.clearInflight();
     if(O.isQuotaError(e)){
@@ -2195,6 +2230,7 @@ async function onSend(modelOverride){
       O.toast(e.message,4000);
     }
     ta.value=text;onInput();
+    return false;
   }}
 function clear(){histIdx=-1;clearTimeout(draftTimer);draftRestoring=false;if(S.sid)O.clearDraft(S.sid);draftSid=S.sid;ta.value='';atts=[];mentions=[];renderAtts();autosize();hidePop();updateSend();if(S.opts.hideKeyboardAfterSend)ta.blur()}
 // Send animation (42): a ghost of the bubble lifts off the composer into the feed.
@@ -2216,8 +2252,12 @@ O.chatSendText=(text,ex)=>{
   if(!t&&!hasEx)return false;
   if(ex){atts=atts.concat((ex.atts||[]).slice(0,8));mentions=mentions.concat(ex.mentions||[]);renderAtts()}
   ta.value=t;autosize();updateSend();
-  try{onSend()}catch(e){return false}
-  return true;
+  // FIX: onSend is async — returning a bare `true` made the queue delete an item that was
+  // actually skipped (busy/double-tap guard). Return the promise instead; callers await it.
+  try{
+    const p=onSend(null,!!(ex&&ex.fromQueue));
+    return p&&typeof p.then==='function'?p:true;
+  }catch(e){return false}
 };
 // Shows the agent answer as if it were being typed (purely visual; the real text is already there).
 O.chatTypeText=text=>{

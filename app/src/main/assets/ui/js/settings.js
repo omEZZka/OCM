@@ -1044,17 +1044,69 @@ O.getActiveJailbreakIds=()=>{
 };
 
 // ---- per-session jailbreaks: override the global set for ONE chat only ----
+// State lives in store.js (sessionJailbreak/setSessionJailbreak) so every screen agrees.
 O.sessionJbIds=sid=>{
-  const m=O.store.get('sessionJailbreaks',{});
-  const v=m[sid||S.sid];
+  const v=O.sessionJailbreak(sid||S.sid);
   return Array.isArray(v)?new Set(v):null; // null = follow global
 };
-O.setSessionJb=(sid,ids)=>{
-  const m=O.store.get('sessionJailbreaks',{});
-  if(ids===null)delete m[sid];else m[sid]=Array.from(ids);
-  O.store.set('sessionJailbreaks',m);
-  if(O.updateReadmeForModel)O.updateReadmeForModel(S.model?S.model.modelID:null);
-  bus.emit('sessionJb');
+O.setSessionJb=(sid,ids)=>O.setSessionJailbreak(sid,ids===null?null:Array.from(ids||[]));
+// ---- Session settings sheet: everything that is scoped to ONE chat ----
+O.openSessionSettings=sid=>{
+  sid=sid||S.sid;
+  if(!sid)return O.toast(O.tr('Open a session first','Сначала откройте сессию'),2000);
+  const body=h('div');
+  const draw=()=>{
+    body.textContent='';
+    const title=(S.sessions.find(x=>x.id===sid)||{}).title||sid.slice(0,8);
+    const own=O.sessionJbIds(sid);
+    const jbNames=(own?[...own]:[...O.getActiveJailbreakIds()]).map(id=>{
+      const j=O.getJailbreaks().find(x=>x.id===id);return j?j.title:id;
+    });
+    const dir=O.sessionDir(sid);
+    const tree=O.fileTreeFor?O.fileTreeFor(sid):null;
+
+    body.append(
+      h('div',{class:'note'},O.tr('These settings apply ONLY to this chat: “','Эти настройки действуют ТОЛЬКО на этот чат: «')+title+'».'),
+      // 1) jailbreak
+      O.listRow('shield',O.tr('Jailbreak for this chat','Джейлбрейк этого чата'),
+        own?O.tr('own set: ','свой набор: ')+(jbNames.join(', ')||'—'):O.tr('follows the global set','следует глобальному набору'),
+        O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openSessionJailbreaks(sid),150)}),
+      // 2) project folder
+      O.listRow('folder',O.tr('Project folder','Папка проекта'),dir,O.icon('chevR'),()=>{
+        s.close();
+        O.browseDir(dir,d=>{O.setSessionDir(sid,d).then(async()=>{
+          await O.ensureFileTree&&O.ensureFileTree(sid,true);
+          O.toast(O.tr('Folder set, file tree rebuilt','Папка задана, дерево файлов собрано'),2000);
+          O.openSessionSettings(sid);
+        })});
+      }),
+      // 3) file tree
+      O.listRow('branch',O.tr('File tree in the prompt','Дерево файлов в запросе'),
+        tree?(tree.count+' '+O.tr('entries','записей')+' · '+O.ago(tree.at)):O.tr('not built yet','ещё не собрано'),
+        O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openFileTreeForSession(sid),150)}),
+      // 4) mascot state of this chat
+      O.listRow('bot',O.tr('Mascot state','Состояние маскота'),O.mascotStateFor?O.mascotStateFor(sid):'idle',
+        O.icon('chevR'),()=>{O.setMascotStateFor&&O.setMascotStateFor(sid,'idle');draw()}),
+      // 5) folder in the sessions list
+      O.listRow('folder',O.tr('List folder','Папка в списке сессий'),
+        (O.sessionFolders().find(f=>f.id===O.sessionFolderOf(sid))||{}).name||O.tr('no folder','без папки'),
+        O.icon('chevR'),()=>{
+          const items=[{label:O.tr('No folder','Без папки'),icon:'x',fn:()=>{O.setSessionFolder(sid,'');draw()}}];
+          O.sessionFolders().forEach(f=>items.push({label:f.name,icon:f.icon||'folder',fn:()=>{O.setSessionFolder(sid,f.id);draw()}}));
+          items.push({label:O.tr('New folder…','Новая папка…'),icon:'plus',fn:async()=>{
+            const nm=await O.ask(O.tr('New folder','Новая папка'),O.tr('Folder name','Название папки'));
+            if(nm){const f=O.createSessionFolder(nm);O.setSessionFolder(sid,f.id);draw()}
+          }});
+          O.actions(O.tr('List folder','Папка в списке'),items);
+        }),
+      h('div',{style:{display:'flex',gap:'8px',marginTop:'12px'}},
+        h('button',{class:'btn grow',onclick:()=>O.buildFileTree&&O.buildFileTree(O.sessionDir(sid),sid).then(t=>{O.toast(O.tr('Tree: ','Дерево: ')+t.count,1800);draw()})},O.icon('refresh'),O.tr('Rebuild tree','Пересобрать дерево')),
+        h('button',{class:'btn grow',onclick:()=>{O.dropFileTreeFor(sid);O.toast(O.tr('Tree removed','Дерево убрано'),1600);draw()}},O.icon('x'),O.tr('Remove tree','Убрать дерево')))
+    );
+  };
+  const s=O.sheet(O.tr('Session settings','Настройки сессии'),body,{full:true});
+  draw();
+  bus.on('sessionJailbreak',id=>{if(s.root&&s.root.isConnected&&(!id||id===sid))draw()});
 };
 O.openSessionJailbreaks=sid=>{
   sid=sid||S.sid;
@@ -1098,18 +1150,35 @@ O.toggleJailbreak=id=>{
     const mid=S.model?S.model.modelID:null;
     O.updateReadmeForModel(mid);
   }
+  bus.emit('jailbreak');
   return next;
 };
 
-O.getActiveJailbreaks=currentModelID=>{
-  // per-session override wins over the global set (only for the ACTIVE session)
-  const sess=O.sessionJbIds?O.sessionJbIds(S.sid):null;
-  const activeIds=sess||O.getActiveJailbreakIds();
-  if(!activeIds.size)return [];
-  const all=O.getJailbreaks();
-  return all.filter(j=>activeIds.has(j.id)&&(
-    !currentModelID||!j.model||j.model==='Все модели'||j.model===currentModelID
-  ));
+// Jailbreak set in effect for a session:
+//   explicit sid → that session's own set (or the global one when it has none)
+//   no sid       → the global set only (used when writing the shared AGENTS.md)
+// Global set only — used when writing the shared AGENTS.md in the project folder.
+O.getGlobalJailbreaks=(currentModelID)=>{
+  const ids=O.getActiveJailbreakIds();
+  if(!ids.size)return [];
+  return O.getJailbreaks().filter(j=>ids.has(j.id)&&(
+    !currentModelID||!j.model||j.model==='Все модели'||j.model===currentModelID));
+};
+// Effective set for a chat: an explicit session's own set wins; no argument = the ACTIVE chat.
+O.getActiveJailbreaks=(currentModelID,sid)=>{
+  sid=sid===undefined?S.sid:sid;
+  if(!sid)return O.getGlobalJailbreaks(currentModelID);
+  const own=O.sessionJbIds?O.sessionJbIds(sid):null;
+  const ids=own||O.getActiveJailbreakIds();
+  if(!ids.size)return [];
+  return O.getJailbreaks().filter(j=>ids.has(j.id)&&(
+    !currentModelID||!j.model||j.model==='Все модели'||j.model===currentModelID));
+};
+// Prompt fragment injected per-send so a session jailbreak NEVER leaks into other chats.
+O.jailbreakPromptFor=sid=>{
+  const list=O.getActiveJailbreaks(S.model?S.model.modelID:null,sid||S.sid);
+  if(!list.length)return '';
+  return list.map(j=>'[ДИРЕКТИВА (только для этого чата): '+j.title+']\n'+(j.prompt||'').trim()).join('\n\n');
 };
 
 O.getActiveJailbreak=()=>{
@@ -1198,7 +1267,8 @@ O.ensureMapHint = root=>{
 O.updateReadmeForModel = (modelID) => {
   try {
     const curMid = modelID || (S.model ? S.model.modelID : null);
-    const activeJbs = (O.getActiveJailbreaks ? O.getActiveJailbreaks(curMid) : []);
+    // AGENTS.md is shared by every chat in the folder → only the GLOBAL set is written here.
+    const activeJbs = (O.getGlobalJailbreaks ? O.getGlobalJailbreaks(curMid) : []);
 
     let content = '';
     if (activeJbs && activeJbs.length) {

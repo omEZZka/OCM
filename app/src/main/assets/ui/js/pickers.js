@@ -54,6 +54,8 @@ O.openSessions=()=>{
     },260);
   };
   let activeTag=O.sessionTagFilter();
+  let activeFolder='';
+  activeFolderSetter=id=>{activeFolder=id;draw();};
   // Compact grid nav: primary destinations are icon tiles (one glance, one tap), secondary
   // actions collapse into a "More" row so the session list gets the vertical space it deserves.
   const tile=(ic,label,fn)=>h('button',{class:'drawer-tile',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
@@ -127,7 +129,8 @@ O.openSessions=()=>{
     return d.toLocaleDateString(undefined,{year:'numeric',month:'long'});
   };
   function draw(){list.textContent='';drawTags();runHitSearch();const f=q.value.toLowerCase();
-    const items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f)&&(!activeTag||O.sessionTag(x.id)===activeTag));
+    let items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f)&&(!activeTag||O.sessionTag(x.id)===activeTag));
+    if(activeFolder)items=items.filter(x=>O.sessionFolderOf(x.id)===activeFolder);
     // Pinned: one flat block ordered by user priority (pin array order), never split by days.
     const pinOrder=O.pinnedSessions();
     const pinRank=id=>{const i=pinOrder.indexOf(id);return i<0?1e9:i};
@@ -136,12 +139,31 @@ O.openSessions=()=>{
       if(pa!==pb)return pa?-1:1;
       return (b.time&&b.time.updated||0)-(a.time&&a.time.updated||0)});
     if(!items.length)list.append(h('div',{class:'mut',style:{padding:'20px',textAlign:'center'}},O.tr('No sessions yet','Сессий пока нет')));
+    // Folder toolbar: create a folder and browse by folder.
+    const folders=O.sessionFolders();
+    const folderBar=h('div',{style:{display:'flex',gap:'6px',overflowX:'auto',margin:'6px 0'}});
+    folderBar.append(h('button',{class:'chip'+(activeFolder===''?' on':''),onclick:()=>{activeFolder='';draw()}},O.icon('list'),O.tr('All','Все')));
+    folders.forEach(f=>{
+      const n=items.filter(x=>O.sessionFolderOf(x.id)===f.id).length;
+      const c=h('button',{class:'chip'+(activeFolder===f.id?' on':''),onclick:()=>{activeFolder=f.id;draw()}},
+        O.icon(f.icon||'folder'),h('span',null,f.name+(n?' '+n:'')));
+      O.longPress(c,()=>folderMenu(f),500);
+      folderBar.append(c);
+    });
+    folderBar.append(h('button',{class:'chip',onclick:async()=>{
+      const nm=await O.ask(O.tr('New folder','Новая папка'),O.tr('Folder name','Название папки'));
+      if(!nm)return;const f=O.createSessionFolder(nm);activeFolder=f.id;draw();
+    }},O.icon('plus')));
+    list.append(folderBar);
+
     // grouping is applied only while browsing (no search) and never to pinned rows
     let lastGroup=null,pinHeadShown=false;
     items.forEach(x=>{
       const pin=O.isPinned(x.id);
       if(!f&&!pin){
-        const g=O.isWorkSession(x.id)?O.tr('Working set','Рабочие'):dayKey(x.time&&x.time.updated);
+        const fid=O.sessionFolderOf(x.id);
+        const g=fid?(O.sessionFolders().find(ff=>ff.id===fid)||{}).name||O.tr('Folder','Папка')
+                  :(O.isWorkSession(x.id)?O.tr('Working set','Рабочие'):dayKey(x.time&&x.time.updated));
         if(g!==lastGroup){
           lastGroup=g;
           list.append(h('div',{class:'grp',style:{marginTop:'10px'}},g));
@@ -180,6 +202,21 @@ async function restartApp(){
   O.toast(O.tr('Restarting...','Перезапускаю...'),4000);
   try{OC.hardRestart()}catch(e){try{OC.restartServer()}catch(_){}}
 }
+function folderMenu(f){
+  const n=O.sessions.filter(x=>O.sessionFolderOf(x.id)===f.id).length;
+  O.actions(f.name,[
+    {label:O.tr('Open folder','Открыть папку'),icon:'folder',fn:()=>{activeFolderSetter(f.id)}},
+    {label:O.tr('Rename folder','Переименовать папку'),icon:'edit',fn:async()=>{
+      const v=await O.ask(O.tr('Folder name','Название папки'),null,f.name);
+      if(v){O.renameSessionFolder(f.id,v);bus.emit('sessions')}
+    }},
+    {label:O.tr('Move up','Выше'),icon:'up',fn:()=>{O.moveSessionFolder(f.id,-1)}},
+    {label:O.tr('Move down','Ниже'),icon:'down',fn:()=>{O.moveSessionFolder(f.id,1)}},
+    {label:O.tr('Delete folder','Удалить папку'),sub:O.tr(n+' chats stay, folder only','Чаты останутся, удалится только папка'),icon:'trash',danger:true,fn:()=>{O.deleteSessionFolder(f.id);bus.emit('sessions')}}
+  ]);
+}
+// The drawer owns the active folder; the menu needs a way to switch it.
+let activeFolderSetter=()=>{};
 function sessActions(x){const pin=O.isPinned(x.id);const po=O.pinnedSessions();const pi=po.indexOf(x.id);
   O.actions(O.sessionTitle(x),[
   {label:pin?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'star',fn:()=>{O.togglePin(x.id)}},
@@ -193,6 +230,17 @@ function sessActions(x){const pin=O.isPinned(x.id);const po=O.pinnedSessions();c
     opts.push({label:O.tr('Set custom tag...','Задать свой тег...'),icon:'edit',fn:async()=>{const v=await O.ask(O.tr('Folder / tag','Папка / тег'),O.tr('For example: Work','Например: Работа'),cur);if(v!=null)O.setSessionTag(x.id,v)}});
     if(cur)opts.push({label:O.tr('Remove tag','Убрать тег'),icon:'x',fn:()=>O.setSessionTag(x.id,'')});
     O.actions(O.tr('Folder / tag','Папка / тег'),opts);
+  }},
+  {label:O.tr('Session settings','Настройки сессии'),sub:O.tr('Jailbreak, folder, file tree — this chat only','Джейлбрейк, папка, дерево — только для этого чата'),icon:'sliders',fn:()=>O.openSessionSettings&&O.openSessionSettings(x.id)},
+  {label:O.tr('Move to folder','Переместить в папку'),sub:(O.sessionFolders().find(f=>f.id===O.sessionFolderOf(x.id))||{}).name||O.tr('no folder','без папки'),icon:'folder',fn:()=>{
+    const cur=O.sessionFolderOf(x.id);
+    const items=[{label:O.tr('No folder','Без папки'),icon:'x',fn:()=>O.setSessionFolder(x.id,'')}];
+    O.sessionFolders().filter(f=>f.id!==cur).forEach(f=>items.push({label:f.name,icon:f.icon||'folder',fn:()=>O.setSessionFolder(x.id,f.id)}));
+    items.push({label:O.tr('New folder…','Новая папка…'),icon:'plus',fn:async()=>{
+      const nm=await O.ask(O.tr('New folder','Новая папка'),O.tr('Folder name','Название папки'));
+      if(nm){const f=O.createSessionFolder(nm);O.setSessionFolder(x.id,f.id)}
+    }});
+    O.actions(O.tr('Move to folder','Переместить в папку'),items);
   }},
   {label:O.tr('Project folder','Папка проекта'),sub:O.sessionDir(x.id).replace(/^\/root/, '~'),icon:'folder',fn:()=>{
     O.browseDir(O.sessionDir(x.id),dir=>{O.setSessionDir(x.id,dir);O.toast(O.tr('Folder: ','Папка: ')+dir,1800)});
@@ -364,6 +412,78 @@ O.openModels=()=>{
   const prevClose=s.close;
   s.close=()=>{try{offFolders&&offFolders()}catch(_){};prevClose()};
 
+  // Long-press on a model: pin/unpin, delete, folder, multi-select.
+  function modelQuickMenu(x){
+    const key=x.pid+'/'+x.mid;
+    const pinned=O.isModelPinned(key);
+    O.actions(x.name||x.mid,[
+      {label:pinned?O.tr('Unpin','Открепить'):O.tr('Pin','Закрепить'),icon:'pin',fn:()=>{O.toggleModelPin(key);bus.emit('meta');draw()}},
+      {label:O.tr('Delete model','Удалить модель'),sub:O.tr('Can be restored from "Deleted models"','Можно вернуть из «Удалённых моделей»'),icon:'trash',danger:true,fn:()=>{
+        O.hideModel(key);
+        if(S.model&&S.model.providerID===x.pid&&S.model.modelID===x.mid){S.model=null;O.pickDefaults&&O.pickDefaults();bus.emit('meta')}
+        O.toast(O.tr('Model deleted: ','Модель удалена: ')+(x.name||x.mid),2000);
+        draw();
+      }},
+      {label:O.tr('Add to folder…','Добавить в папку…'),icon:'folder',fn:()=>{
+        const folders=O.modelFolders();
+        const items=folders.map(f=>({label:f.name,icon:'folder',fn:()=>{O.addModelToFolder(key,f.id);draw()}}));
+        items.push({label:O.tr('New folder…','Новая папка…'),icon:'plus',fn:async()=>{
+          const nm=await O.ask(O.tr('New folder','Новая папка'),O.tr('Folder name','Название папки'));
+          if(!nm)return;const f=O.createModelFolder(nm);O.addModelToFolder(key,f.id);draw();
+        }});
+        O.actions(O.tr('Group into folder','В папку'),items);
+      }},
+      {label:O.tr('Select multiple','Выбрать несколько'),icon:'check',fn:()=>enterSelect(x)}
+    ]);
+  }
+  // Provider actions: pin (keep at top) and delete the provider together with its models.
+  function providerMenu(pid,p){
+    const name=p&&(p.pname||p.name)||pid;
+    const models=O.allModels().filter(x=>x.pid===pid);
+    const hidden=O.hiddenModels().filter(k=>k.startsWith(pid+'/'));
+    const pinned=O.store.get('pinnedProviders',[]).includes(pid);
+    O.actions(name,[
+      {label:pinned?O.tr('Unpin provider','Открепить провайдера'):O.tr('Pin provider','Закрепить провайдера'),icon:'pin',fn:()=>{
+        const l=O.store.get('pinnedProviders',[]);
+        O.store.set('pinnedProviders',pinned?l.filter(x=>x!==pid):[pid].concat(l));
+        bus.emit('meta');draw();
+      }},
+      {label:O.tr('Refresh models from API','Обновить модели из API'),icon:'refresh',fn:()=>O.refreshProviderModels(pid)},
+      {label:O.tr('Delete provider & its models','Удалить провайдера и его модели'),sub:O.tr(models.length+' models will be removed','Будет удалено моделей: '+models.length),icon:'trash',danger:true,fn:()=>{
+        O.confirm(O.tr('Delete provider?','Удалить провайдера?'),
+          name+' — '+O.tr('models, keys and config entry will be removed.','модели, ключи и запись в конфиге будут удалены.'),
+          O.tr('Delete','Удалить'),true).then(ok=>{if(ok)deleteProvider(pid,models)});
+      }}
+    ]);
+  }
+  async function deleteProvider(pid,models){
+    try{
+      // 1. forget the models locally (active model too)
+      models.forEach(x=>O.hideModel(x.pid+'/'+x.mid));
+      if(S.model&&S.model.providerID===pid){S.model=null;O.pickDefaults&&O.pickDefaults();bus.emit('meta')}
+      // 2. remove the config entry (models live inside it)
+      try{
+        const t=O.native.cfgRead();
+        if(t&&t.trim()){
+          const obj=O.parseJsonc(t);
+          if(obj.provider&&obj.provider[pid]){delete obj.provider[pid];O.native.cfgWrite(JSON.stringify(obj,null,2))}
+        }
+      }catch(_){}
+      // 3. remove the API key from auth.json and the local key ring
+      try{
+        const r=O.native.readText('/root/.local/share/opencode/auth.json');
+        const o=JSON.parse((r&&r.text)||'{}');
+        if(o[pid]){delete o[pid];O.native.writeText('/root/.local/share/opencode/auth.json',JSON.stringify(o,null,2))}
+      }catch(_){}
+      try{O.keyRingSet&&O.keyRingSet(pid,[]);O.store.remove('keyRingIdx.'+pid)}catch(_){}
+      // 4. restart the core so the provider list reloads
+      try{await api('POST','/instance/dispose',null)}catch(_){}
+      await O.loadMeta();
+      providerFilter='';
+      O.toast(O.tr('Provider deleted: ','Провайдер удалён: ')+pid,2200);
+      draw();
+    }catch(e){O.toast(e.message||String(e),3500)}
+  }
   function hiddenRow(){
     const hid=O.hiddenModels();
     const old=container.querySelector('.hidden-models-btn');
@@ -393,11 +513,22 @@ O.openModels=()=>{
   }
   function drawProviders(all){
     provBar.textContent='';
-    const pids=[...new Set(all.map(x=>x.pid))];
-    if(pids.length<2){provBar.classList.add('hide');return}
+    const pinProv=O.store.get('pinnedProviders',[]);
+    const pids=[...new Set(all.map(x=>x.pid))].sort((a,b)=>{
+      const pa=pinProv.includes(a)?0:1,pb=pinProv.includes(b)?0:1;
+      return pa-pb;
+    });
+    if(!pids.length){provBar.classList.add('hide');return}
     provBar.classList.remove('hide');
-    const chip=(label,val)=>h('button',{class:'chip',style:providerFilter===val?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>{providerFilter=val;draw()}},label);
-    provBar.append(chip(O.tr('All providers','Все провайдеры'),''),...pids.map(pid=>{const p=all.find(x=>x.pid===pid);return chip(p&&p.pname||pid,pid)}));
+    const chip=(label,val,pid)=>h('button',{class:'chip',style:providerFilter===val?'border-color:var(--acc);color:var(--acc)':'',onclick:()=>{providerFilter=val;draw()}},label);
+    provBar.append(chip(O.tr('All providers','Все провайдеры'),''));
+    pids.forEach(pid=>{
+      const p=all.find(x=>x.pid===pid);
+      const c=chip(p&&p.pname||pid,pid,pid);
+      // Long-press a provider chip → pin provider / delete provider with all its models.
+      O.longPress(c,()=>providerMenu(pid,p),500);
+      provBar.append(c);
+    });
   }
   function draw(){
     listEl.textContent='';
@@ -492,8 +623,8 @@ O.openModels=()=>{
         ),
         isSel&&!selecting?O.icon('check','model-check'):null
       );
-      // long press enters selection (previously it opened the action sheet directly)
-      O.longPress(row,()=>enterSelect(x));
+      // Long press: quick actions for THIS model (pin / delete), plus enter selection mode.
+      O.longPress(row,()=>modelQuickMenu(x),500);
       return row;
     };
 
@@ -965,7 +1096,8 @@ O.openConnect=async()=>{
     ring.length?h('div',{class:'fchips',style:{margin:'6px 0'}},ring.map((k,i)=>h('span',{class:'chip keep',style:{fontSize:'12px'}},
       ('#'+(i+1)+' · '+k.slice(0,4)+'…'+k.slice(-4)),
       h('button',{class:'chip-x',style:{marginLeft:'4px',opacity:'.55'},onclick:()=>{O.keyRingSet(p.id,ring.filter((_,j)=>j!==i));sh.close();keyForm(p)}},O.icon('x'))))):null);
-  const sh=O.sheet(name(p),h('div',null,h('div',{class:'field'},h('label',null,'API-ключ'),inp),ringCard,
+  const statusBoxAuto=h('div',{class:'mut s',style:{margin:'8px 0'}});
+  const sh=O.sheet(name(p),h('div',null,h('div',{class:'field'},h('label',null,'API-ключ'),inp),ringCard,statusBoxAuto,
       p.id==='opencode'?h('div',{class:'note',style:{margin:'8px 0'}},'Получите ключ Zen на opencode.ai/zen. Бесплатные модели работают и без него.'):null,
       h('button',{class:'btn pri wide',onclick:async()=>{
         const key=inp.value.trim();if(!key)return;
@@ -975,6 +1107,37 @@ O.openConnect=async()=>{
           const old=O.keyRingOf(p.id).filter(k=>k!==key);
           O.keyRingSet(p.id,[key].concat(old));
           O.store.set('keyRingIdx.'+p.id,0);
+          // AUTO-PROBE (new): after saving a key for a known provider, pull its model list and
+          // write it into the config so the models appear immediately (no manual "refresh").
+          try{
+            const base={
+              openrouter:'https://openrouter.ai/api/v1',
+              groq:'https://api.groq.com/openai/v1',
+              openai:'https://api.openai.com/v1',
+              anthropic:'https://api.anthropic.com/v1',
+              deepseek:'https://api.deepseek.com/v1',
+              mistral:'https://api.mistral.ai/v1',
+              xai:'https://api.x.ai/v1',
+              together:'https://api.together.xyz/v1',
+              cerebras:'https://api.cerebras.ai/v1',
+              groqcloud:'https://api.groq.com/openai/v1'
+            }[p.id];
+            if(base){
+              statusBoxAuto.textContent=O.tr('Loading models…','Загружаю модели…');
+              const list=await probeModels(base,key);
+              if(list&&list.length){
+                const t2=O.native.cfgRead();let o2={};try{if(t2.trim())o2=O.parseJsonc(t2)}catch{}
+                o2.provider=o2.provider||{};
+                o2.provider[p.id]=Object.assign({name:name(p),npm:'@ai-sdk/openai',
+                  options:{baseURL:base,apiKey:key}},o2.provider[p.id]||{});
+                const mm={};list.forEach(mid=>{mm[mid]={name:mid}});
+                o2.provider[p.id].models=mm;
+                if(p.id==='openrouter')o2.provider[p.id].options.headers={'HTTP-Referer':'https://opencode.mobile','X-Title':'OpenCode Mobile'};
+                O.native.cfgWrite(JSON.stringify(o2,null,2));
+                O.toast(O.tr('Models loaded: ','Моделей загружено: ')+list.length,2200);
+              }
+            }
+          }catch(_){}
           if(p.id==='openrouter'||p.id==='groq'){
             try{
               const t=O.native.cfgRead();let obj={};try{if(t.trim())obj=O.parseJsonc(t)}catch{}
@@ -1129,8 +1292,29 @@ O.openCustomProvider=parentSheet=>{
     const w=O.native.cfgWrite(JSON.stringify(obj,null,2));
     if(!w.ok)return O.toast(w.err||'Ошибка записи');
     if(key)try{await api('PUT','/auth/'+pid,{type:'api',key})}catch(_){}
+    // AUTO-PROBE (new): the config alone is not enough — a provider added without a model list
+    // showed up empty until the user pressed "refresh". Probe the endpoint now, write the real
+    // model catalogue into the config, and only then restart the core once.
+    let probed=0;
+    try{
+      if(sel.size===0||sel.has('default')){
+        probeBtn.disabled=true;statusBox.textContent=O.tr('Auto-loading models…','Автоподгружаю модели…');
+        const list=await probeModels(url,key);
+        if(list&&list.length){
+          const freshModels={};
+          list.forEach(mid=>{freshModels[mid]={name:mid}});
+          obj.provider[pid].models=freshModels;
+          O.native.cfgWrite(JSON.stringify(obj,null,2));
+          probed=list.length;
+        }
+      }
+    }catch(_){/* offline or blocked: keep what the user picked */}
     try{await api('POST','/instance/dispose',null)}catch(_){}
-    await O.loadMeta();O.toast('Провайдер '+pname+' подключён ('+Object.keys(mo).length+' моделей)!',3000);
+    await O.loadMeta();
+    const total=probed||Object.keys(mo).length;
+    O.toast(probed
+      ? O.tr('Provider '+pname+' connected, '+probed+' models loaded','Провайдер '+pname+' подключён, моделей загружено: '+probed)
+      : 'Провайдер '+pname+' подключён ('+total+' моделей)!',3000);
     sh.close();if(parentSheet&&parentSheet.close)parentSheet.close()}
   },O.icon('check'),'Сохранить и подключить');
 

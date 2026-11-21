@@ -314,6 +314,85 @@ const buildProjectMap=async root=>{
   return{md:lines.join('\n'),count:tree.files.length,dirs:tree.dirs,truncated:tree.truncated};
 };
 
+// ---- per-session lightweight file tree (cached, sent to the model) ----
+// Cheap text outline: folders + file names, with .git/build/node_modules and binaries skipped.
+const TREE_SKIP=new Set(['.git','build','node_modules','.gradle','.cache','dist','.idea','.next','target','vendor','__pycache__','.venv','venv','.dart_tool','Pods','.terraform','coverage','tmp','.turbo','out','.nuxt']);
+const TREE_BIN=/\.(png|jpe?g|gif|webp|bmp|ico|svg|ttf|otf|woff2?|eot|mp[34]|wav|ogg|flac|m4a|webm|mov|avi|mkv|zip|gz|xz|bz2|7z|rar|jar|apk|aab|so|dylib|dll|exe|o|a|class|pyc|iso|img|db|sqlite|pdf)$/i;
+const TREE_MAX_ENTRIES=600, TREE_MAX_DEPTH=5;
+
+O.buildFileTree=async(root,sid,maxEntries)=>{
+  root=root||S.dir;
+  sid=sid||S.sid;
+  const limit=maxEntries||TREE_MAX_ENTRIES;
+  const lines=[];let count=0,truncated=false;
+  const seen=new Set();
+  const walk=(path,depth,prefix)=>{
+    if(depth>TREE_MAX_DEPTH||count>=limit)return;
+    const r=O.native.ls(path);
+    if(!r||r.ok===false||!r.items||!r.items.length)return;
+    const items=r.items.slice().sort((a,b)=>{
+      if(!!a.dir!==!!b.dir)return a.dir?-1:1;
+      return String(a.name).localeCompare(String(b.name));
+    });
+    for(let i=0;i<items.length;i++){
+      if(count>=limit){truncated=true;return}
+      const it=items[i];
+      const last=i===items.length-1;
+      const branch=last?'└─ ':'├─ ';
+      if(it.dir){
+        if(TREE_SKIP.has(it.name)||it.name.startsWith('.'))continue;
+        const p=path==='/'?('/'+it.name):(path+'/'+it.name);
+        if(seen.has(p))continue;
+        seen.add(p);
+        lines.push(prefix+branch+it.name+'/');
+        count++;
+        walk(p,depth+1,prefix+(last?'   ':'│  '));
+      }else{
+        if(TREE_BIN.test(it.name))continue;
+        lines.push(prefix+branch+it.name);
+        count++;
+      }
+    }
+  };
+  walk(root,0,'');
+  const text=lines.length?lines.join('\n'):'(empty)';
+  const tree={sid,dir:root,at:Date.now(),count,truncated,text:text+(truncated?'\n… (truncated)':'')};
+  if(O.setFileTreeFor)O.setFileTreeFor(sid,tree);
+  return tree;
+};
+// Cached tree for a session; rebuilt only when the folder changed or it is older than 10 min.
+O.ensureFileTree=async(sid,force)=>{
+  sid=sid||S.sid;
+  if(!sid)return null;
+  const dir=O.sessionDir?O.sessionDir(sid):S.dir;
+  const cached=O.fileTreeFor?O.fileTreeFor(sid):null;
+  if(!force&&cached&&cached.dir===dir&&Date.now()-cached.at<10*60*1000)return cached;
+  try{return await O.buildFileTree(dir,sid)}catch(_){return cached||null}
+};
+O.openFileTreeForSession=async sid=>{
+  sid=sid||S.sid;
+  if(!sid)return O.toast(O.tr('Open a session first','Сначала откройте сессию'),2000);
+  const body=h('div');
+  const s=O.sheet(O.tr('Project file tree','Дерево файлов проекта'),body,{full:true});
+  const dir=O.sessionDir(sid);
+  body.append(h('div',{class:'note'},O.tr('This outline is cached for the chat and sent with every prompt — it saves tokens versus exploring directories.','Этот обзор кэшируется для чата и прикладывается к каждому запросу — экономит токены вместо обхода папок.')));
+  let tree=null;
+  try{tree=await O.ensureFileTree(sid,true)}catch(_){}
+  if(!s.root.isConnected)return;
+  body.append(
+    h('div',{class:'settings-card'},
+      h('div',{class:'settings-row'},h('div',{class:'settings-row-icon'},O.icon('folder')),
+        h('div',{class:'settings-row-text'},h('b',null,dir),h('span',null,tree?(tree.count+' '+O.tr('entries','записей')+(tree.truncated?', '+O.tr('truncated','обрезано'):'')):O.tr('no files','нет файлов'))),
+        h('button',{class:'btn sm',onclick:()=>{s.close();O.browseDir(dir,d=>{O.setSessionDir(sid,d).then(()=>O.ensureFileTree(sid,true)).then(()=>O.openFileTreeForSession(sid))})}},O.icon('folder'),O.tr('Change','Сменить')))),
+    tree?h('pre',{class:'code-pre',style:{maxHeight:'52vh'}},tree.text):h('div',{class:'note'},O.tr('No files found.','Файлы не найдены.')),
+    h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
+      h('button',{class:'btn grow',onclick:async()=>{
+        const t=await O.ensureFileTree(sid,true);if(t)O.toast(O.tr('Tree updated: ','Дерево обновлено: ')+t.count,1800);
+        if(t)s.close(),O.openFileTreeForSession(sid);
+      }},O.icon('refresh'),O.tr('Rebuild','Пересобрать')),
+      h('button',{class:'btn grow',onclick:()=>{if(tree)O.native.copy(tree.text)}},O.icon('copy'),O.tr('Copy','Копировать')),
+      h('button',{class:'btn grow',onclick:()=>{O.dropFileTreeFor(sid);s.close();O.toast(O.tr('Tree removed from this chat','Дерево убрано из этого чата'),1800)}},O.icon('x'),O.tr('Detach','Открепить'))));
+};
 let mapTimer=null;
 // Writes PROJECT_MAP.md and tells the agent about it in AGENTS.md (once).
 O.writeProjectMap=async (root,quiet)=>{

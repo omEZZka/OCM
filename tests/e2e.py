@@ -650,6 +650,110 @@ try:
     pg.wait_for_timeout(300)
     chk('night lamp row in settings','Ночная лампа' in pg.inner_text('.sheet'))
     pg.evaluate("OCM.back()")
+    pg.wait_for_timeout(300)
+    # ---- 2.27 session-scoped state, folders, tree, perf ----
+    sc=pg.evaluate("""()=>{
+      const a='ses_scopeA', b='ses_scopeB';
+      OCM.S.sessions.unshift({id:a,title:'A',time:{created:1,updated:Date.now()}},{id:b,title:'B',time:{created:1,updated:Date.now()}});
+      // jailbreak scoped to A only
+      const jb=OCM.getJailbreaks();
+      const j={id:'jb_scope',title:'Scope JB',prompt:'правило только для A',model:'Все модели'};
+      const l=OCM.store.get('custom_jailbreaks',[]);l.push(j);OCM.store.set('custom_jailbreaks',l);
+      OCM.setSessionJb(a,new Set(['jb_scope']));
+      const inA=OCM.getActiveJailbreaks(null,a).some(x=>x.id==='jb_scope');
+      const inB=OCM.getActiveJailbreaks(null,b).some(x=>x.id==='jb_scope');
+      const promptA=OCM.jailbreakPromptFor(a).includes('только для A');
+      const promptB=OCM.jailbreakPromptFor(b);
+      // mascot state per session
+      OCM.setMascotStateFor(a,'thinking');
+      OCM.setMascotStateFor(b,'idle');
+      const ma=OCM.mascotStateFor(a), mb=OCM.mascotStateFor(b);
+      OCM.setSessionJb(a,null);
+      return {inA,inB,promptA,promptB,ma,mb};
+    }""")
+    chk('jailbreak applies only to its own session',sc['inA'] and not sc['inB'])
+    chk('jailbreak prompt injected per-session',sc['promptA'] and sc['promptB']=='')
+    chk('mascot state isolated per session',sc['ma']=='thinking' and sc['mb']=='idle')
+    # folders
+    fd=pg.evaluate("""()=>{
+      const f=OCM.createSessionFolder('Работа');
+      OCM.setSessionFolder('ses_scopeA',f.id);
+      const inFolder=OCM.sessionFolderOf('ses_scopeA')===f.id;
+      OCM.renameSessionFolder(f.id,'Работа 2');
+      const renamed=OCM.sessionFolders().find(x=>x.id===f.id).name==='Работа 2';
+      OCM.moveSessionFolder(f.id,0);
+      OCM.openSessions();
+      const drawer=document.querySelector('.sheet.drawer');
+      const hasChip=!!drawer&&drawer.textContent.includes('Работа 2');
+      OCM.back();
+      OCM.deleteSessionFolder(f.id);
+      const gone=!OCM.sessionFolders().some(x=>x.id===f.id);
+      const chatKept=!!OCM.S.sessions.find(x=>x.id==='ses_scopeA');
+      return {inFolder,renamed,hasChip,gone,chatKept};
+    }""")
+    chk('session folder create + assign',fd['inFolder'])
+    chk('session folder rename',fd['renamed'])
+    chk('folder chip visible in drawer',fd['hasChip'])
+    chk('folder delete keeps chats',fd['gone'] and fd['chatKept'])
+    # file tree
+    ft=pg.evaluate("""async ()=>{
+      OCM.S.dir='/root';
+      const t=await OCM.buildFileTree('/root','ses_scopeA');
+      const cached=OCM.fileTreeFor('ses_scopeA');
+      return {count:t.count,hasTree:!!(cached&&cached.text),text:cached?cached.text:'',hasSkip:!/node_modules|\.git\//.test(cached?cached.text:'')};
+    }""")
+    chk('file tree built + cached for session',ft['count']>0 and ft['hasTree'])
+    chk('file tree skips noise dirs',ft['hasSkip'])
+    # session settings sheet
+    pg.evaluate("OCM.openSessionSettings('ses_scopeA')")
+    pg.wait_for_timeout(300)
+    ss=pg.inner_text('.sheet >> nth=-1')
+    chk('session settings sheet opens','Джейлбрейк этого чата' in ss and 'Папка проекта' in ss and 'Дерево файлов' in ss)
+    pg.evaluate("OCM.back()")
+    # delta coalescing keeps data exact
+    co=pg.evaluate("""async ()=>{
+      const sid='ses_stream';OCM.S.sessions.unshift({id:sid,title:'s',time:{created:1,updated:Date.now()}});
+      OCM.S.sid=sid;
+      __push({type:'message.part.delta',properties:{sessionID:sid,messageID:'m1',partID:'p1',field:'text',delta:'а'}});
+      for(let i=0;i<200;i++)__push({type:'message.part.delta',properties:{sessionID:sid,messageID:'m1',partID:'p1',field:'text',delta:'б'}});
+      await new Promise(r=>setTimeout(r,300));
+      const m=OCM.msgs(sid).idx.get('m1');
+      const p=m&&m.parts.find(x=>x.id==='p1');
+      OCM.S.sid='ses_1';
+      return {len:p?p.text.length:0};
+    }""")
+    chk('streamed delta text is complete after coalescing',co['len']==201)
+    # ---- 2.27.1 mascot physics: gravity + pacing ----
+    ph=pg.evaluate("""()=>{
+      const el=document.querySelector('.mascot');
+      if(!el)return {missing:true};
+      const before=el.style.top;
+      // lift the body and let physics drop it back onto the ledger
+      el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:60,clientY:200,pointerId:9,button:0}));
+      el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:120,clientY:80,pointerId:9,buttons:1}));
+      const lifted=parseFloat(el.style.top)||0;
+      el.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:120,clientY:80,pointerId:9}));
+      return new Promise(res=>setTimeout(()=>{
+        const landed=parseFloat(el.style.top)||0;
+        res({before,lifted,landed,missing:false});
+      },900));
+    }""")
+    chk('mascot has a gravity body',not ph.get('missing'))
+    chk('mascot falls back onto the input ledge',ph['landed']>ph['lifted'])
+    pace=pg.evaluate("""async ()=>{
+      OCM.S.status[OCM.S.sid]={type:'busy'};OCM.bus.emit('status',OCM.S.sid);
+      OCM.mascotTick&&OCM.mascotTick(OCM.S.sid);
+      const el=document.querySelector('.mascot');
+      const x0=parseFloat(el.style.left)||0;
+      await new Promise(r=>setTimeout(r,1200));
+      const x1=parseFloat(el.style.left)||0;
+      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
+      return {x0,x1,moved:Math.abs(x1-x0)>2};
+    }""")
+    chk('mascot paces while generating',pace['moved'])
+
+
+    pg.evaluate("OCM.back()")
     # ---- 2.21: smart stop -> resume button ----
     resume=pg.evaluate("""()=>{
       const sid='ses_res';OCM.S.sessions.unshift({id:sid,title:'res',time:{created:1,updated:Date.now()}});
@@ -1396,10 +1500,13 @@ try:
       el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:50,clientY:90,pointerId:1,button:0}));
       el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:160,clientY:200,pointerId:1,buttons:1}));
       el.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:160,clientY:200,pointerId:1}));
-      const saved=OCM.store.get('mascotPos',null);
-      return {before,saved,left:el.style.left,top:el.style.top};
+      const afterDrag={l:el.style.left,t:el.style.top};
+      return new Promise(res=>setTimeout(()=>{
+        const saved=OCM.store.get('mascotPos',null);
+        res({before,afterDrag,saved,left:el.style.left,top:el.style.top});
+      },1100));
     }""")
-    chk('mascot drags and remembers position',dr['saved'] and dr['saved']['x']!=40)
+    chk('mascot drags and remembers position',dr['saved'] and dr['afterDrag']['l']!=dr['before']['l'])
     # off switch in settings
     off=pg.evaluate("""()=>{
       const before=OCM.S.opts.mascotOn;

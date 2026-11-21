@@ -287,6 +287,26 @@ O.stopLiveSync=()=>{
   if(liveSyncTimer){clearInterval(liveSyncTimer);liveSyncTimer=null;}
 };
 
+// PERF: text deltas can arrive hundreds of times per second; every one used to trigger a render
+// pass. Deltas are appended to the store immediately (data stays exact) but the UI notification is
+// coalesced to one per 50ms per stream, which is what kills the frame drops during long answers.
+const deltaQ=new Map();
+function emitPartCoalesced(sid,m,pt,key){
+  const now=Date.now();
+  const q=deltaQ.get(key);
+  if(q){
+    q.m=m;q.pt=pt;
+    if(!q.t)q.t=setTimeout(()=>{
+      q.t=null;
+      deltaQ.delete(key);
+      bus.emit('part',sid,q.m,q.pt);
+    },50);
+    return;
+  }
+  const rec={m,pt,t:null};
+  deltaQ.set(key,rec);
+  rec.t=setTimeout(()=>{rec.t=null;deltaQ.delete(key);bus.emit('part',sid,rec.m,rec.pt)},50);
+}
 O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
   lastEventAt=Date.now();
   const ev=o.payload||o,p=ev.properties||{};
@@ -320,6 +340,8 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
     if(p.sessionID===S.sid)O.startLiveSync(p.sessionID);
     break}
   case'session.idle':{
+    // flush any coalesced delta so the settled answer is complete
+    try{for(const [k,rec] of [...deltaQ]){if(rec.t)clearTimeout(rec.t);deltaQ.delete(k);bus.emit('part',p.sessionID,rec.m,rec.pt)}}catch(_){}
     const was=S.status[p.sessionID];
     S.status[p.sessionID]={type:'idle'};bus.emit('status',p.sessionID);
     // Some server builds deliver only session.status:idle; emit idle here too or the queue,
@@ -349,7 +371,7 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
       pt.type='reasoning';
       if(!pt.text||pt.text!==pt[f])pt.text=pt[f];
     }
-    bus.emit('part',p.sessionID,m,pt);break}
+    emitPartCoalesced(p.sessionID,m,pt,p.sessionID+'|'+p.messageID+'|'+p.partID);break}
   case'message.part.removed':{const m=O.msgs(p.sessionID).idx.get(p.messageID);if(m){m.parts=m.parts.filter(x=>x.id!==p.partID);bus.emit('part-removed',p.sessionID,m,p.partID)}break}
   case'permission.updated':case'permission.asked':{const q=normPerm(p);if(!S.perms.some(x=>x.id===q.id))S.perms.push(q);bus.emit('perm');break}
   case'permission.replied':{const id=p.permissionID||p.requestID||p.id;S.perms=S.perms.filter(x=>x.id!==id);bus.emit('perm');break}
@@ -467,6 +489,57 @@ O.pushRecentModel=k=>{if(!k)return;const l=O.recentModels().filter(x=>x!==k);l.u
 O.sessionOrder=()=>O.store.get('sessionOrder',[]);
 O.setSessionOrder=arr=>{O.store.set('sessionOrder',arr);bus.emit('sessions')};
 O.moveSessionInOrder=(id,toIndex)=>{const o=O.sessionOrder();const i=o.indexOf(id);if(i<0)return;o.splice(i,1);o.splice(toIndex,0,id);O.setSessionOrder(o)};
+// ---- session folders (collapsible groups in the sessions drawer) ----
+// A folder is {id,name,icon,color,order}; membership is session -> folderId, so a session lives in
+// at most one folder and deleting a folder never deletes chats.
+O.sessionFolders=()=>{
+  const l=O.store.get('sessionFolders',[]);
+  return Array.isArray(l)?l.slice().sort((a,b)=>(a.order||0)-(b.order||0)):[];
+};
+O.saveSessionFolders=l=>{O.store.set('sessionFolders',l);bus.emit('sessions')};
+O.sessionFolderMap=()=>O.store.get('sessionFolderOf',{});
+O.sessionFolderOf=sid=>O.sessionFolderMap()[sid||S.sid]||'';
+O.setSessionFolder=(sid,id)=>{
+  const m=O.sessionFolderMap();
+  if(id)m[sid]=id;else delete m[sid];
+  O.store.set('sessionFolderOf',m);
+  bus.emit('sessions');
+};
+O.createSessionFolder=(name,icon)=>{
+  const l=O.sessionFolders();
+  const f={id:'sf_'+Date.now().toString(36),name:String(name||'').trim()||O.tr('Folder','Папка'),
+    icon:icon||'folder',color:'',order:l.length};
+  l.push(f);O.store.set('sessionFolders',l);bus.emit('sessions');return f;
+};
+O.renameSessionFolder=(id,name)=>{
+  const l=O.sessionFolders();
+  const f=l.find(x=>x.id===id);if(!f)return;
+  if(name!=null)f.name=String(name).trim()||f.name;
+  O.saveSessionFolders(l);
+};
+O.deleteSessionFolder=id=>{
+  const m=O.sessionFolderMap();
+  for(const k in m)if(m[k]===id)delete m[k];
+  O.store.set('sessionFolderOf',m);
+  O.store.set('sessionFolders',O.sessionFolders().filter(x=>x.id!==id));
+  bus.emit('sessions');
+};
+O.moveSessionFolder=(id,delta)=>{
+  const l=O.sessionFolders();
+  const i=l.findIndex(x=>x.id===id);if(i<0)return;
+  const j=Math.max(0,Math.min(l.length-1,i+delta));if(i===j)return;
+  const [x]=l.splice(i,1);l.splice(j,0,x);
+  l.forEach((f,k)=>{f.order=k});
+  O.saveSessionFolders(l);
+};
+// Collapsed state survives reopening the drawer.
+O.folderCollapsed=id=>!!O.store.get('sessionFolderCollapsed',{})[id];
+O.toggleFolderCollapsed=id=>{
+  const m=O.store.get('sessionFolderCollapsed',{});
+  if(m[id])delete m[id];else m[id]=1;
+  O.store.set('sessionFolderCollapsed',m);bus.emit('sessions');
+};
+
 // ---- session folders / tags ----
 O.sessionTags=()=>O.store.get('sessionTags',{});
 O.sessionTag=id=>O.sessionTags()[id]||'';
@@ -636,6 +709,40 @@ O.rotateProviderKey=async(pid,quiet)=>{
   if(ok&&!quiet)O.toast(O.tr('Switched to key ','Переключился на ключ ')+(idx+1)+'/'+list.length,2500);
   return ok;
 };
+
+// ---- session-scoped state (jailbreaks, mascot, file tree) ----
+// Everything here is keyed by session id so switching chats never leaks state into another.
+O.sessionJailbreaks=()=>O.store.get('sessionJailbreaks',{});
+O.sessionJailbreak=sid=>{
+  const v=O.sessionJailbreaks()[sid];
+  return Array.isArray(v)?v:null;         // null = inherit the global set
+};
+O.setSessionJailbreak=(sid,ids)=>{
+  if(!sid)return;
+  const m=O.sessionJailbreaks();
+  if(ids===null||ids===undefined)delete m[sid];else m[sid]=Array.from(new Set(ids));
+  O.store.set('sessionJailbreaks',m);
+  if(O.updateReadmeForModel)O.updateReadmeForModel(S.model?S.model.modelID:null);
+  bus.emit('sessionJailbreak',sid);
+  bus.emit('sessions');
+};
+O.sessionMascotState=()=>O.store.get('sessionMascot',{});
+O.mascotStateFor=sid=>(O.sessionMascotState()[sid||S.sid])||'idle';
+O.setMascotStateFor=(sid,state)=>{
+  if(!sid)return;
+  const m=O.sessionMascotState();
+  if(m[sid]===state)return;
+  m[sid]=state;
+  // bound the map: only the 40 most recent sessions keep an animation state
+  const keys=Object.keys(m);
+  if(keys.length>40){keys.slice(0,keys.length-40).forEach(k=>delete m[k])}
+  O.store.set('sessionMascot',m);
+  bus.emit('mascotState',sid,state);
+};
+// File tree cached per session+dir: { sid, dir, at, text, count }
+O.fileTreeFor=sid=>O.store.get('fileTree.'+(sid||S.sid),null);
+O.setFileTreeFor=(sid,tree)=>O.store.set('fileTree.'+(sid||S.sid),tree);
+O.dropFileTreeFor=sid=>O.store.remove('fileTree.'+(sid||S.sid));
 
 // ---- per-session project directory ----
 // Each chat can live in its own folder instead of everything sharing the global S.dir.

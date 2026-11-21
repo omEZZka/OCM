@@ -452,6 +452,8 @@ const SK_NAMES={chilly:'Chilly — кот',buddy:'Buddy — пёс',hamm:'Hamm �
 // game sprites served as their own animated GIFs — no pixel reconstruction.
 const ART=window.OCM_MASCOT_ART||{pets:{},brand:{}};
 function realSvg(key,size,state){
+  // DeepSeek must be PIXEL art (not the sharp logo), so it falls through to the pixel sprite.
+  if(key==='deepseek')return null;
   // Claude: the real Clawd sticker for the current state (idle/thinking/writing/waiting/error)
   if(key==='claude'&&ART.clawd){
     const src=ART.clawd[state]||ART.clawd.idle;
@@ -585,7 +587,9 @@ function svgFor(key,frame,size){
 O.mascotSvg=svgFor;
 // (legacy pixel ids kept for the hand-drawn fallback set)
 const REAL_PETS=Object.keys(ART.pets);
-const ORDER=['deepseek','claude','anime'].concat(REAL_PETS).concat(['chilly'].filter(Boolean)).filter((v,i,a)=>a.indexOf(v)===i);
+// Creature mascots (hand-drawn pixel art) — must stay in the list, before Soul Knight pets.
+const CREATURES=['hacker_cat','fox','penguin','capybara','shiba','hamster','octopus','axolotl','dragon','phoenix','frog','ninja_penguin','robo_cat','robo_dog','drone','android','term_ghost','ghost','demon','samurai','ninja','mage','witch','alchemist','knight','slime','goblin','gnome','elf','orc','troll','unicorn','pegasus','griffin','cerberus','chimera','minotaur','centaur','mermaid','siren','harpy','guardian','cherub','astronaut','alien','ufo','spacecat','star','moon','sun','golem'];
+const ORDER=['deepseek','claude','anime'].concat(CREATURES).concat(REAL_PETS);
 const SK_ORDER=REAL_PETS;
 const NAME={deepseek:'DeepSeek кит',claude:'Claude искра',anime:'Аниме-девушка',hacker_cat:'Кот-хакер',fox:'Лисёнок',penguin:'Пингвин',capybara:'Капибара',shiba:'Шиба-ину',hamster:'Хомяк',octopus:'Осьминог',axolotl:'Аксолотль',dragon:'Дракончик',phoenix:'Феникс',frog:'Лягушка',ninja_penguin:'Пингвин-ниндзя',robo_cat:'Робот-кот',robo_dog:'Робот-собака',drone:'Дрон',android:'Андроид',term_ghost:'Терминал-дух',ghost:'Призрак',demon:'Демонёнок',samurai:'Самурай',ninja:'Ниндзя',mage:'Маг',witch:'Ведьмочка',alchemist:'Алхимик',knight:'Рыцарь',slime:'Слайм',goblin:'Гоблин',gnome:'Гном',elf:'Эльф',orc:'Орк',troll:'Тролль',unicorn:'Единорог',pegasus:'Пегас',griffin:'Грифон',cerberus:'Цербер',chimera:'Химера',minotaur:'Минотавр',centaur:'Кентавр',mermaid:'Русалка',siren:'Сирена',harpy:'Гарпия',guardian:'Ангел-хранитель',cherub:'Херувим',astronaut:'Астронавт',alien:'Инопланетянин',ufo:'НЛО',spacecat:'Космокот',star:'Звёздочка',moon:'Луна',sun:'Солнышко',golem:'Голем'};
 O.mascotName=k=>{
@@ -599,7 +603,8 @@ const EMOTE={
   thinking:'<g fill="currentColor"><circle cx="4.6" cy="10" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="15.4" cy="10" r="1.5"/></g>',
   writing:'<g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11.2 3.2l3.6 3.6-7.4 7.4H3.8v-3.6z"/><path d="M13.4 5.4l1.4-1.4a1.4 1.4 0 012 2l-1.4 1.4"/></g>',
   waiting:'<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M7.2 6.4a2.9 2.9 0 115.8 0c0 1.9-2.4 2.3-2.9 3.8"/><circle cx="10.1" cy="14.2" r="1.1" fill="currentColor" stroke="none"/></g>',
-  error:'<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 3.4l7.2 12.8H2.8z"/><path d="M10 8.2v3.4"/><circle cx="10" cy="14" r="1" fill="currentColor" stroke="none"/></g>'
+  error:'<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 3.4l7.2 12.8H2.8z"/><path d="M10 8.2v3.4"/><circle cx="10" cy="14" r="1" fill="currentColor" stroke="none"/></g>',
+  jailbreak:'<g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8a1.5 1.5 0 011.5 1.5v12L12 13.4 8.5 16V4A1.5 1.5 0 0110 2.5z" transform="translate(-1.2 0)"/><path d="M13.5 7.5h2.6M14.8 6.2l1.3 1.3-1.3 1.3"/></g>'
 };
 const emoteSvg=st=>EMOTE[st]?'<svg viewBox="0 0 20 20" width="15" height="15">'+EMOTE[st]+'</svg>':'';
 
@@ -614,14 +619,14 @@ function html(key,fr,size){
   cache.set(k,v);return v;
 }
 function renderSprite(){
-  const sp=S.opts.mascot&&(PAL[S.opts.mascot]||SK_ART[S.opts.mascot])?S.opts.mascot:'deepseek';
+  const sp=S.opts.mascot&&(PAL[S.opts.mascot]||CUSTOM[S.opts.mascot]||SK_ART[S.opts.mascot]||ART.pets[S.opts.mascot]||ART.brand[S.opts.mascot])?S.opts.mascot:'deepseek';
   sprite.innerHTML=html(sp,frame%3,S.opts.mascotSize||44);
   el.dataset.state=state;el.dataset.species=sp;
   if(emoteEl)emoteEl.innerHTML=emoteSvg(state);
 }
 function startFrames(){
   if(frameTimer)clearInterval(frameTimer);
-  const speed=state==='writing'?190:state==='thinking'?360:state==='waiting'?280:1100;
+  const speed=state==='writing'?190:state==='thinking'?360:state==='waiting'?280:state==='jailbreak'?420:1100;
   frameTimer=setInterval(()=>{frame++;renderSprite()},speed);
 }
 function setState(s){
@@ -629,16 +634,112 @@ function setState(s){
   state=s;
   if(el){el.dataset.state=s;if(emoteEl)emoteEl.innerHTML=emoteSvg(s);startFrames()}
 }
-function derive(){
-  const st=S.status[S.sid];
-  if(S.perms.some(p=>p.sessionID===S.sid)||S.questions.some(q=>q.sessionID===S.sid))return 'waiting';
+// Per-session mascot state: the animation belongs to the SESSION, not to the app.
+// Switching chats restores that chat's own state instead of leaking the previous one.
+function deriveFor(sid){
+  const st=S.status[sid];
+  if(S.perms.some(p=>p.sessionID===sid)||S.questions.some(q=>q.sessionID===sid))return 'waiting';
   if(st&&st.type!=='idle'){
-    const streaming=O.msgs(S.sid).list.slice(-2).some(m=>(m.parts||[]).some(p=>p.type==='text'&&p.text&&p.text.length&&!(p.time&&p.time.end)));
+    const streaming=O.msgs(sid).list.slice(-2).some(m=>(m.parts||[]).some(p=>p.type==='text'&&p.text&&p.text.length&&!(p.time&&p.time.end)));
     return streaming?'writing':'thinking';
   }
+  const jb=O.sessionJbIds?O.sessionJbIds(sid):null;
+  if(jb&&jb.size)return 'jailbreak';
   return 'idle';
 }
-const tick=()=>setState(derive());
+function tick(sid){
+  if(sid&&sid!==S.sid)return;               // event for another chat: never touch this animation
+  if(!S.sid)return;
+  const st=deriveFor(S.sid);
+  O.setMascotStateFor(S.sid,st);
+  setState(st);
+}
+O.mascotTick=tick;
+
+// ---------------------------------------------------------------------------
+// PHYSICS: the mascot is a little body, not a sticker.
+//  • gravity pulls it down onto the composer ledge; a throw arcs and lands back
+//  • while the agent generates it paces left/right along the top of the input
+//  • dragging lifts it (no gravity), releasing drops it with the throw's velocity
+// ---------------------------------------------------------------------------
+const PHYS={x:0,y:0,vx:0,vy:0,ground:0,held:false,raf:0,dir:1,pacing:false};
+const GRAV=2400, BOUNCE=0.32, FRICTION=0.86, MAXV=2600;
+
+function physBounds(){
+  const pane=el&&el.parentNode;
+  if(!pane)return{x0:4,x1:300,ground:300};
+  const size=el.offsetWidth||44;
+  const w=pane.clientWidth||300,h=pane.clientHeight||400;
+  const kb=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--kb'))||0;
+  const composerEl=document.getElementById('composer');
+  const ch=composerEl?composerEl.offsetHeight:84;
+  // The ledge is the line just ABOVE the composer: the body must never cover the input.
+  const gap=10;
+  const ground=Math.max(4,Math.min(h-size-4, h-ch-kb-gap-size));
+  return{x0:4,x1:Math.max(4,w-size-4),ground};
+}
+
+function setPos(){
+  if(!el)return;
+  el.style.left=PHYS.x+'px';
+  el.style.top=PHYS.y+'px';
+  el.dataset.placed='1';
+}
+
+function step(){
+  PHYS.raf=0;
+  if(!el||!el.isConnected)return;
+  const b=physBounds();
+  const landing=b.ground;
+  if(!PHYS.held){
+    PHYS.vy+=GRAV/60;
+    if(PHYS.vy>MAXV)PHYS.vy=MAXV;
+    PHYS.y+=PHYS.vy/60;
+    PHYS.x+=PHYS.vx/60;
+    PHYS.vx*=FRICTION;
+    if(Math.abs(PHYS.vx)<3)PHYS.vx=0;
+    if(PHYS.y>=landing){
+      PHYS.y=landing;
+      if(Math.abs(PHYS.vy)>240){PHYS.vy=-PHYS.vy*BOUNCE}else{PHYS.vy=0}
+      // squash on impact, then settle
+      el.classList.remove('landed');void el.offsetWidth;el.classList.add('landed');
+    }
+  }
+  if(PHYS.x<b.x0){PHYS.x=b.x0;PHYS.vx=Math.abs(PHYS.vx)*0.5}
+  if(PHYS.x>b.x1){PHYS.x=b.x1;PHYS.vx=-Math.abs(PHYS.vx)*0.5}
+  if(PHYS.y<4){PHYS.y=4;PHYS.vy=Math.abs(PHYS.vy)*0.4}
+  setPos();
+  const moving=PHYS.held||PHYS.vy!==0||PHYS.vx!==0||PHYS.pacing;
+  if(moving)schedulePhys();
+}
+function schedulePhys(){
+  if(PHYS.raf)return;
+  PHYS.raf=requestAnimationFrame(step);
+}
+
+// Pacing: while the agent works the mascot walks back and forth over the input.
+let paceTimer=null;
+function startPacing(){
+  if(PHYS.pacing)return;
+  PHYS.pacing=true;
+  clearInterval(paceTimer);
+  const walk=()=>{
+    if(!el||!el.isConnected||!PHYS.pacing)return;
+    const b=physBounds();
+    PHYS.dir=PHYS.dir||1;
+    PHYS.vx=PHYS.dir*130;
+    if(PHYS.x>=b.x1-1){PHYS.dir=-1;el.classList.add('flip')}
+    if(PHYS.x<=b.x0+1){PHYS.dir=1;el.classList.remove('flip')}
+    schedulePhys();
+  };
+  paceTimer=setInterval(walk,220);
+  walk();
+}
+function stopPacing(){
+  PHYS.pacing=false;
+  clearInterval(paceTimer);paceTimer=null;
+  PHYS.vx=0;
+}
 
 O.mascotInit=parent=>{
   el=h('div',{class:'mascot',title:O.tr('Drag me · tap for options','Перетащи · тап — настройки')});
@@ -649,14 +750,42 @@ O.mascotInit=parent=>{
   el.style.setProperty('--ms',(S.opts.mascotSize||44)+'px');
   parent.append(el);
   renderSprite();startFrames();
-  const pos=O.store.get('mascotPos',null);
-  if(pos){el.style.left=pos.x+'px';el.style.top=pos.y+'px';el.dataset.placed='1'}
+  // start the body on its ledge and let gravity settle it
+  const initPos=()=>{
+    const b=physBounds();
+    const saved=O.store.get('mascotPos',null);
+    PHYS.x=saved&&saved.x!=null?Math.min(Math.max(b.x0,saved.x),b.x1):b.x0+8;
+    PHYS.y=b.ground;PHYS.vx=0;PHYS.vy=0;
+    setPos();
+  };
+  initPos();
+  const reanchor=()=>{
+    if(!el||!el.isConnected)return;
+    const b=physBounds();
+    if(PHYS.y>b.ground||PHYS.held===false){PHYS.y=Math.max(b.ground,Math.min(PHYS.y,b.ground))}
+    PHYS.y=b.ground;
+    if(PHYS.x<b.x0)PHYS.x=b.x0;
+    if(PHYS.x>b.x1)PHYS.x=b.x1;
+    setPos();
+  };
+  O.mascotReanchor=reanchor;
+  window.addEventListener('resize',reanchor,{passive:true});
+  // composer size changes (typing, permission cards, keyboard) → keep the ledge tight
+  try{
+    const comp=document.getElementById('composer');
+    if(comp&&window.ResizeObserver){
+      let t=null;
+      new ResizeObserver(()=>{clearTimeout(t);t=setTimeout(reanchor,60)}).observe(comp);
+    }
+  }catch(_){}
+  setTimeout(()=>{const b=physBounds();PHYS.y=document.getElementById('composer')?b.ground:PHYS.y;setPos()},300);
   const host=()=>parent.getBoundingClientRect();
   const onDown=e=>{
     if(e.button!=null&&e.button!==0)return;
     const t=e.touches?e.touches[0]:e;
     const r=el.getBoundingClientRect();
-    drag={ox:t.clientX-r.left,oy:t.clientY-r.top,moved:false,sx:t.clientX,sy:t.clientY};
+    drag={ox:t.clientX-r.left,oy:t.clientY-r.top,moved:false,sx:t.clientX,sy:t.clientY,lx:t.clientX,ly:t.clientY,lt:Date.now(),vx:0,vy:0};
+    PHYS.held=true;stopPacing();PHYS.vx=0;PHYS.vy=0;
     try{el.setPointerCapture&&el.setPointerCapture(e.pointerId)}catch(_){}
   };
   const onMove=e=>{
@@ -667,14 +796,28 @@ O.mascotInit=parent=>{
     const hb=host(),size=el.offsetWidth||44;
     const nx=Math.min(Math.max(4,t.clientX-hb.left-drag.ox),hb.width-size-4);
     const ny=Math.min(Math.max(4,t.clientY-hb.top-drag.oy),hb.height-size-4);
-    el.style.left=nx+'px';el.style.top=ny+'px';el.dataset.placed='1';
+    // track velocity so a flick throws the mascot instead of dropping it straight down
+    const dt=Math.max(1,Date.now()-drag.lt);
+    drag.vx=(t.clientX-drag.lx)/dt*1000;
+    drag.vy=(t.clientY-drag.ly)/dt*1000;
+    drag.lx=t.clientX;drag.ly=t.clientY;drag.lt=Date.now();
+    PHYS.x=nx;PHYS.y=ny;setPos();
     if(e.cancelable)e.preventDefault();
   };
   const onUp=()=>{
     if(!drag)return;
-    const moved=drag.moved;drag=null;
-    if(moved){O.store.set('mascotPos',{x:parseFloat(el.style.left)||0,y:parseFloat(el.style.top)||0});if(O.native.haptic)O.native.haptic('tick')}
-    else mascotMenu();
+    const moved=drag.moved;
+    const vx=Math.max(-MAXV,Math.min(MAXV,drag.vx||0));
+    const vy=Math.max(-MAXV,Math.min(MAXV,drag.vy||0));
+    drag=null;
+    if(moved){
+      // hand it back to gravity with the release velocity
+      PHYS.held=false;PHYS.vx=vx;PHYS.vy=vy;
+      schedulePhys();
+      setTimeout(()=>{if(!PHYS.held&&PHYS.vy===0)O.store.set('mascotPos',{x:PHYS.x,y:PHYS.y})},900);
+      if(O.native.haptic)O.native.haptic('tick');
+      if(S.sid&&deriveFor(S.sid)!=='idle')startPacing();
+    }else mascotMenu();
   };
   el.addEventListener('pointerdown',onDown);
   el.addEventListener('pointermove',onMove,{passive:false});
@@ -683,12 +826,27 @@ O.mascotInit=parent=>{
   el.addEventListener('touchstart',onDown,{passive:true});
   el.addEventListener('touchmove',onMove,{passive:false});
   el.addEventListener('touchend',onUp);
-  ['status','perm','part','msg'].forEach(n=>bus.on(n,tick));
+  bus.on('status',sid=>tick(sid));
+  bus.on('perm',()=>tick());
+  bus.on('part',sid=>tick(sid));
+  bus.on('msg',sid=>tick(sid));
+  bus.on('jailbreak',()=>tick());
+  bus.on('sessionJailbreak',sid=>tick(sid));
+  // switching session: restore THAT session's own mascot state
+  bus.on('open',()=>{if(el)setState(O.mascotStateFor(S.sid))});
+  // walk back and forth over the input while the agent is generating
+  bus.on('mascotState',(sid,st)=>{
+    if(!el||sid!==S.sid)return;
+    if(st==='thinking'||st==='writing')startPacing();
+    else if(st==='idle')stopPacing();
+  });
+  bus.on('status',()=>{const st=S.status[S.sid];if(!st||st.type==='idle')stopPacing()});
   bus.on('open',()=>{tick();const p=O.store.get('mascotPos',null);if(p){el.style.left=p.x+'px';el.style.top=p.y+'px'}});
   O.mascotRefresh=()=>{
     el.style.display=S.opts.mascotOn?'':'none';
     el.style.setProperty('--ms',(S.opts.mascotSize||44)+'px');
     renderSprite();startFrames();tick();
+    setTimeout(()=>{const b=physBounds();PHYS.y=b.ground;PHYS.x=Math.min(PHYS.x,b.x1);setPos()},40);
   };
   tick();
 };
@@ -722,6 +880,8 @@ O.openMascotSettings=()=>{
         onclick:()=>{S.opts.mascotSize=n;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()}},n+'px'))),
       h('div',{class:'grp'},O.tr('Assistants','Ассистенты')),
       gridFor(['deepseek','claude','anime']),
+      h('div',{class:'grp'},O.tr('Creatures','Существа')+' ('+CREATURES.length+')'),
+      gridFor(CREATURES),
       h('div',{class:'grp'},O.tr('Soul Knight pets — in-game sprites','Питомцы Soul Knight — игровые спрайты')+' ('+REAL_PETS.length+')'),
       gridFor(REAL_PETS)
     );
