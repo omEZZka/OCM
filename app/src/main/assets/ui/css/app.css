@@ -3862,6 +3862,9 @@ html.night-lamp #msgs { filter: brightness(.92) sepia(.14); }
 .mascot:active { cursor: grabbing; }
 .mascot-sprite { display: block; line-height: 0; }
 .mascot-sprite svg { display: block; }
+/* real artwork (GIF sprites / brand marks) must never be forced to bob as a whole bitmap */
+.mascot-img { display: block; image-rendering: -webkit-optimize-contrast; -webkit-user-drag: none; }
+.mascot[data-species] .mascot-sprite .mascot-img { border-radius: 6px; }
 
 /* state motion: bob / wiggle / hop — all transform-only, GPU friendly */
 .mascot[data-state="idle"] .mascot-sprite { animation: mBob 3.4s ease-in-out infinite; }

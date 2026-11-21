@@ -446,6 +446,27 @@ const SK_COL={
 };
 const SK_NAMES={chilly:'Chilly — кот',buddy:'Buddy — пёс',hamm:'Hamm — свинка',blue:'Blue — слайм',robo:'Robo — робот',panda:'Panda — панда',bonbon:'BonBon — кролик',canpig:"Can'bellied Pig — свинка",pigeon:'Pigeon — голубь',bug:'Inherited Bug — жук',tengu:'Mini Tengu — тэнгу',peanut:'Peanut — арахис',snow:'Snow — снежок',officer:'Officer Chilly — кот-офицер',blani:'Blani — огонёк',rosemary:'Rosemary Cat — кот-призрак',discount:'10% Off — скидка',pepper:'Director Pepper — директор',roachy:'Glitchy Roachy — глюк-жук',chillycube:'Chilly Cube — кубик',mechachilly:'Mecha Chilly — меха-кот',tap:'Tap — тап',monki:'Mad Monki — обезьяна',douwa:'Douwa — дува',laicai:'Lai Cai — Лай Цай',toastie:'Toastie — тостик',drill:'Lil Drillmaster — бурильщик',kapikapi:'Kapikapi — капибара',mahhmot:'Mahhmot — махмот',zongzibro:'Zongzi Bro — цзунцзы-брат',slimy:'Slimy — слизень',meower:'Meower — мяуэр',fortune:'Full Of Fortune — золотая свинья'};
 
+
+// ---------------------------------------------------------------------------
+// REAL ARTWORK (mascot-art.js): official DeepSeek/Claude marks + Soul Knight
+// game sprites served as their own animated GIFs — no pixel reconstruction.
+const ART=window.OCM_MASCOT_ART||{pets:{},brand:{}};
+function realSvg(key,size,state){
+  // Claude: the real Clawd sticker for the current state (idle/thinking/writing/waiting/error)
+  if(key==='claude'&&ART.clawd){
+    const src=ART.clawd[state]||ART.clawd.idle;
+    if(src)return '<img class="mascot-img" src="'+src+'" width="'+size+'" height="'+size+'" alt="" draggable="false">';
+  }
+  const b=ART.brand[key];
+  if(!b)return null;
+  return '<svg viewBox="'+b.viewBox+'" width="'+size+'" height="'+size+'">'+b.body+'</svg>';
+}
+function realPet(key,size){
+  const p=ART.pets[key];
+  if(!p)return null;
+  return '<img class="mascot-img" src="'+p.uri+'" width="'+size+'" height="'+size+'" alt="" draggable="false">';
+}
+
 // --------------------------------------------------------------- rendering
 function shade(hex,amt){
   const h6=String(hex).replace('#','');
@@ -543,6 +564,8 @@ function customGrid(key,frame){
   return g;
 }
 function svgFor(key,frame,size){
+  const real=realSvg(key,size,state)||realPet(key,size);
+  if(real)return real;
   const g=customGrid(key,frame)||grid(key,frame);
   const px=size/SIZE;
   const byColor=new Map();
@@ -560,10 +583,16 @@ function svgFor(key,frame,size){
   return '<svg viewBox="0 0 16 16" width="'+size+'" height="'+size+'" shape-rendering="crispEdges">'+out+'</svg>';
 }
 O.mascotSvg=svgFor;
-const SK_ORDER=['chilly','buddy','hamm','blue','robo','panda','bonbon','canpig','pigeon','bug','tengu','peanut','snow','officer','blani','rosemary','discount','pepper','roachy','chillycube','mechachilly','tap','monki','douwa','laicai','toastie','drill','kapikapi','mahhmot','zongzibro','slimy','meower','fortune'];
-const ORDER=['deepseek','claude','anime','hacker_cat','fox','penguin','capybara','shiba','hamster','octopus','axolotl','dragon','phoenix','frog','ninja_penguin','robo_cat','robo_dog','drone','android','term_ghost','ghost','demon','samurai','ninja','mage','witch','alchemist','knight','slime','goblin','gnome','elf','orc','troll','unicorn','pegasus','griffin','cerberus','chimera','minotaur','centaur','mermaid','siren','harpy','guardian','cherub','astronaut','alien','ufo','spacecat','star','moon','sun','golem'].concat(SK_ORDER);
+// (legacy pixel ids kept for the hand-drawn fallback set)
+const REAL_PETS=Object.keys(ART.pets);
+const ORDER=['deepseek','claude','anime'].concat(REAL_PETS).concat(['chilly'].filter(Boolean)).filter((v,i,a)=>a.indexOf(v)===i);
+const SK_ORDER=REAL_PETS;
 const NAME={deepseek:'DeepSeek кит',claude:'Claude искра',anime:'Аниме-девушка',hacker_cat:'Кот-хакер',fox:'Лисёнок',penguin:'Пингвин',capybara:'Капибара',shiba:'Шиба-ину',hamster:'Хомяк',octopus:'Осьминог',axolotl:'Аксолотль',dragon:'Дракончик',phoenix:'Феникс',frog:'Лягушка',ninja_penguin:'Пингвин-ниндзя',robo_cat:'Робот-кот',robo_dog:'Робот-собака',drone:'Дрон',android:'Андроид',term_ghost:'Терминал-дух',ghost:'Призрак',demon:'Демонёнок',samurai:'Самурай',ninja:'Ниндзя',mage:'Маг',witch:'Ведьмочка',alchemist:'Алхимик',knight:'Рыцарь',slime:'Слайм',goblin:'Гоблин',gnome:'Гном',elf:'Эльф',orc:'Орк',troll:'Тролль',unicorn:'Единорог',pegasus:'Пегас',griffin:'Грифон',cerberus:'Цербер',chimera:'Химера',minotaur:'Минотавр',centaur:'Кентавр',mermaid:'Русалка',siren:'Сирена',harpy:'Гарпия',guardian:'Ангел-хранитель',cherub:'Херувим',astronaut:'Астронавт',alien:'Инопланетянин',ufo:'НЛО',spacecat:'Космокот',star:'Звёздочка',moon:'Луна',sun:'Солнышко',golem:'Голем'};
-O.mascotName=k=>NAME[k]||SK_NAMES[k]||k;
+O.mascotName=k=>{
+  if(ART.pets[k])return ART.pets[k].name;
+  if(ART.brand[k])return ART.brand[k].name;
+  return NAME[k]||SK_NAMES[k]||k;
+};
 
 // emotes (SVG only, no emoji)
 const EMOTE={
@@ -693,10 +722,8 @@ O.openMascotSettings=()=>{
         onclick:()=>{S.opts.mascotSize=n;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()}},n+'px'))),
       h('div',{class:'grp'},O.tr('Assistants','Ассистенты')),
       gridFor(['deepseek','claude','anime']),
-      h('div',{class:'grp'},O.tr('Creatures','Существа')+' ('+(ORDER.length-SK_ORDER.length-3)+')'),
-      gridFor(ORDER.filter(k=>SK_NAMES[k]===undefined).slice(3)),
-      h('div',{class:'grp'},O.tr('Soul Knight pets','Питомцы Soul Knight')+' ('+SK_ORDER.length+')'),
-      gridFor(SK_ORDER)
+      h('div',{class:'grp'},O.tr('Soul Knight pets — in-game sprites','Питомцы Soul Knight — игровые спрайты')+' ('+REAL_PETS.length+')'),
+      gridFor(REAL_PETS)
     );
   };
   draw();
