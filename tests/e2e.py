@@ -842,6 +842,24 @@ try:
       const t=sh?sh.textContent:'';const has=t.includes('Текущее решение')&&t.includes('Симпатия');
       OCM.back();return {has}}""")
     chk('mascot mind card opens',mindcard['has'])
+    # ---- 2.28.1 perf + hygiene ----
+    perf2=pg.evaluate("""async ()=>{
+      // gaze must be coalesced: many pointer events -> at most one style write per frame
+      const el=document.querySelector('.mascot');
+      const sp=el.querySelector('.mascot-sprite');
+      let writes=0;
+      const mo=new MutationObserver(rs=>{for(const r of rs)if(r.attributeName==='style')writes++});
+      mo.observe(sp,{attributes:true,attributeFilter:['style']});
+      for(let i=0;i<60;i++)document.dispatchEvent(new PointerEvent('pointermove',{clientX:100+i,clientY:300+i,bubbles:true}));
+      await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+      await new Promise(r=>setTimeout(r,120));
+      mo.disconnect();
+      return {writes};
+    }""")
+    chk('gaze is rAF-coalesced (no per-event layout)',perf2['writes']<=3)
+    disp=pg.evaluate("()=>({has:typeof OCM.mascotDispose==='function'})")
+    chk('mascot disposes its global listeners',disp['has'])
+
 
 
     roam=pg.evaluate("""()=>{

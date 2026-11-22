@@ -119,6 +119,7 @@ O.chatInit=root=>{
   // FIX (mascot fell into the composer): it used to be a child of the scrollable #msgs wrapper,
   // so typing (which reflows/scrolls the list) shifted and clipped it under the input. It now
   // lives in the chat pane itself, above everything, and only moves when dragged.
+  if(O.mascotDispose){try{O.mascotDispose()}catch(_){}}
   if(O.mascotInit){try{O.mascotInit(root)}catch(e){console.error('mascot',e)}}
   bus.on('open',()=>{renderAll()});
   // Live-resync snapshot: merge into the DOM incrementally. NEVER force-scroll here — the user

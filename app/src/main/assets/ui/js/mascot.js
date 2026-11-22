@@ -1205,17 +1205,30 @@ O.mascotInit=parent=>{
   }catch(_){}
   setTimeout(()=>{const b=physBounds();PHYS.y=document.getElementById('composer')?b.ground:PHYS.y;setPos()},300);
   // ---- 01 gaze: the body leans toward the pointer / the input field while typing ----
-  let lastPointerAt=0;
+  // PERF: pointermove fires dozens of times per second; getBoundingClientRect + a style write
+  // on every event is pure jank. Coalesce into one rAF and skip when the pet is hidden/moving.
+  let lastPointerAt=0,gazeRaf=0,gazeX0=0,gazeY0=0,gazeT=0;
   const trackPointer=e=>{
-    if(!O.chatAnim||O.chatAnim()===false)return;
-    if(!el||!el.isConnected||PHYS.held)return;
     const t=e.touches?e.touches[0]:e;
     if(!t)return;
-    lastPointerAt=Date.now();
-    gazeAt(t.clientX,t.clientY);
+    gazeX0=t.clientX;gazeY0=t.clientY;gazeT=e.type==='touchmove'?260:120;
+    if(gazeRaf)return;
+    gazeRaf=requestAnimationFrame(()=>{
+      gazeRaf=0;
+      if(!O.chatAnim||O.chatAnim()===false)return;
+      if(!el||!el.isConnected||PHYS.held||PHYS.walking)return;
+      lastPointerAt=Date.now();
+      gazeAt(gazeX0,gazeY0);
+    });
   };
   document.addEventListener('pointermove',trackPointer,{passive:true});
   document.addEventListener('touchmove',trackPointer,{passive:true});
+  // listeners die with the view (renderAll rebuilds the chat pane)
+  O.mascotDispose=()=>{
+    try{document.removeEventListener('pointermove',trackPointer)}catch(_){}
+    try{document.removeEventListener('touchmove',trackPointer)}catch(_){}
+    if(gazeRaf){cancelAnimationFrame(gazeRaf);gazeRaf=0}
+  };
   // while typing it looks at the text area on purpose
   const lookAtComposer=()=>{
     const ta=document.querySelector('#composer textarea');
