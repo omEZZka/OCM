@@ -27,6 +27,11 @@ const route=(method,path,body)=>{const u=new URL('http://x'+path),p=u.pathname;s
  if(p==='/mcp')return{ctx7:{status:'connected'},broken:{status:'failed',error:'spawn error'}};
  if(p==='/lsp')return[];
  if(p==='/find/file')return['main.py','src/'];
+ if(/\/session\/[^/]+\/fork$/.test(p)&&method==='POST'){const s={id:'ses_fork_'+(srv.sessions.length+1),title:'Fork',parentFork:p.split('/')[2],time:{created:Date.now(),updated:Date.now()},directory:'/root'};srv.sessions.unshift(s);srv.msgs[s.id]=[];return s}
+ if(/prompt_async$/.test(p)&&/^ses_fork_/.test(p.split('/')[2])){const fs=p.split('/')[2],b=JSON.parse(body);(window.__asidePrompts=window.__asidePrompts||[]).push(b);
+   if(window.__asideFail)throw new Error('side agent down');
+   srv.msgs[fs].push({info:{id:b.messageID,role:'user',sessionID:fs},parts:b.parts});
+   srv.msgs[fs].push({info:{id:'msg_aside_'+srv.msgs[fs].length,role:'assistant',sessionID:fs,time:{created:Date.now(),completed:Date.now()}},parts:[{type:'text',text:'aside answer: 42'}]});return{}}
  if(/prompt_async$/.test(p)){setTimeout(()=>window.__onPrompt(JSON.parse(body)),30);return{}}
  if(/permission/.test(p))return true;
  return{}};

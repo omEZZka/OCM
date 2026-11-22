@@ -341,7 +341,160 @@ try:
     chk('focus mode exits',pg.locator('#top').is_visible())
     # themes: 24 built-ins + custom editor + import/export
     chk('amoled theme applies',pg.evaluate("OCM.S.opts.theme='amoled';OCM.saveOpts();document.documentElement.dataset.theme")=='amoled')
-    chk('24 built-in themes',pg.evaluate("OCM.themeList().filter(t=>!t.custom).length")==24)
+    chk('29 built-in themes',pg.evaluate("OCM.themeList().filter(t=>!t.custom).length")==29)
+    # ---- 2.29 UI modes: chat vs terminal, three theme layers, landscape rails ----
+    mode=pg.evaluate("""()=>{
+      const before=OCM.uiMode();
+      OCM.setUiMode('term');
+      const termAttr=document.documentElement.dataset.ui;
+      const appTerm=OCM.$('#app').dataset.term;
+      const segs=document.querySelectorAll('#ui-mode-bar .ui-mode-seg button').length;
+      const saved=JSON.parse(localStorage.getItem('ocm.opts')||'{}').uiMode;
+      OCM.setUiMode('chat');
+      return {before,termAttr,appTerm,segs,saved,back:document.documentElement.dataset.ui};
+    }""")
+    chk('ui mode defaults to classic chat',mode['before']=='chat')
+    chk('ui mode switches to terminal',mode['termAttr']=='term' and mode['appTerm']=='1')
+    chk('ui mode segmented control in header',mode['segs']==2)
+    chk('ui mode persists locally',mode['saved']=='term')
+    chk('ui mode switches back to chat',mode['back']=='chat')
+    layers=pg.evaluate("""()=>{
+      const g0=OCM.themeLayer('global');
+      OCM.setThemeLayer('chat','dracula');
+      OCM.setThemeLayer('term','anthropic');
+      const chat=OCM.themeLayer('chat'),term=OCM.themeLayer('term');
+      const css=document.getElementById('ocm-theme-layers');
+      const has=!!css&&css.textContent.includes('#msgs')&&css.textContent.includes('data-ui=term');
+      OCM.setUiMode('term');
+      const paneBg=getComputedStyle(OCM.$('#pane-chat')).backgroundColor;
+      OCM.setUiMode('chat');
+      OCM.setThemeLayer('chat',null);OCM.setThemeLayer('term',null);
+      return {g0,chat,term,has,paneBg,followChat:OCM.themeLayer('chat')===g0,followTerm:OCM.themeLayer('term')===g0};
+    }""")
+    chk('theme layers are independent',layers['chat']=='dracula' and layers['term']=='anthropic')
+    chk('theme layer css scopes feed and terminal',layers['has'])
+    chk('terminal pane takes its own theme bg',layers['paneBg'] not in ('','rgba(0, 0, 0, 0)'))
+    chk('theme layers can follow global again',layers['followChat'] and layers['followTerm'])
+    newthemes=pg.evaluate("""()=>{
+      const ids=['anthropic','anthropicpaper','hacker','draculapro','nordterm'];
+      return ids.map(id=>{const t=OCM.themeById(id);return {id,name:t.name,found:t.id===id}});
+    }""")
+    chk('new terminal themes present',all(t['found'] for t in newthemes))
+    contrast=pg.evaluate("""()=>{
+      // every built-in theme must keep readable text in the terminal scope
+      const lum=c=>{const m=/rgba?\\(([^)]+)\\)/.exec(c);if(!m)return null;
+        const p=m[1].split(',').map(Number);const f=v=>{v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4)};
+        return 0.2126*f(p[0])+0.7152*f(p[1])+0.0722*f(p[2])};
+      const ratio=(a,b)=>{const l1=lum(a),l2=lum(b);if(l1==null||l2==null)return 99;
+        const hi=Math.max(l1,l2),lo=Math.min(l1,l2);return (hi+0.05)/(lo+0.05)};
+      const box=document.createElement('div');box.className='term-preview';
+      box.innerHTML='<div class="tp-line"><span class="mono">path/to/file.kt</span></div>';
+      document.body.append(box);
+      const bad=[];
+      OCM.setUiMode('term');
+      OCM.themeList().filter(t=>!t.custom).forEach(t=>{
+        OCM.setThemeLayer('term',t.id);
+        const cs=getComputedStyle(box);
+        const r=ratio(cs.color,cs.backgroundColor);
+        if(r<3)bad.push({id:t.id,r:Math.round(r*10)/10});
+      });
+      OCM.setThemeLayer('term',null);OCM.setUiMode('chat');box.remove();
+      return {bad};
+    }""")
+    chk('all themes readable in terminal mode',not contrast['bad'])
+    # ---- 2.29 ask-aside: side agent answers while the main one keeps working ----
+    aside=pg.evaluate("""async ()=>{
+      if(!OCM.S.sid){await OCM.newSession()}
+      const main=OCM.S.sid;
+      // the live-sync poller asks the server for the status, so the mock server must agree
+      // that the main session is busy for the whole test
+      const prevStatus=window.__status;
+      window.__status=Object.assign({},prevStatus||{},{[main]:{type:'busy'}});
+      OCM.S.status[main]={type:'busy'};OCM.bus.emit('status',main);
+      const mainMsgs=OCM.msgs(main).list.length;
+      OCM.askAsideSend('what does main.py do?');
+      await new Promise(r=>setTimeout(r,1800));
+      const win=document.getElementById('ask-aside');
+      const txt=win?win.textContent:'';
+      const prompts=window.__asidePrompts||[];
+      const last=prompts[prompts.length-1]||{parts:[]};
+      const forkCalls=window.__srv.calls.filter(c=>/\\/fork$/.test(c.p)).length;
+      const out={open:!!win&&!win.classList.contains('hide'),answered:txt.includes('aside answer: 42'),
+        readonly:(last.parts[0]&&last.parts[0].text||'').includes('ТОЛЬКО ЧТЕНИЕ'),
+        forked:forkCalls>=1,sameSid:OCM.S.sid===main,
+        mainUntouched:OCM.msgs(main).list.length===mainMsgs,
+        mainStillBusy:(OCM.S.status[main]||{}).type==='busy',
+        memory:OCM.askAsideMemory(main).length,
+        chip:!!document.querySelector('#dock .aa-chip')};
+      // isolation: a failing side agent must not disturb the main session
+      window.__asideFail=1;
+      OCM.askAsideSend('second question');
+      await new Promise(r=>setTimeout(r,900));
+      window.__asideFail=0;
+      out.errShown=!!win.querySelector('.aa-err');
+      out.mainBusyAfterErr=(OCM.S.status[main]||{}).type==='busy';
+      out.notActive=!OCM.askAsideActive();
+      OCM.askAsideClose();
+      out.closed=win.classList.contains('hide');
+      window.__status=prevStatus;
+      OCM.S.status[main]={type:'idle'};OCM.bus.emit('status',main);
+      return out;
+    }""")
+    chk('ask-aside opens a floating mini chat',aside['open'])
+    chk('ask-aside answers from a forked session',aside['answered'] and aside['forked'])
+    chk('ask-aside side agent is read-only',aside['readonly'])
+    chk('ask-aside does not touch the main chat',aside['sameSid'] and aside['mainUntouched'] and aside['mainStillBusy'])
+    chk('ask-aside remembers clarifications per session',aside['memory']>=1)
+    chk('ask-aside shows a status chip in the dock',aside['chip'])
+    chk('ask-aside errors are isolated',aside['errShown'] and aside['mainBusyAfterErr'] and aside['notActive'])
+    chk('ask-aside closes',aside['closed'])
+    pg.set_viewport_size({"width":900,"height":412})
+    pg.wait_for_timeout(400)
+    rails=pg.evaluate("""async ()=>{
+      OCM.setUiMode('term');
+      OCM.termRailSet({left:true,right:true,leftW:230,rightW:320});
+      await new Promise(r=>setTimeout(r,250));
+      const L=document.getElementById('term-rail-left'),R=document.getElementById('term-rail-right');
+      const app=OCM.$('#app');
+      const out={leftShown:L.classList.contains('show')&&getComputedStyle(L).display!=='none',
+        rightShown:R.classList.contains('show')&&getComputedStyle(R).display!=='none',
+        groups:L.querySelectorAll('.rail-grp').length,
+        filesHidden:getComputedStyle(OCM.$('#pane-files')).display==='none',
+        grips:document.querySelectorAll('.rail-grip.show').length};
+      OCM.termRailSet({left:false});
+      await new Promise(r=>setTimeout(r,200));
+      out.leftHidden=!L.classList.contains('show');
+      OCM.termRailSet({left:true});
+      OCM.setUiMode('chat');
+      await new Promise(r=>setTimeout(r,200));
+      out.chatNoRails=!L.classList.contains('show');
+      return out;
+    }""")
+    chk('landscape terminal shows both rails',rails['leftShown'] and rails['rightShown'])
+    chk('sessions rail groups In progress / Idle',rails['groups']==2)
+    chk('landscape terminal replaces files pane',rails['filesHidden'])
+    chk('rails are resizable (grips present)',rails['grips']==2)
+    chk('rails can be hidden',rails['leftHidden'])
+    chk('classic mode has no rails',rails['chatNoRails'])
+    pg.set_viewport_size({"width":390,"height":780})
+    pg.wait_for_timeout(300)
+    portrait=pg.evaluate("""async ()=>{
+      OCM.setUiMode('term');
+      await new Promise(r=>setTimeout(r,250));
+      const msgs=OCM.$('#msgs'),comp=OCM.$('#composer');
+      const overflow=[...document.querySelectorAll('#pane-chat .tool,#pane-chat .diff,#pane-chat .m-body')]
+        .filter(e=>e.scrollWidth>e.clientWidth+2&&!getComputedStyle(e).overflowX.includes('auto')&&!getComputedStyle(e).overflowX.includes('scroll')).length;
+      const railsHidden=getComputedStyle(document.getElementById('term-rail-left')).display==='none';
+      const out={pad:parseFloat(getComputedStyle(msgs).paddingLeft),
+        compBottom:Math.abs(comp.getBoundingClientRect().bottom-window.innerHeight)<80,
+        overflow,railsHidden};
+      OCM.setUiMode('chat');
+      return out;
+    }""")
+    chk('portrait terminal has compact gutters',portrait['pad']<=12)
+    chk('portrait terminal keeps composer at the bottom',portrait['compBottom'])
+    chk('portrait terminal has no horizontal overflow',portrait['overflow']==0)
+    chk('portrait terminal hides landscape rails',portrait['railsHidden'])
     pg.evaluate("OCM.S.opts.theme='dracula';OCM.saveOpts()")
     pg.wait_for_timeout(100)
     drac=pg.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()")
@@ -776,6 +929,23 @@ try:
       return {has,after:!!el.querySelector('.mascot-bubble')};
     }""")
     chk('coding bubble appears while generating',bubble['has'])
+    termcss=pg.evaluate("""()=>{
+      OCM.setUiMode('term');
+      const el=document.querySelector('.msg.user .m-body');
+      const tool=document.querySelector('#pane-chat .cg-head')||document.querySelector('#pane-chat .tool-h');
+      const cs=el?getComputedStyle(el):null;
+      const title=tool?(tool.querySelector('.cg-title')||tool.querySelector('.t')||tool):null;
+      const ts=title?getComputedStyle(title):null;
+      const mono=s=>/mono|Menlo|Consolas/i.test(s||'');
+      const out={flat:cs?cs.borderTopLeftRadius==='0px':null,
+        toolMono:ts?mono(ts.fontFamily):null,ff:ts?ts.fontFamily:'none',
+        compact:tool?tool.getBoundingClientRect().height<=44:null};
+      OCM.setUiMode('chat');
+      return out;
+    }""")
+    chk('terminal mode flattens user bubbles',termcss['flat'])
+    chk('terminal mode uses monospace for tools',termcss['toolMono'])
+    chk('terminal tool cards are compact',termcss['compact'])
     # facing: artwork faces left, so moving right must be mirrored
     face=pg.evaluate("""async ()=>{
       if(!OCM.S.sid){try{await OCM.newSession()}catch(e){}}
@@ -806,6 +976,23 @@ try:
         n++; if((d>0)!==log[i].flip)bad++;
       }
       OCM.S.opts.mascot_gaze=true;
+      // if the pet happened to rest through the whole window, take one more stroll
+      if(n===0){
+        OCM.S.opts.mascot_gaze=false;
+        OCM.mascotWalkNow&&OCM.mascotWalkNow();
+        const more=[];
+        for(let i=0;i<30;i++){
+          await new Promise(r=>setTimeout(r,150));
+          const a=OCM.mascotAI();
+          more.push({x:Math.round(parseFloat(el.style.left)||0),flip:el.classList.contains('flip'),walking:a.walking&&!a.held});
+        }
+        for(let i=1;i<more.length;i++){
+          if(!more[i].walking||!more[i-1].walking)continue;
+          const d=more[i].x-more[i-1].x; if(Math.abs(d)<2)continue;
+          n++; if((d>0)!==more[i].flip)bad++;
+        }
+        OCM.S.opts.mascot_gaze=true;
+      }
       return {n,bad};
     }""")
     chk('mascot faces the way it walks',face['n']>0 and face['bad']==0)
@@ -878,6 +1065,7 @@ try:
     turn=pg.evaluate("""async ()=>{
       OCM.mascotSetRoam(false);
       const el=document.querySelector('.mascot');
+      const hadFlip=el.classList.contains('flip');
       el.classList.add('flip');
       OCM.mascotBubble&&OCM.mascotBubble('thinking');
       await new Promise(r=>setTimeout(r,60));
@@ -890,52 +1078,58 @@ try:
       const mirrored=s=>{const m=/matrix\\(([^)]+)\\)/.exec(s||'');return m?parseFloat(m[1])<0:false};
       const out={hasBody:!!body,browMirrored:mirrored(bm),bodyMirrored:mirrored(bodyM),
         spriteIsChild:!!(body&&body.contains(sp))};
-      el.classList.remove('flip');
+      el.classList.toggle('flip',hadFlip);
       return out;
     }""")
     chk('mascot turn mirrors only the body wrapper',turn['hasBody'] and turn['spriteIsChild'] and turn['bodyMirrored'])
     chk('mascot bubble text stays readable when turned',not turn['browMirrored'])
     hy=pg.evaluate("""async ()=>{
-      // gaze only runs while the pet stands still: no roaming, no nap, no held drag
+      // The gaze contract, tested deterministically:
+      //  a) it is rAF-coalesced (one style write per frame, not per event)
+      //  b) a sustained look to one side turns the body after a short hold
+      //  c) a finger right on the pet does not turn it (dead zone)
       OCM.mascotSetRoam(false);
       OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
       const el=document.querySelector('.mascot');
-      el.classList.remove('flip');delete el.dataset.nap;
-      // the previous physics test ends with a tap: wait for the body to be released and settle
-      let settled=false;
-      for(let i=0;i<30&&!settled;i++){
-        await new Promise(r=>setTimeout(r,100));
-        settled=!OCM.mascotAI().held;
-      }
-      // force the pet to a predictable center position so gaze always has room to turn right
-      el.style.left='175px';el.style.top='570px';
+      el.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:9}));
       OCM.mascotForceIdle&&OCM.mascotForceIdle();
-      el.classList.remove('flip');
-      await new Promise(r=>setTimeout(r,300));
+      delete el.dataset.nap;
+      el.style.left='150px';el.style.top='560px';
+      await new Promise(r=>setTimeout(r,250));
+      const sp=el.querySelector('.mascot-sprite');
+      // (a) coalescing: 40 events inside one frame -> at most a couple of writes
+      let writes=0;
+      const mo=new MutationObserver(rs=>{for(const r of rs)if(r.attributeName==='style')writes++});
+      mo.observe(sp,{attributes:true,attributeFilter:['style']});
+      for(let i=0;i<40;i++)document.dispatchEvent(new PointerEvent('pointermove',{clientX:200+i,clientY:400,bubbles:true}));
+      await new Promise(r=>setTimeout(r,120));
+      mo.disconnect();
+      // (b) sustained gaze far to the right, sampled over real frames
       const r0=el.getBoundingClientRect();
-      const cx0=r0.left+r0.width/2;
-      // always aim to the right: dx>0.4 must flip the pet regardless of where it stands
-      const far={clientX:window.innerWidth-2,clientY:r0.top+r0.height/2,bubbles:true};
-      document.dispatchEvent(new PointerEvent('pointermove',far));
-      await new Promise(r2=>requestAnimationFrame(()=>requestAnimationFrame(r2)));
-      const quick=el.classList.contains('flip');           // must NOT flip on a single event
-      let held=false;
-      for(let i=0;i<10&&!held;i++){
+      // the body only turns when the pointer is on the side it is NOT facing yet
+      const facing=OCM.mascotAI().faceDir;
+      const flip0=el.classList.contains('flip');
+      const far={clientX:facing>0?2:window.innerWidth-2,clientY:r0.top+r0.height/2,bubbles:true};
+      let held=false,frames=0;
+      for(let i=0;i<40&&!held;i++){
         document.dispatchEvent(new PointerEvent('pointermove',far));
-        await new Promise(r2=>setTimeout(r2,45));
-        held=el.classList.contains('flip');
+        await new Promise(r=>requestAnimationFrame(r));
+        await new Promise(r=>setTimeout(r,30));
+        frames++;
+        held=el.classList.contains('flip')!==flip0&&OCM.mascotAI().faceDir===-facing;
       }
-      // dead zone: a finger right on the pet must not turn it
-      const nearPt={clientX:cx0+3,clientY:r0.top+r0.height/2,bubbles:true};
-      let nearFlip=held;
-      for(let i=0;i<6;i++){
-        document.dispatchEvent(new PointerEvent('pointermove',nearPt));
-        await new Promise(r2=>setTimeout(r2,45));
-        nearFlip=el.classList.contains('flip');
+      // (c) dead zone around the body centre
+      const cx=r0.left+r0.width/2;
+      const before=el.classList.contains('flip');
+      for(let i=0;i<10;i++){
+        document.dispatchEvent(new PointerEvent('pointermove',{clientX:cx+2,clientY:r0.top+r0.height/2,bubbles:true}));
+        await new Promise(r=>requestAnimationFrame(r));
+        await new Promise(r=>setTimeout(r,25));
       }
+      const nearFlip=el.classList.contains('flip');
       const walking=OCM.mascotAI().walking;
-      el.classList.remove('flip');
-      return {quick,held,nearFlip,heldBefore:held,walking};
+      OCM.mascotGlanceOff&&OCM.mascotGlanceOff();
+      return {writes,quick:writes>3,held,nearFlip,heldBefore:before,walking,frames};
     }""")
     chk('gaze turn has hysteresis (no instant flip)',not hy['quick'] and hy['held'] and not hy['walking'])
     chk('gaze dead zone keeps the pet still',hy['nearFlip']==hy['heldBefore'])

@@ -105,6 +105,11 @@ function build(){
   const fx=h('button',{class:'focus-exit',title:O.tr('Exit focus mode','Выйти из фокуса'),onclick:()=>O.setFocusMode(false)},O.icon('x'));
   document.body.append(fx);
 
+  // Mode switch: always reachable in the header, and at the top of the landscape rail.
+  if(O.uiModeSeg){
+    topLeft.append(h('div',{id:'ui-mode-bar'},O.uiModeSeg()));
+  }
+  if(O.termRailsInit)O.termRailsInit(app,P.chat,P.side);
   O.filesInit(P.files);
   O.chatInit(P.chat);
   O.termInit(SP.term);
@@ -146,6 +151,7 @@ function layout(){
   SB.changes.classList.toggle('on',sideTab==='changes');
   for(const k in B){if(k!=='more')B[k].classList.toggle('active',tab===k)}
   if(O.termShown)O.termShown();
+  if(O.termLayout)O.termLayout();
 }
 
 function bottomMenu(){
@@ -168,6 +174,14 @@ function bottomMenu(){
         :O.tr('Mascot is hidden','Маскот скрыт'),
       icon:'bot',fn:()=>{O.openMascotTuning?O.openMascotTuning():O.openMascotSettings&&O.openMascotSettings()}},
     {label:O.tr('Mascot workshop','Мастерская маскота'),sub:O.tr('100 ideas, pick what comes next','100 идей, выберите, что дальше'),icon:'bulb',fn:()=>O.openMascotIdeas&&O.openMascotIdeas()},
+    {label:O.tr('Clarify (side agent)','Уточнить (боковой агент)'),
+      sub:O.tr('Ask without interrupting the running task','Спросить, не прерывая текущую задачу'),icon:'bulb',fn:()=>{
+        const draft=O.$('#composer textarea');
+        O.askAsideOpen&&O.askAsideOpen(draft&&draft.value||'');
+        if(draft&&draft.value){draft.value='';draft.dispatchEvent(new Event('input'))}
+      }},
+    {label:O.tr('Interface: ','Интерфейс: ')+(O.isTermMode&&O.isTermMode()?O.tr('Terminal','Терминал'):O.tr('Classic chat','Классический чат')),
+      sub:O.tr('Mode, three theme layers, landscape panels','Режим, три слоя тем, панели в альбоме'),icon:'sliders',fn:()=>O.openUiModeSettings&&O.openUiModeSettings()},
     {label:O.tr('Terminal','Терминал'),icon:'terminal',fn:()=>O.setTab('term')},
     {label:O.tr('Changes','Изменения'),icon:'branch',fn:()=>O.setTab('changes')},
     {label:O.tr('Bottom bar…','Нижний бар…'),sub:O.tr('Choose your tabs','Выбрать свои вкладки'),icon:'sliders',fn:()=>O.openNavSettings()},

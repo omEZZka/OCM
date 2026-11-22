@@ -29,7 +29,18 @@ const THEMES=[
   T('ocean','Deep Ocean','calm',false,'#0f1c2e','#d7e3f4','#4fc3f7','#0f1c2e','#7986cb','#7d93ad','#0a1422',{ok:'#81c784',err:'#e57373',warn:'#ffb74d'}),
   T('forest','Night Forest','nature',false,'#141a14','#e4ead9','#8bc34a','#141a14','#4db6ac','#8a967d','#0e130e',{ok:'#aed581',err:'#ef9a9a',warn:'#ffd54f'}),
   T('sunset','Sunset Ember','warm',false,'#1c1210','#f5e6dc','#ff8a50','#1c1210','#ffb74d','#a08b80','#140d0b',{ok:'#aed581',err:'#ff5252',warn:'#ffc107'}),
-  T('graphite','Graphite Mono','mono',false,'#161616','#e8e8e8','#b8b8b8','#161616','#8a8a8a','#8f8f8f','#0f0f0f',{ok:'#9ccc9c',err:'#e08585',warn:'#d8c07a'})
+  T('graphite','Graphite Mono','mono',false,'#161616','#e8e8e8','#b8b8b8','#161616','#8a8a8a','#8f8f8f','#0f0f0f',{ok:'#9ccc9c',err:'#e08585',warn:'#d8c07a'}),
+  // ---- 2.29 terminal-first palettes ----
+  T('anthropic','Anthropic Dark','terminal',false,'#262624','#f0eee6','#d97757','#262624','#c15f3c','#a8a29a','#1f1e1d',
+    {bg2:'#2b2a28',bg3:'#333230',card:'#2f2e2b',line:'#3d3b38',line2:'#4a4844',ok:'#7fa87f',err:'#d97757',warn:'#d9a441',add:'#2a3a2a',del:'#3d2a26'}),
+  T('anthropicpaper','Anthropic Paper','light',true,'#f9f8f6','#262624','#c15f3c','#ffffff','#a8563a','#6b6862','#f2f0ec',
+    {bg2:'#f4f2ee',bg3:'#eeebe5',card:'#ffffff',line:'#e3e0d8',line2:'#d5d1c7',ok:'#4f7a4f',err:'#b5432c',warn:'#a8762a',add:'#e6f0e6',del:'#f7e6e2'}),
+  T('hacker','Hacker Green','terminal',false,'#0a0f0a','#7dff7d','#00ff41','#04120a','#39ff14','#3f7a3f','#050a05',
+    {bg2:'#0d140d',bg3:'#111a11',card:'#0f170f',line:'#1c331c',line2:'#264526',ok:'#00ff41',err:'#ff4444',warn:'#ccff00',add:'#0d2a0d',del:'#2a0d0d'}),
+  T('draculapro','Dracula Pro','terminal',false,'#22212c','#f8f8f2','#ff80bf','#22212c','#8aff80','#7b7a8c','#1b1a24',
+    {bg2:'#282735',bg3:'#302f40',card:'#2a2937',line:'#3a3950',line2:'#4a4964',ok:'#8aff80',err:'#ff9580',warn:'#ffff80',add:'#243a2a',del:'#3d2430'}),
+  T('nordterm','Nord Frost','terminal',false,'#242933','#d8dee9','#8fbcbb','#242933','#81a1c1','#8f9bb0','#1e222a',
+    {bg2:'#2b303b',bg3:'#333a47',card:'#2e3440',line:'#3b4252',line2:'#4c566a',ok:'#a3be8c',err:'#bf616a',warn:'#ebcb8b',add:'#2c3a2c',del:'#3b2a2e'})
 ];
 const customKey='customThemes';
 O.themeList=()=>THEMES.concat(O.store.get(customKey,[]).map(t=>Object.assign({custom:true},t)));

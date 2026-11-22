@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION_NAME: "2.28.1"
+  VERSION_NAME: "2.29.0"
 
 jobs:
   build:
@@ -94,21 +94,18 @@ jobs:
             echo
             echo "Core: opencode $(grep opencode_core runtime-info.txt | cut -d= -f2) (1.x line) + Linux rootfs proot"
             echo
-            echo "2.28.1 — полировка разума маскота:"
-            echo "- Взгляд больше не тормозит: pointermove склеивается в один кадр (было 60+ событий/сек с layout на каждое)"
-            echo "- Взгляд замирает во время ходьбы, чтобы не перебивать направление движения"
-            echo "- Глобальные слушатели корректно снимаются при пересборке панели чата (без утечек)"
-            echo "- Карточка «Разум маскота» показывает решение, настроение, время суток, симпатию, характер и предмет в лапах"
-            echo "- Заодно исправлен поиск инструмента и ошибок: раньше последнее сообщение в сессии не попадало в скан (граница цикла)"
+            echo "2.29.0 — терминальный режим, «Уточнить», маскот:"
+            echo "- Режим интерфейса: классический чат или терминал; переключатель Chat / Terminal в шапке и в меню"
+            echo "- Терминал в портрете: компактные карточки инструментов и диффов, моноширинный шрифт для путей, команд и кода"
+            echo "- Терминал в альбоме: три колонки (сессии «В работе» / «Простой», лента, панель диффов), панели можно скрыть и менять по ширине"
+            echo "- Три независимых слоя тем: глобальная, чат, терминал"
+            echo "- Новые темы: Anthropic Dark, Anthropic Paper, Hacker Green, Dracula Pro, Nord Frost"
+            echo "- «Уточнить» в меню и свайпом вверх по полю ввода: плавающее мини-окно, боковой агент отвечает в ветке сессии только с чтением, основная задача не прерывается"
+            echo "- Маскот: при развороте зеркалится только тело, текст в пузыре читается; после тапа больше не зависает на месте"
+            echo "- Маскот: точечные настройки каждой функции и «Мастерская» со 100 идеями"
+            echo "- Меню: джейлбрейки только для текущего чата"
+            echo "- Прозвон моделей идёт только с API-ключом, перебирает ключи и объясняет 401 / 402 / 429"
             echo
-            echo "Telegram: https://t.me/OpenCodeMob"            echo
-            echo "Telegram: https://t.me/OpenCodeMob"            echo
-            echo "Telegram: https://t.me/OpenCodeMob"            echo
-            echo "Telegram: https://t.me/OpenCodeMob"            echo
-            echo "Telegram: https://t.me/OpenCodeMob"            echo
-            echo "Telegram: https://t.me/OpenCodeMob"            echo
-            echo "Telegram: https://t.me/OpenCodeMob"            echo
-            echo "Telegram: https://t.me/OpenCodeMob"            echo
             echo "Telegram: https://t.me/OpenCodeMob"
           } > notes.md
 

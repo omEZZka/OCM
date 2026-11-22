@@ -2066,6 +2066,9 @@ a:hover {
 /* Wide screen adjustments */
 #app[data-mode=wide] .pane { display: none; }
 #app[data-mode=wide] #pane-files { display: flex !important; flex: none; width: 240px; border-right: 1px solid var(--line); }
+/* terminal landscape replaces the files pane with the sessions rail */
+#app[data-mode=wide][data-term-wide="1"] #pane-files { display: none !important; }
+#app[data-mode=wide][data-term-wide="1"] #pane-side { width: min(34%, 380px); }
 #app[data-mode=wide] #pane-chat { display: flex !important; }
 #app[data-mode=wide] #pane-side { display: flex !important; flex: none; width: min(44%, 480px); border-left: 1px solid var(--line); }
 
@@ -4029,3 +4032,252 @@ html.night-lamp #msgs { filter: brightness(.92) sepia(.14); }
 /* speech bubble text */
 .mascot-bubble.say { max-width: 190px; padding: 5px 9px; }
 .mascot-say { font-size: 11.5px; line-height: 1.28; color: var(--fg); text-align: center; display: block; }
+
+/* ==========================================================================
+   2.29 UI MODES: classic chat vs terminal (agent console)
+   ========================================================================== */
+/* header segmented control */
+#ui-mode-bar { display: flex; align-items: center; }
+#ui-mode-bar .ui-mode-seg { padding: 2px; gap: 2px; }
+#ui-mode-bar .ui-mode-seg button {
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 9px; font-size: 11.5px; border-radius: 8px;
+}
+#ui-mode-bar .ui-mode-seg .ic svg { width: 13px; height: 13px; }
+@media (max-width: 400px) {
+  #ui-mode-bar .ui-mode-seg button span { display: none; }
+  #ui-mode-bar .ui-mode-seg button { padding: 6px 8px; }
+}
+
+/* ---- terminal look: only inside the chat/side panes, never the shell ---- */
+html[data-ui=term] #pane-chat,
+html[data-ui=term] #pane-side { font-size: calc(var(--fs, 14px) - 0.5px); }
+
+/* monospace for machine text, grotesk for prose */
+html[data-ui=term] .mono,
+html[data-ui=term] .tool-h .sub,
+html[data-ui=term] .tool-h .t,
+html[data-ui=term] .cg-title,
+html[data-ui=term] .cg-sub,
+html[data-ui=term] pre,
+html[data-ui=term] code,
+html[data-ui=term] .diff,
+html[data-ui=term] .rail-title,
+html[data-ui=term] .cmd-line {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+html[data-ui=term] .p-text,
+html[data-ui=term] .m-body > p { font-family: inherit; }
+
+/* messages become flat console entries, not bubbles */
+html[data-ui=term] .msg { margin: 0 0 10px; }
+html[data-ui=term] .msg.user .m-body {
+  background: transparent;
+  border: none;
+  border-left: 2px solid var(--acc);
+  border-radius: 0;
+  padding: 4px 0 4px 10px;
+  max-width: 100%;
+  margin-left: 0;
+  color: var(--fg);
+}
+html[data-ui=term] .msg.user .m-body::before {
+  content: '› ';
+  color: var(--acc);
+  font-weight: 700;
+}
+html[data-ui=term] .msg.assistant .m-body { padding: 2px 0 0; }
+html[data-ui=term] .m-meta { font-size: 10.5px; opacity: .8; }
+
+/* tool logs: compact one-line cards that never overflow the width */
+html[data-ui=term] .tool {
+  border-radius: 6px;
+  border-width: 1px;
+  margin: 4px 0;
+  background: var(--bg2);
+}
+html[data-ui=term] .tool-h {
+  min-height: 32px;
+  padding: 4px 8px;
+  gap: 6px;
+  font-size: 11.5px;
+}
+html[data-ui=term] .tool-h .ic svg { width: 13px; height: 13px; }
+html[data-ui=term] .tool-h .t { font-size: 12px; }
+html[data-ui=term] .tool-h .sub {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+html[data-ui=term] .tool-b { padding: 6px 8px; font-size: 11.5px; }
+/* grouped tool logs: same compact treatment */
+html[data-ui=term] .cmd-group { border-radius: 6px; margin: 5px 0; background: var(--bg2); }
+html[data-ui=term] .cg-head { min-height: 32px; padding: 4px 8px; gap: 6px; }
+html[data-ui=term] .cg-head .cg-ic svg,
+html[data-ui=term] .cg-chev svg { width: 13px; height: 13px; }
+html[data-ui=term] .cg-titles { gap: 0; }
+html[data-ui=term] .cg-head .spin { width: 13px; height: 13px; }
+html[data-ui=term] .cg-title { font-size: 11.5px; line-height: 1.25; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+html[data-ui=term] .cg-sub { font-size: 10px; line-height: 1.2; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+html[data-ui=term] .cg-meta { font-size: 10px; }
+html[data-ui=term] .cg-list { padding: 5px 7px 7px; }
+html[data-ui=term] .tool-b pre {
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* diffs stay inside the card: horizontal scroll, never page-wide */
+html[data-ui=term] .diff {
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 5px;
+}
+html[data-ui=term] .diff div { padding: 0 6px; }
+
+/* portrait: tighter gutters, composer pinned, one-hand reach */
+html[data-ui=term] #app[data-mode=narrow] #msgs { padding: 8px 10px 4px; }
+html[data-ui=term] #app[data-mode=narrow] #composer { padding: 6px 8px; }
+html[data-ui=term] #app[data-mode=narrow] .cbox { border-radius: 10px; }
+html[data-ui=term] #app[data-mode=narrow] .msg { margin-bottom: 8px; }
+
+/* ---- landscape three-column rails ---- */
+.term-rail, .rail-grip { display: none; }
+#app[data-term-wide="1"] .term-rail.show {
+  display: flex; flex-direction: column;
+  flex: none; min-height: 0;
+  background: var(--bg2);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+#app[data-term-wide="1"] #term-rail-right.show {
+  border-right: none;
+  border-left: 1px solid var(--line);
+}
+#app[data-term-wide="1"] .rail-grip.show {
+  display: block; flex: none; width: 6px;
+  cursor: col-resize; touch-action: none;
+  background: transparent;
+}
+#app[data-term-wide="1"] .rail-grip.show:hover,
+body.rail-resizing .rail-grip.show { background: color-mix(in srgb, var(--acc) 40%, transparent); }
+.rail-head {
+  display: flex; align-items: center; gap: 4px;
+  padding: 8px 10px; border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.rail-list { overflow-y: auto; flex: 1; min-height: 0; padding: 6px; }
+.rail-grp {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--mut); padding: 8px 6px 4px;
+}
+.rail-empty { font-size: 11.5px; color: var(--mut); padding: 2px 6px 6px; }
+.rail-item {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 7px 8px; border-radius: 7px; text-align: left;
+  font-size: 12px; color: var(--fg);
+}
+.rail-item:hover { background: var(--card-hover); }
+.rail-item.on { background: color-mix(in srgb, var(--acc) 18%, var(--card)); }
+.rail-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.rail-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--mut); }
+.rail-dot.run { background: var(--ok); box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 60%, transparent); }
+.rail-diff { border: 1px solid var(--line); border-radius: 7px; margin-bottom: 6px; overflow: hidden; }
+.rail-diff-h {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 6px 8px; font-size: 11.5px; text-align: left;
+}
+.rail-diff-h .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.rail-diff-b { max-height: 260px; overflow: auto; border-top: 1px solid var(--line); }
+.rail-diff-b.hide { display: none; }
+
+/* settings preview of the terminal palette */
+.term-preview {
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px; background: var(--bg); color: var(--fg);
+}
+.term-preview .tp-line { display: flex; gap: 6px; font-size: 12px; margin-bottom: 6px; }
+.term-preview .tp-prompt { color: var(--acc); font-weight: 700; }
+.term-preview .tp-tool {
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 8px; font-size: 11.5px; background: var(--bg2); margin-bottom: 6px;
+}
+.term-preview .tp-ok { color: var(--ok); font-size: 10.5px; }
+
+/* ==========================================================================
+   2.29 ASK-ASIDE: floating clarification mini-chat
+   ========================================================================== */
+.ask-aside {
+  position: fixed; z-index: 60;
+  right: 10px; bottom: calc(96px + var(--kb, 0px));
+  width: min(94vw, 380px); max-height: min(56vh, 420px);
+  display: flex; flex-direction: column;
+  background: var(--card); color: var(--fg);
+  border: 1px solid var(--line2); border-radius: 14px;
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+.ask-aside.hide { display: none; }
+.ask-aside.collapsed .aa-list,
+.ask-aside.collapsed .aa-foot,
+.ask-aside.collapsed .aa-note { display: none; }
+.aa-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; border-bottom: 1px solid var(--line);
+  font-size: 12.5px; cursor: grab; touch-action: none;
+}
+.aa-head .ic svg { width: 15px; height: 15px; color: var(--acc); }
+.aa-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.aa-list { flex: 1; min-height: 60px; overflow-y: auto; padding: 8px 10px; }
+.aa-hint { font-size: 10.5px; color: var(--mut); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+.aa-past { font-size: 11px; color: var(--mut); margin-bottom: 5px; }
+.aa-past b { display: block; color: var(--fg); font-size: 11.5px; }
+.aa-msg { margin-bottom: 8px; font-size: 12.5px; line-height: 1.4; }
+.aa-who { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--mut); margin-bottom: 2px; }
+.aa-msg.me .aa-text {
+  background: color-mix(in srgb, var(--acc) 14%, var(--bg2));
+  border-radius: 9px; padding: 6px 9px; white-space: pre-wrap; word-break: break-word;
+}
+.aa-msg.bot .aa-text { white-space: pre-wrap; word-break: break-word; }
+.aa-msg.bot { display: flex; flex-direction: column; }
+.aa-wait { font-size: 11.5px; color: var(--mut); }
+.aa-err { font-size: 11.5px; color: var(--err); border: 1px solid color-mix(in srgb, var(--err) 40%, var(--line)); border-radius: 8px; padding: 6px 8px; }
+.aa-note { font-size: 10px; color: var(--mut); padding: 0 10px 6px; }
+.aa-foot { display: flex; align-items: flex-end; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); }
+.aa-inp {
+  flex: 1; min-width: 0; resize: none; max-height: 96px;
+  background: var(--bg2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 9px;
+  padding: 7px 9px; font-size: 12.5px; line-height: 1.35;
+}
+.aa-pill {
+  position: fixed; z-index: 59;
+  right: 12px; bottom: calc(96px + var(--kb, 0px));
+  display: flex; align-items: center; gap: 5px;
+  padding: 7px 11px; border-radius: 999px;
+  background: var(--card); color: var(--fg);
+  border: 1px solid var(--line2); box-shadow: var(--shadow-1);
+  font-size: 11.5px;
+}
+.aa-pill.hide { display: none; }
+.aa-pill .ic svg { width: 13px; height: 13px; color: var(--acc); }
+.aa-chip {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 8px 12px; margin-top: 6px;
+  border: 1px solid color-mix(in srgb, var(--acc) 35%, var(--line));
+  border-radius: 12px; background: color-mix(in srgb, var(--acc) 10%, var(--card));
+  font-size: 12px; text-align: left;
+}
+.aa-chip .ic svg { width: 14px; height: 14px; color: var(--acc); }
+.aa-chip-t { font-weight: 600; }
+.aa-chip-s { color: var(--mut); font-size: 11px; margin-left: auto; }
+.aa-chip.busy { border-color: color-mix(in srgb, var(--acc) 60%, var(--line)); }
+@media (max-width: 420px) {
+  .ask-aside { right: 6px; left: 6px; width: auto; }
+}
