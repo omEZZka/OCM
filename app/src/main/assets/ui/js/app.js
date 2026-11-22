@@ -150,7 +150,24 @@ function layout(){
 
 function bottomMenu(){
   const memOn=O.store.get('memory',true);
+  // Session-only jailbreaks: the effective set lives in store.js (sessionJailbreaks), so this
+  // menu entry is just the entry point — nothing is ever written to the shared AGENTS.md.
+  const jbOwn=O.sessionJbIds&&O.sessionJbIds(S.sid);
+  const jbCount=jbOwn?jbOwn.size:(O.getActiveJailbreakIds?O.getActiveJailbreakIds().size:0);
+  const mascotOn=S.opts.mascotOn!==false;
   O.actions(O.tr('Menu','Меню'),[
+    {label:O.tr('Jailbreaks for this chat','Джейлбрейки этого чата'),
+      sub:!S.sid?O.tr('open a chat first','сначала откройте чат')
+        :(jbOwn?(O.tr('session-only set: ','свой набор: ')+jbCount):(O.tr('follows global: ','следует глобальному: ')+jbCount))+' · '+O.tr('this session only','только эта сессия'),
+      icon:'shield',fn:()=>{
+        if(!S.sid)return O.toast(O.tr('Open a chat first','Сначала откройте чат'),1800);
+        O.openSessionJailbreaks&&O.openSessionJailbreaks(S.sid);
+      }},
+    {label:O.tr('Mascot tuning…','Настройки маскота…'),
+      sub:mascotOn?O.tr('Gaze, hints, tools, glow, speed — per feature','Взгляд, подсказки, инструменты, свечение, скорость — по отдельности')
+        :O.tr('Mascot is hidden','Маскот скрыт'),
+      icon:'bot',fn:()=>{O.openMascotTuning?O.openMascotTuning():O.openMascotSettings&&O.openMascotSettings()}},
+    {label:O.tr('Mascot workshop','Мастерская маскота'),sub:O.tr('100 ideas, pick what comes next','100 идей, выберите, что дальше'),icon:'bulb',fn:()=>O.openMascotIdeas&&O.openMascotIdeas()},
     {label:O.tr('Terminal','Терминал'),icon:'terminal',fn:()=>O.setTab('term')},
     {label:O.tr('Changes','Изменения'),icon:'branch',fn:()=>O.setTab('changes')},
     {label:O.tr('Bottom bar…','Нижний бар…'),sub:O.tr('Choose your tabs','Выбрать свои вкладки'),icon:'sliders',fn:()=>O.openNavSettings()},

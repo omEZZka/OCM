@@ -3956,10 +3956,10 @@ html.night-lamp #msgs { filter: brightness(.92) sepia(.14); }
 @keyframes mLand {
   0% { transform: scale(1.16,.78) } 45% { transform: scale(.94,1.08) } 100% { transform: none }
 }
-.mascot.flip { transform: scaleX(-1); }
-/* the bubble and the emote badge are countersunk so their glyphs stay readable */
-.mascot.flip .mascot-bubble { transform: translateX(-50%) scaleX(-1) !important; }
-.mascot.flip .mascot-emote { transform: scaleX(-1); }
+.mascot.flip .mascot-body { transform: scaleX(-1); }
+/* The body wrapper is the only mirrored node: bubble text, emote and prop icons are
+   siblings of it, so they always stay readable (no counter-flip hacks needed). */
+.mascot-body { display: block; line-height: 0; transform-origin: 50% 100%; }
 .mascot-bubble { transform-origin: 50% 100%; }
 /* walking is smooth: the state bob must not fight the horizontal movement */
 .mascot[data-placed="1"][data-state="idle"] .mascot-sprite,

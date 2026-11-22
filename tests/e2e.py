@@ -780,17 +780,32 @@ try:
     face=pg.evaluate("""async ()=>{
       if(!OCM.S.sid){try{await OCM.newSession()}catch(e){}}
       OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
-      OCM.mascotSetRoam&&OCM.mascotSetRoam(true);
-      OCM.mascotWalkNow&&OCM.mascotWalkNow();   // deterministic start
       const el=document.querySelector('.mascot');
+      OCM.S.opts.mascot_gaze=false;
+      OCM.mascotSetRoam&&OCM.mascotSetRoam(false);
+      OCM.mascotForceIdle&&OCM.mascotForceIdle();
+      el.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:9}));
       await new Promise(r=>setTimeout(r,300));
+      // now start a clean walk from the center
+      el.style.left='175px';el.style.top='570px';
+      OCM.mascotSetRoam&&OCM.mascotSetRoam(true);
+      OCM.mascotWalkNow&&OCM.mascotWalkNow();
+      await new Promise(r=>setTimeout(r,400));
       const log=[];
-      for(let i=0;i<50;i++){await new Promise(r=>setTimeout(r,160));log.push({x:Math.round(parseFloat(el.style.left)||0),flip:el.classList.contains('flip')})}
+      // Only frames where the pet is actually strolling count: after it reaches the target it
+      // stands still and the gaze is free to turn it toward the pointer.
+      for(let i=0;i<50;i++){
+        await new Promise(r=>setTimeout(r,160));
+        const ai=OCM.mascotAI();
+        log.push({x:Math.round(parseFloat(el.style.left)||0),flip:el.classList.contains('flip'),walking:ai.walking&&!ai.held});
+      }
       let bad=0,n=0;
       for(let i=1;i<log.length;i++){
+        if(!log[i].walking||!log[i-1].walking)continue;
         const d=log[i].x-log[i-1].x; if(Math.abs(d)<2)continue;
         n++; if((d>0)!==log[i].flip)bad++;
       }
+      OCM.S.opts.mascot_gaze=true;
       return {n,bad};
     }""")
     chk('mascot faces the way it walks',face['n']>0 and face['bad']==0)
@@ -859,6 +874,71 @@ try:
     chk('gaze is rAF-coalesced (no per-event layout)',perf2['writes']<=3)
     disp=pg.evaluate("()=>({has:typeof OCM.mascotDispose==='function'})")
     chk('mascot disposes its global listeners',disp['has'])
+    # ---- 2.28.2 turning: only the body mirrors, overlays stay readable ----
+    turn=pg.evaluate("""async ()=>{
+      OCM.mascotSetRoam(false);
+      const el=document.querySelector('.mascot');
+      el.classList.add('flip');
+      OCM.mascotBubble&&OCM.mascotBubble('thinking');
+      await new Promise(r=>setTimeout(r,60));
+      const body=el.querySelector('.mascot-body');
+      const sp=el.querySelector('.mascot-sprite');
+      const b=el.querySelector('.mascot-bubble');
+      const bm=b?getComputedStyle(b).transform:'';
+      const bodyM=body?getComputedStyle(body).transform:'';
+      // matrix(a,b,c,d,e,f): a<0 means the node is mirrored on X
+      const mirrored=s=>{const m=/matrix\\(([^)]+)\\)/.exec(s||'');return m?parseFloat(m[1])<0:false};
+      const out={hasBody:!!body,browMirrored:mirrored(bm),bodyMirrored:mirrored(bodyM),
+        spriteIsChild:!!(body&&body.contains(sp))};
+      el.classList.remove('flip');
+      return out;
+    }""")
+    chk('mascot turn mirrors only the body wrapper',turn['hasBody'] and turn['spriteIsChild'] and turn['bodyMirrored'])
+    chk('mascot bubble text stays readable when turned',not turn['browMirrored'])
+    hy=pg.evaluate("""async ()=>{
+      // gaze only runs while the pet stands still: no roaming, no nap, no held drag
+      OCM.mascotSetRoam(false);
+      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
+      const el=document.querySelector('.mascot');
+      el.classList.remove('flip');delete el.dataset.nap;
+      // the previous physics test ends with a tap: wait for the body to be released and settle
+      let settled=false;
+      for(let i=0;i<30&&!settled;i++){
+        await new Promise(r=>setTimeout(r,100));
+        settled=!OCM.mascotAI().held;
+      }
+      // force the pet to a predictable center position so gaze always has room to turn right
+      el.style.left='175px';el.style.top='570px';
+      OCM.mascotForceIdle&&OCM.mascotForceIdle();
+      el.classList.remove('flip');
+      await new Promise(r=>setTimeout(r,300));
+      const r0=el.getBoundingClientRect();
+      const cx0=r0.left+r0.width/2;
+      // always aim to the right: dx>0.4 must flip the pet regardless of where it stands
+      const far={clientX:window.innerWidth-2,clientY:r0.top+r0.height/2,bubbles:true};
+      document.dispatchEvent(new PointerEvent('pointermove',far));
+      await new Promise(r2=>requestAnimationFrame(()=>requestAnimationFrame(r2)));
+      const quick=el.classList.contains('flip');           // must NOT flip on a single event
+      let held=false;
+      for(let i=0;i<10&&!held;i++){
+        document.dispatchEvent(new PointerEvent('pointermove',far));
+        await new Promise(r2=>setTimeout(r2,45));
+        held=el.classList.contains('flip');
+      }
+      // dead zone: a finger right on the pet must not turn it
+      const nearPt={clientX:cx0+3,clientY:r0.top+r0.height/2,bubbles:true};
+      let nearFlip=held;
+      for(let i=0;i<6;i++){
+        document.dispatchEvent(new PointerEvent('pointermove',nearPt));
+        await new Promise(r2=>setTimeout(r2,45));
+        nearFlip=el.classList.contains('flip');
+      }
+      const walking=OCM.mascotAI().walking;
+      el.classList.remove('flip');
+      return {quick,held,nearFlip,heldBefore:held,walking};
+    }""")
+    chk('gaze turn has hysteresis (no instant flip)',not hy['quick'] and hy['held'] and not hy['walking'])
+    chk('gaze dead zone keeps the pet still',hy['nearFlip']==hy['heldBefore'])
 
 
 

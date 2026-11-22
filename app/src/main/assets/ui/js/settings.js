@@ -432,13 +432,16 @@ O.checkAllKeys=async()=>{
     const p=provs[pid],opts=p.options||{};
     const url=opts.upstreamBaseURL||opts.baseURL||'';
     if(!url||/127\.0\.0\.1|localhost/.test(url))continue;
-    const key=opts.apiKey&&opts.apiKey!=='dummy'?opts.apiKey:(O.keyRingActive?O.keyRingActive(pid):'');
-    targets.push({pid,name:p.name||pid,url,key,headers:opts.headers||{}});
+    // Same rule as the model probe: never call a provider without a key, otherwise the answer
+    // is a misleading 401/402/429. keyRing → options.apiKey → auth.json.
+    const keys=O.providerKeys?O.providerKeys(pid):[];
+    const key=(opts.apiKey&&opts.apiKey!=='dummy')?opts.apiKey:(keys[0]||'');
+    targets.push({pid,name:p.name||pid,url,key,keys,headers:opts.headers||{}});
   }
   (O.mediaProviders?O.mediaProviders():[]).forEach(mp=>{
     if(mp.baseURL)targets.push({pid:mp.id+' ('+mp.kind+')',name:mp.name,url:mp.baseURL,key:mp.apiKey,media:true,prov:mp});
   });
-  if(!targets.length){rows.append(h('div',{class:'note'},O.tr('No providers with keys configured','Провайдеров с ключами нет')));return}
+  if(!targets.length){rows.append(h('div',{class:'note'},O.tr('No providers with a Base URL configured','Провайдеров с Base URL нет')));return}
   rows.append(h('div',{class:'note'},O.tr('Checking providers…','Проверяю провайдеров…')));
   let ok=0,bad=0;
   for(const t of targets){
@@ -449,11 +452,20 @@ O.checkAllKeys=async()=>{
     rows.append(row);
     const sub=row.querySelector('.settings-row-text span');
     const spin=row.querySelector('.spin');
+    if(!t.key){
+      spin.remove();
+      row.append(O.icon('key','mut'));
+      sub.textContent=O.tr('no key — not probed','нет ключа — не прозваниваю');
+      bad++;
+      continue;
+    }
     try{
       const url=t.media&&O.mediaDebug?O.mediaDebug.discovery(t.prov):(t.url.replace(/\/+$/,'')+(t.url.endsWith('/models')?'':'/models'));
       const hd=Object.assign({},t.headers);
       if(t.key)hd['Authorization']='Bearer '+t.key;
       const r=await O.native.netGetAsync(url,hd,15000);
+      if(r&&r.status&&r.status>=400)throw O.probeError(r.status,r.body);
+      if(r&&r.ok===false)throw O.probeError(r.status||0,r.err||r.body);
       let count=0;
       try{const o=JSON.parse(r.body||'{}');const arr=Array.isArray(o)?o:(o.data||o.models||[]);count=Array.isArray(arr)?arr.length:0}catch(_){}
       spin.remove();

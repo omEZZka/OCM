@@ -625,7 +625,7 @@ const BUBBLE={
 let bubbleEl=null;
 function paintBubble(st){
   if(!el)return;
-  const want=(st==='thinking'||st==='writing'||st==='jailbreak')?BUBBLE[st]:null;
+  const want=(feat('bubble')&&(st==='thinking'||st==='writing'||st==='jailbreak'))?BUBBLE[st]:null;
   if(!want){if(bubbleEl){bubbleEl.remove();bubbleEl=null}return}
   if(!bubbleEl){
     bubbleEl=h('div',{class:'mascot-bubble'});
@@ -696,7 +696,8 @@ O.mascotTick=tick;
 //  • while the agent generates it paces left/right along the top of the input
 //  • dragging lifts it (no gravity), releasing drops it with the throw's velocity
 // ---------------------------------------------------------------------------
-const PHYS={x:0,y:0,vx:0,vy:0,ground:0,held:false,raf:0,dir:1,walking:false,target:null,nextThink:0};
+// faceDir starts at -1 = the artwork is drawn facing left and no mirror class is applied yet.
+const PHYS={x:0,y:0,vx:0,vy:0,ground:0,held:false,raf:0,dir:1,faceDir:-1,walking:false,target:null,nextThink:0};
 // Gentler gravity: a soft arc that settles quickly instead of slamming into the ledge.
 const GRAV=1250, BOUNCE=0.18, FRICTION=0.9, MAXV=1500, WALK=52;
 
@@ -728,13 +729,25 @@ const BASE_FACING=-1;   // -1 = artwork faces left
 function face(dir){
   if(!el||!dir)return;
   PHYS.dir=dir;
-  // Turning = mirroring the WHOLE body (never the animated sprite, whose transform would
-  // override the mirror and make the pet walk backwards).
+  PHYS.faceDir=dir;
+  // Turning = mirroring the BODY wrapper only (never the animated sprite, whose transform
+  // would override the mirror, and never the overlays — the bubble text must stay readable).
   const needFlip=(dir!==BASE_FACING);
   el.classList.toggle('flip',needFlip);
-  const b=el.querySelector('.mascot-bubble');
-  if(b)b.style.transform='translateX(-50%) scaleX('+(dir<0?-1:1)+')';
 }
+
+// Fine-grained switches for the tuning sheet. Every mask is opt-out: an absent value means ON,
+// so existing installs keep the full behaviour after an update.
+const feat=k=>S.opts['mascot_'+k]!==false;
+const walkSpeed=()=>{
+  const n=Number(S.opts.mascotWalkSpeed);
+  return (isFinite(n)&&n>0?n:1)*WALK;
+};
+const restMs=()=>{
+  const n=Number(S.opts.mascotRestSec);
+  const base=(isFinite(n)&&n>0?n:4.5)*1000;
+  return base*(0.65+Math.random()*0.7);
+};
 
 const FIXED=1/60;
 function step(){
@@ -755,7 +768,7 @@ function step(){
       else{PHYS.vy=0}
     }
   }
-  if(PHYS.x<b.x0){PHYS.x=b.x0;PHYS.vx=0;PHYS.dir=-1/1*0+1;face(1)}
+  if(PHYS.x<b.x0){PHYS.x=b.x0;PHYS.vx=0;face(1)}
   if(PHYS.x>b.x1){PHYS.x=b.x1;PHYS.vx=0;face(-1)}
   if(PHYS.y<b.ceil){PHYS.y=b.ceil;PHYS.vy=Math.abs(PHYS.vy)*0.3}
   // 12. perch next to the newest answer: glide to just under the last assistant card
@@ -771,12 +784,12 @@ function step(){
       PHYS.vx=0;
       if(PHYS.target!=null&&Math.abs(d)<2.5){
         PHYS.x=PHYS.target;PHYS.target=null;
-        const rest=2600+Math.random()*4200;
+        const rest=restMs();
         PHYS.pauseUntil=Date.now()+rest;                      // stand and look around
         PHYS.nextThink=Date.now()+rest;
         if(Math.random()<0.35)stopWalking();                  // sometimes it just sits down
       }
-    }else{face(d>0?1:-1);PHYS.vx=PHYS.dir*WALK}
+    }else{face(d>0?1:-1);PHYS.vx=PHYS.dir*walkSpeed()}
   }
   setPos();
   if(PHYS.held||PHYS.vy!==0||PHYS.vx!==0||PHYS.walking)schedulePhys();
@@ -875,7 +888,7 @@ function workProp(){
   if(O.planMode&&O.planMode())return{prop:'list',label:O.tr('follows the plan','идёт по плану')};
   if(O.dryRun&&O.dryRun())return{prop:'shield',label:O.tr('is in dry-run','в режиме dry-run')};
   const jb=O.sessionJbIds?O.sessionJbIds(sid):null;
-  if(jb&&jb.size)return{prop:'shield',label:O.tr('has a jailbreak','с джейлбрейком')};
+  if(jb&&jb.size&&feat('costumes'))return{prop:'shield',label:O.tr('has a jailbreak','с джейлбрейком')};
   return null;
 }
 // recent error the pet could point out
@@ -946,6 +959,7 @@ function say(kind){
 let sayTimer=null;
 function speak(text,kind){
   if(!el||!O.chatAnim||O.chatAnim()===false)return;
+  if(!feat('talk'))return;
   if(!bubbleEl){bubbleEl=h('div',{class:'mascot-bubble say'});el.append(bubbleEl)}
   bubbleEl._kind='say';
   bubbleEl.classList.add('say');
@@ -994,7 +1008,7 @@ function startAI(){
 
     // ---------- 2. HINTS: point at the non-obvious next action ----------
     const now=Date.now();
-    if(now-lastHintAt>45000){
+    if(feat('hints')&&now-lastHintAt>45000){
       if(O.canContinue&&O.canContinue(sid)){
         lastHintAt=now;lastDecision=O.tr('points at Continue','подсказывает «Продолжить»');
         say('hint_continue');return;
@@ -1050,31 +1064,43 @@ function startAI(){
     // hungry pet asks for food occasionally
     if(m.fed===0&&now-m.seenAt>30*60*1000&&Math.random()<0.02){say('hungry')}
   };
+  syncGlow();
   tickAI();
   aiTimer=setInterval(tickAI,900);
-  O.mascotAI=()=>({
+  O.mascotForceIdle=()=>{PHYS.held=false;PHYS.walking=false;PHYS.vx=0;PHYS.vy=0;stopAI();stopWalking()};
+O.mascotAI=()=>({
     mood:O.mascotStateFor(S.sid||'local'),
     busy:!!(S.status[S.sid||'local']&&S.status[S.sid||'local'].type!=='idle'),
     personality:p,walking:PHYS.walking,target:PHYS.target,x:Math.round(PHYS.x),
     decision:lastDecision,circadian:circadian().mood,affection:mem().affection,
-    prop:PHYS.prop||null,events:{...eventKinds}
+    prop:PHYS.prop||null,held:PHYS.held,faceDir:PHYS.faceDir,events:{...eventKinds}
   });
 }
 function pausedUntil(){return PHYS.pauseUntil||0}
+// Night glow: on late in the day (or always, if the user pinned it) the pet gets a soft halo.
+function syncGlow(){
+  if(!el)return;
+  const c=circadian();
+  const on=feat('glow')&&S.opts.mascotGlow!=='off'&&(S.opts.mascotGlow==='on'||c.mood==='sleepy');
+  el.classList.toggle('glow',!!on);
+}
 function stopAI(){if(aiTimer){clearInterval(aiTimer);aiTimer=null}}
 // Event curiosity: the mascot notices new answers/errors and reacts.
 function noticeMascot(kind){
   lastEventAt=Date.now();
   eventKinds[kind]=(eventKinds[kind]||0)+1;
   if(!el||PHYS.held)return;
-  if(kind==='answer'){perchAtLastAnswer();if(Math.random()<0.5)say('happy')}
+  if(kind==='answer'){
+    if(feat('perch'))perchAtLastAnswer();
+    if(feat('talk')&&Math.random()<0.5)say('happy');
+  }
   if(kind==='error'&&O.chatAnim&&O.chatAnim()){
     el.classList.remove('landed');void el.offsetWidth;el.classList.add('landed');
   }
 }
 // 12. the pet sits next to the newest answer for a while
 function perchAtLastAnswer(){
-  if(S.opts.mascotFree===false||!el)return;
+  if(S.opts.mascotFree===false||!feat('perch')||!el)return;
   try{
     const last=O.lastAssistant&&O.lastAssistant(S.sid);
     if(!last)return;
@@ -1092,7 +1118,7 @@ function perchAtLastAnswer(){
 O.mascotPerch=perchAtLastAnswer;
 // accessory in the pet's paws (a small SVG badge beside the sprite)
 function setProp(name){
-  if(!el)return;
+  if(!el||!feat('props'))return;
   if(PHYS.prop===name)return;
   PHYS.prop=name;
   let p=el.querySelector('.mascot-prop');
@@ -1102,7 +1128,7 @@ function setProp(name){
 }
 
 // Gaze: tilt/shift the sprite slightly toward the point of interest (no sprite redraw needed).
-let gazeX=0;
+let gazeX=0,gazeFlipAt=0,gazeFlipWant=null;
 function gazeAt(px,py){
   if(!el||!el.isConnected)return;
   const r=el.getBoundingClientRect();
@@ -1115,16 +1141,30 @@ function gazeAt(px,py){
   sp.style.transform='translate('+(dx*2.2).toFixed(2)+'px,'+(dy*1.2).toFixed(2)+'px) rotate('+(dx*4).toFixed(1)+'deg)';
   // Gaze may mirror the pet ONLY while it stands still; during a stroll the walking
   // direction owns the facing, otherwise it would turn backwards mid-step.
-  if(!PHYS.walking){
-    const wantFlip=(dx>0.25)?(BASE_FACING!==1):(dx<-0.25?(BASE_FACING!==-1):null);
-    if(wantFlip!==null)el.classList.toggle('flip',wantFlip);
-  }
+  // Two guards keep it from twitching: a wide dead zone near the pet and a short hold
+  // before a new direction is accepted (hysteresis).
+  if(PHYS.walking||PHYS.held||S.opts.mascotGaze===false)return;
+  const want=dx>0.4?1:(dx<-0.4?-1:null);
+  if(want===null){gazeFlipWant=null;return}
+  if(want===PHYS.faceDir){gazeFlipWant=null;return}
+  const now=Date.now();
+  if(want!==gazeFlipWant){gazeFlipWant=want;gazeFlipAt=now;return}
+  if(now-gazeFlipAt<150)return;
+  gazeFlipWant=null;
+  face(want);
 }
+// pointer left the window / stopped moving → no lingering "staring at nothing" tilt
+O.mascotGlanceOff=()=>{
+  if(!el||!el.isConnected)return;
+  gazeX=0;gazeFlipWant=null;
+  const sp=el.querySelector('.mascot-sprite');
+  if(sp)sp.style.transform='';
+};
 function jumpMascot(){
   if(!el)return;
   PHYS.vy=-520;PHYS.held=false;
   el.classList.remove('landed');void el.offsetWidth;el.classList.add('landed');
-  if(S.opts.mascotSound!==false)sound('hop');
+  if(S.opts.mascotSound!==false&&feat('sounds'))sound('hop');
   memSet(null,{played:mem().played+1,affection:Math.min(100,mem().affection+1)});
   speak(O.tr('Wheee!','Урааа!'),'happy');
   schedulePhys();
@@ -1141,7 +1181,7 @@ function napMascot(){
 // tiny synthesized sounds (WebAudio, no assets)
 let audioCtx=null;
 function sound(kind){
-  if(S.opts.mascotSound===false)return;
+  if(S.opts.mascotSound===false||!feat('sounds'))return;
   try{
     audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
     const c=audioCtx,now=c.currentTime;
@@ -1169,8 +1209,12 @@ O.mascotNap=napMascot;
 O.mascotInit=parent=>{
   el=h('div',{class:'mascot',title:O.tr('Drag me · tap for options','Перетащи · тап — настройки')});
   sprite=h('div',{class:'mascot-sprite'});
+  // The body wrapper is the ONLY mirrored node when the pet turns. The sprite keeps its own
+  // state animations, while the overlays (bubble, emote, prop) are siblings of the wrapper so
+  // text and icons are never rendered backwards.
+  const bodyWrap=h('div',{class:'mascot-body'},sprite);
   emoteEl=h('div',{class:'mascot-emote'});
-  el.append(sprite,emoteEl);
+  el.append(bodyWrap,emoteEl);
   el.style.display=S.opts.mascotOn?'':'none';
   el.style.setProperty('--ms',(S.opts.mascotSize||44)+'px');
   parent.append(el);
@@ -1207,13 +1251,22 @@ O.mascotInit=parent=>{
   // ---- 01 gaze: the body leans toward the pointer / the input field while typing ----
   // PERF: pointermove fires dozens of times per second; getBoundingClientRect + a style write
   // on every event is pure jank. Coalesce into one rAF and skip when the pet is hidden/moving.
-  let lastPointerAt=0,gazeRaf=0,gazeX0=0,gazeY0=0,gazeT=0;
+  let lastPointerAt=0,gazeRaf=0,gazeX0=0,gazeY0=0,gazeT=0,gazeArm=0;
   const trackPointer=e=>{
+    if(!feat('gaze'))return;
     const t=e.touches?e.touches[0]:e;
     if(!t)return;
     gazeX0=t.clientX;gazeY0=t.clientY;gazeT=e.type==='touchmove'?260:120;
-    if(gazeRaf)return;
+    // A backgrounded WebView throttles/pauses rAF, so the pending frame can stay "busy"
+    // forever and swallow every later pointer event. Expire the reservation after 150 ms.
+    if(gazeRaf){
+      if(Date.now()-gazeArm<150)return;
+      cancelAnimationFrame(gazeRaf);gazeRaf=0;
+    }
+    gazeArm=Date.now();
+    const arm=gazeArm;
     gazeRaf=requestAnimationFrame(()=>{
+      if(gazeArm!==arm)return;   // a newer frame took over: this one is stale
       gazeRaf=0;
       if(!O.chatAnim||O.chatAnim()===false)return;
       if(!el||!el.isConnected||PHYS.held||PHYS.walking)return;
@@ -1223,10 +1276,15 @@ O.mascotInit=parent=>{
   };
   document.addEventListener('pointermove',trackPointer,{passive:true});
   document.addEventListener('touchmove',trackPointer,{passive:true});
+  // pointer left the page (finger lifted off-screen / mouse out) → drop the tilt instead of
+  // freezing the pet in a "staring at nothing" pose
+  const gazeOut=e=>{if(!e.relatedTarget)O.mascotGlanceOff&&O.mascotGlanceOff()};
+  document.addEventListener('pointerout',gazeOut,{passive:true});
   // listeners die with the view (renderAll rebuilds the chat pane)
   O.mascotDispose=()=>{
     try{document.removeEventListener('pointermove',trackPointer)}catch(_){}
     try{document.removeEventListener('touchmove',trackPointer)}catch(_){}
+    try{document.removeEventListener('pointerout',gazeOut)}catch(_){}
     if(gazeRaf){cancelAnimationFrame(gazeRaf);gazeRaf=0}
   };
   // while typing it looks at the text area on purpose
@@ -1278,22 +1336,36 @@ O.mascotInit=parent=>{
     const vx=Math.max(-MAXV,Math.min(MAXV,drag.vx||0));
     const vy=Math.max(-MAXV,Math.min(MAXV,drag.vy||0));
     drag=null;
+    // ALWAYS hand the body back to gravity. A plain tap (moved=false) used to leave
+    // PHYS.held=true forever: no falling, no walking, no gaze until the next real drag.
+    PHYS.held=false;
     if(moved){
       // hand it back to gravity with the release velocity
-      PHYS.held=false;PHYS.vx=vx;PHYS.vy=vy;
+      PHYS.vx=vx;PHYS.vy=vy;
       schedulePhys();
       if(S.sid)setTimeout(startAI,1400);
       setTimeout(()=>{if(!PHYS.held&&PHYS.vy===0)O.store.set('mascotPos',{x:PHYS.x,y:PHYS.y})},900);
       if(O.native.haptic)O.native.haptic('tick');
       if(S.sid)startAI();
     }
-    else if(O.store.get('mascotDblTap',true)) onTapBurst();
-    else mascotMenu();
+    else{
+      PHYS.vx=0;PHYS.vy=0;schedulePhys();
+      if(S.sid&&S.opts.mascotRoam!==false)setTimeout(startAI,700);
+      if(O.store.get('mascotDblTap',true)&&feat('tap'))onTapBurst();
+      else mascotMenu();
+    }
   };
   el.addEventListener('pointerdown',onDown);
   el.addEventListener('pointermove',onMove,{passive:false});
   el.addEventListener('pointerup',onUp);
-  el.addEventListener('pointercancel',()=>{drag=null});
+  // A cancelled pointer must release the body: leaving PHYS.held=true froze the pet in the
+  // air (no gravity, no walking, no gaze) until the next successful tap.
+  el.addEventListener('pointercancel',e=>{
+    if(!drag&&!PHYS.held)return;
+    drag=null;PHYS.held=false;PHYS.vx=0;
+    schedulePhys();
+    if(S.sid&&S.opts.mascotRoam!==false)setTimeout(startAI,600);
+  });
   el.addEventListener('touchstart',onDown,{passive:true});
   el.addEventListener('touchmove',onMove,{passive:false});
   el.addEventListener('touchend',onUp);
@@ -1316,6 +1388,7 @@ O.mascotInit=parent=>{
   O.mascotBubble=st=>paintBubble(st);
   O.mascotSetRoam=on=>{S.opts.mascotRoam=!!on;O.saveOpts();if(on)startAI();else{stopAI();stopWalking()}};
   O.mascotRefresh=()=>{
+    syncGlow();
     el.style.display=S.opts.mascotOn?'':'none';
     el.style.setProperty('--ms',(S.opts.mascotSize||44)+'px');
     renderSprite();startFrames();tick();
@@ -1404,5 +1477,60 @@ O.openMascotSettings=()=>{
   };
   draw();
   O.sheet(O.tr('Mascot','Маскот'),body,{full:true});
+};
+
+// ---- 2.28.2 fine-grained tuning: every feature can be switched off on its own ----
+const TUNE_ROWS=[
+  ['gaze',   'eye',     ['Turns to the finger','Поворачивается к пальцу'],['The body follows the pointer with a short hold','Тело следует за пальцем с небольшой задержкой']],
+  ['talk',   'note',    ['Talks','Разговаривает'],['Contextual phrases and replies','Контекстные фразы и реплики']],
+  ['hints',  'bulb',    ['Hints','Подсказки'],['Continue and compact suggestions','Подсказки «Продолжить» и «сжать»']],
+  ['props',  'terminal',['Tools in paws','Инструменты в лапах'],['Shows the running tool as an accessory','Показывает текущий инструмент как аксессуар']],
+  ['perch',  'drag',    ['Runs to new answers','Бежит к свежим ответам'],['Walks over to the newest assistant message','Подходит к последнему ответу ассистента']],
+  ['sounds', 'note',    ['Sounds','Звуки'],['Synth squeak on hops and pets','Писк при прыжке и поглаживании']],
+  ['glow',   'star',    ['Night glow','Ночное свечение'],['A soft halo at night or always','Мягкий ореол ночью или всегда']],
+  ['costumes','palette',['Mode costumes','Костюмы режимов'],['Jailbreak and mode accessories','Аксессуары джейлбрейка и режимов']],
+  ['tap',    'thumbUp', ['Double/triple tap','Двойной/тройной тап'],['Tap twice to jump, three times to nap','Два тапа — прыжок, три — сон']],
+  ['bubble', 'code',    ['Coding bubble','Пузырь кода'],['Animated glyph above the pet while generating','Анимированный глиф над питомцем при генерации']]
+];
+O.openMascotTuning=()=>{
+  const body=h('div');
+  const draw=()=>{
+    body.textContent='';
+    body.append(h('div',{class:'note'},O.tr('Turn off exactly what you do not want. Everything else keeps working.','Отключите ровно то, что не нужно. Остальное продолжает работать.')));
+    TUNE_ROWS.forEach(([key,icon,t,d])=>{
+      const on=S.opts['mascot_'+key]!==false;
+      body.append(O.toggleRow(icon,O.tr(t[0],t[1]),O.tr(d[0],d[1]),on,v=>{
+        S.opts['mascot_'+key]=v;O.saveOpts();
+        if(key==='glow'){setTimeout(()=>O.mascotRefresh&&O.mascotRefresh(),0)}
+        if(key==='props'&&!v)setProp(null);
+      }));
+    });
+    body.append(
+      h('div',{class:'grp'},O.tr('Night glow mode','Режим свечения')),
+      h('div',{class:'seg'},[['auto',O.tr('Auto','Авто')],['on',O.tr('Always','Всегда')],['off',O.tr('Never','Никогда')]].map(([v,l])=>
+        h('button',{class:(S.opts.mascotGlow||'auto')===v?'on':'',onclick:()=>{S.opts.mascotGlow=v;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()}},l))),
+      h('div',{class:'grp'},O.tr('Walking speed','Скорость ходьбы')),
+      h('div',{class:'seg'},[0.5,0.75,1,1.5,2].map(n=>h('button',{class:(Number(S.opts.mascotWalkSpeed)||1)===n?'on':'',
+        onclick:()=>{S.opts.mascotWalkSpeed=n;O.saveOpts();draw()}},n+'×'))),
+      h('div',{class:'grp'},O.tr('Rest between strolls','Отдых между прогулками')),
+      h('div',{class:'seg'},[2,4,7,12].map(n=>h('button',{class:(Number(S.opts.mascotRestSec)||4.5)===n?'on':'',
+        onclick:()=>{S.opts.mascotRestSec=n;O.saveOpts();draw()}},n+O.tr('s','с')))),
+      h('div',{class:'grp'},O.tr('Size','Размер')),
+      h('div',{class:'seg'},[28,36,44,56,72,96].map(n=>h('button',{class:S.opts.mascotSize===n?'on':'',
+        onclick:()=>{S.opts.mascotSize=n;O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw()}},n+'px'))),
+      h('div',{style:{display:'flex',gap:'8px',marginTop:'12px'}},
+        h('button',{class:'btn grow',onclick:()=>{O.openMascotIdeas&&O.openMascotIdeas()}},O.icon('bulb'),O.tr('Workshop','Мастерская')),
+        h('button',{class:'btn grow',onclick:()=>{O.openMascotSettings&&O.openMascotSettings()}},O.icon('palette'),O.tr('Species','Вид'))),
+      h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{
+        TUNE_ROWS.forEach(([key])=>delete S.opts['mascot_'+key]);
+        delete S.opts.mascotGlow;delete S.opts.mascotWalkSpeed;delete S.opts.mascotRestSec;
+        S.opts.mascotSize=44;S.opts.mascotRoam=true;S.opts.mascotSound=true;
+        O.saveOpts();O.mascotRefresh&&O.mascotRefresh();draw();
+        O.toast(O.tr('Back to defaults','Сброшено к умолчанию'),1600);
+      }},O.icon('undo'),O.tr('Reset to defaults','Сбросить к умолчанию'))
+    );
+  };
+  draw();
+  O.sheet(O.tr('Mascot tuning','Точечные настройки маскота'),body,{full:true});
 };
 })();

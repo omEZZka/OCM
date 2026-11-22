@@ -753,34 +753,133 @@ function modelActions(x,redraw){
 // Providers add models over time; the config in opencode.json is a snapshot taken at connect time.
 // This asks the provider for its current /models list and merges the new entries in, keeping the
 // user's existing model settings and never deleting anything.
-const probeModels=async(url,key,patchHeaders)=>{
-  let target=url.trim().replace(/\/+$/,'');
-  if(!/^https?:\/\//i.test(target))target='https://'+target;
-  if(!target.endsWith('/models'))target+='/models';
+//
+// IMPORTANT: an unauthenticated /models call is rate-limited or rejected by almost every vendor
+// (429 on OpenRouter/Groq, 402 on paid Zen plans), so a probe WITHOUT a key is useless noise.
+// The key is resolved in this order: explicit argument → active key-ring key → options.apiKey in
+// opencode.json → auth.json[provider].key.
+const AUTH_JSON='/root/.local/share/opencode/auth.json';
+const readAuthJson=()=>{
+  try{const r=O.native.readText(AUTH_JSON);return JSON.parse((r&&r.text)||'{}')||{}}catch(_){return{}}
+};
+const providerKeys=pid=>{
+  const out=[];
+  try{(O.keyRingOf?O.keyRingOf(pid):[]).forEach(k=>{if(k&&!out.includes(k))out.push(k)})}catch(_){}
+  try{
+    const t=O.native.cfgRead();
+    const o=t&&t.trim()?O.parseJsonc(t):{};
+    const opt=((o.provider||{})[pid]||{}).options||{};
+    if(opt.apiKey&&opt.apiKey!=='dummy'&&!out.includes(opt.apiKey))out.push(opt.apiKey);
+  }catch(_){}
+  try{
+    const a=readAuthJson();
+    const k=a[pid]&&(a[pid].key||a[pid].apiKey);
+    if(k&&!out.includes(k))out.push(k);
+  }catch(_){}
+  return out;
+};
+O.providerKeys=providerKeys;
+// Classify a failed probe so the UI can explain the real reason instead of "HTTP 429".
+const probeError=(status,body)=>{
+  const txt=String(body||'').slice(0,300);
+  const e=new Error(
+    status===401||status===403?O.tr('The key was rejected (401/403)','Ключ отклонён (401/403)'):
+    status===402?O.tr('No balance or paid plan required (402)','Нет баланса или нужен платный план (402)'):
+    status===429?O.tr('Rate limited or key required (429)','Лимит запросов или нужен ключ (429)'):
+    status===404?O.tr('Endpoint not found (404) — check the Base URL','Адрес не найден (404) — проверьте Base URL'):
+    status?O.tr('HTTP ','HTTP ')+status:O.tr('Network error','Ошибка сети'));
+  e.status=status||0;e.body=txt;return e;
+};
+const probeOnce=async(target,key,patchHeaders)=>{
   const hd={'Accept':'application/json'};
   if(key)hd['Authorization']='Bearer '+key;
   Object.assign(hd,patchHeaders||{});
-  let json=null;
-  // Native first: the WebView origin is https, so a direct fetch to a provider is blocked by CORS.
-  // The async bridge keeps the WebView responsive while the provider answers (a synchronous bridge
-  // call froze every animation and handler for the whole request).
-  const nat=O.native.netGetAsync
-    ?await O.native.netGetAsync(target,hd,20000)
-    :(O.native.netGet?O.native.netGet(target,hd,20000):null);
+  let nat=null;
+  try{
+    nat=O.native.netGetAsync
+      ?await O.native.netGetAsync(target,hd,20000)
+      :(O.native.netGet?O.native.netGet(target,hd,20000):null);
+  }catch(e){nat={ok:false,err:e.message}}
+  const status=nat&&nat.status||0;
   if(nat&&nat.ok&&nat.body){
+    let json=null;
     try{json=JSON.parse(nat.body)}catch(_){json=null}
+    if(json)return json;
   }
-  if(!json){
-    try{
-      const resp=await fetch(target,{method:'GET',headers:hd});
-      if(!resp.ok)throw new Error('HTTP '+resp.status);
-      json=await resp.json();
-    }catch(e){
-      throw new Error((nat&&nat.err)?nat.err:(nat&&nat.status?('HTTP '+nat.status):e.message));
-    }
+  // A native answer that came back with a body but not OK still carries the status we need.
+  if(status)throw probeError(status,nat&&nat.body);
+  // Browser fallback (CORS usually blocks it on device, but the previewer has no bridge).
+  try{
+    const resp=await fetch(target,{method:'GET',headers:hd});
+    if(!resp.ok)throw probeError(resp.status,await resp.text().catch(()=>''))
+    return await resp.json();
+  }catch(e){
+    if(e&&e.status)throw e;
+    throw probeError(0,(nat&&nat.err)||e.message);
   }
+};
+const probeModels=async(url,key,patchHeaders)=>{
+  let target=String(url||'').trim().replace(/\/+$/,'');
+  if(!target)throw probeError(0,O.tr('No Base URL','Нет Base URL'));
+  if(!/^https?:\/\//i.test(target))target='https://'+target;
+  if(!target.endsWith('/models'))target+='/models';
+  const json=await probeOnce(target,key,patchHeaders);
   const raw=Array.isArray(json)?json:(json.data||json.models||[]);
   return raw.map(m=>typeof m==='string'?m:(m.id||m.name)).filter(Boolean);
+};
+O.probeModels=probeModels;
+
+// Walk every known key and stop at the first one that answers with a model list.
+// Returns {models,key,index,errors[]}.
+O.probeModelsWithKeys=async(url,pid,tried)=>{
+  const keys=(tried&&tried.length?tried:providerKeys(pid));
+  let headers={};
+  try{
+    const t=O.native.cfgRead();
+    const o=t&&t.trim()?O.parseJsonc(t):{};
+    headers=(((o.provider||{})[pid]||{}).options||{}).headers||{};
+  }catch(_){}
+  const errors=[];
+  for(let i=0;i<keys.length;i++){
+    try{
+      const models=await probeModels(url,keys[i],headers);
+      return {models,key:keys[i],index:i,errors};
+    }catch(e){
+      errors.push({index:i,status:e.status||0,message:e.message||String(e)});
+      // 401/402/403: this key is unusable — try the next one.
+      // 429: this key is throttled — the next one may be fine too.
+      // Anything else (404, DNS) will not be fixed by another key.
+      if(e.status&&e.status!==401&&e.status!==402&&e.status!==403&&e.status!==429)throw Object.assign(e,{errors});
+    }
+  }
+  const last=errors[errors.length-1]||{};
+  const err=probeError(last.status||0,'');
+  err.message=errors.length
+    ? (O.tr('All ','Все ')+errors.length+' '+O.tr('keys failed: ','ключей не сработали: ')+errors.map(x=>x.message).join('; '))
+    : O.tr('No API key for this provider','Нет API-ключа для этого провайдера');
+  err.errors=errors;err.noKey=!errors.length;
+  throw err;
+};
+
+// Small helper sheet: explain that a key is required and offer to paste one right away.
+const askForProviderKey=(pid,name,after)=>{
+  const inp=h('input',{type:'password',placeholder:O.tr('Paste the API key','Вставьте API-ключ'),autocapitalize:'off',autocorrect:'off'});
+  const sheet=O.sheet(O.tr('API key required','Нужен API-ключ'),
+    h('div',null,
+      h('div',{class:'note'},O.tr('Probing models without a key just returns 401/402/429. The key is used only for this request and is stored in the local key ring.','Прозвон моделей без ключа возвращает только 401/402/429. Ключ используется для этого запроса и сохраняется в локальное кольцо ключей.')),
+      h('div',{class:'mono s mut',style:{margin:'8px 0',wordBreak:'break-all'}},name||pid),
+      h('div',{class:'field'},h('label',null,O.tr('API key','API-ключ')),inp),
+      h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},
+        h('button',{class:'btn grow',onclick:()=>sheet.close()},O.tr('Cancel','Отмена')),
+        h('button',{class:'btn pri grow',onclick:()=>{
+          const k=inp.value.trim();
+          if(!k)return O.toast(O.tr('Key is empty','Ключ пустой'),1500);
+          const old=(O.keyRingOf?O.keyRingOf(pid):[]).filter(x=>x!==k);
+          O.keyRingSet&&O.keyRingSet(pid,[k].concat(old));
+          sheet.close();
+          setTimeout(()=>after&&after(k),120);
+        }},O.icon('check'),O.tr('Save & probe','Сохранить и прозвонить')))));
+  setTimeout(()=>inp.focus(),200);
 };
 
 O.refreshProviderModels=async pid=>{
@@ -800,16 +899,31 @@ O.refreshProviderModels=async pid=>{
       h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{s.close();O.openCustomProvider()}},O.icon('cpu'),O.tr('Open custom provider','Открыть свой провайдер')));
     return;
   }
-  const key=O.keyRingActive?O.keyRingActive(pid):'';
+  const keys=providerKeys(pid);
+  // No key → do not even hit the endpoint: without Authorization most vendors answer 429/402.
+  if(!keys.length){
+    s.close();
+    askForProviderKey(pid,(prov&&prov.name)||pid,()=>O.refreshProviderModels(pid));
+    return;
+  }
   const headers=(prov&&prov.options&&prov.options.headers)||{};
-  let found=[];
+  let found=[],usedKey='',triedErrors=[];
+  const loading=h('div',{class:'mut',style:{padding:'16px'}});
+  body.textContent='';
+  body.append(loading);
   try{
-    found=await probeModels(url,key,headers);
+    const r=await O.probeModelsWithKeys(url,pid,keys);
+    found=r.models;usedKey=r.key;triedErrors=r.errors||[];
   }catch(e){
     body.textContent='';
-    body.append(h('div',{class:'errbox'},O.tr('Could not reach the provider: ','Не удалось получить список: ')+e.message),
-      h('div',{class:'note',style:{marginTop:'8px'}},url),
-      h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{s.close();O.refreshProviderModels(pid)}},O.icon('refresh'),O.tr('Retry','Повторить')));
+    const box=h('div',{class:'errbox'},O.tr('Could not get the model list: ','Не удалось получить список: ')+e.message);
+    body.append(box);
+    if(e.errors&&e.errors.length)body.append(h('div',{class:'note'},O.tr('Tried keys: ','Проверено ключей: ')+e.errors.length));
+    body.append(h('div',{class:'note',style:{marginTop:'8px'}},url));
+    const row=h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}});
+    row.append(h('button',{class:'btn grow',onclick:()=>{s.close();O.refreshProviderModels(pid)}},O.icon('refresh'),O.tr('Retry','Повторить')));
+    row.append(h('button',{class:'btn grow',onclick:()=>{s.close();askForProviderKey(pid,(prov&&prov.name)||pid,()=>O.refreshProviderModels(pid))}},O.icon('key'),O.tr('Use another key','Другой ключ')));
+    body.append(row);
     return;
   }
   if(!found.length){
@@ -831,6 +945,11 @@ O.refreshProviderModels=async pid=>{
       O.tr('New: ','Новых: ')+fresh.length+'. '+
       (gone.length?O.tr('No longer offered: ','Больше не предлагаются: ')+gone.length+' ('+O.tr('kept, nothing is deleted','оставлены, ничего не удаляется')+').':'')));
     body.append(h('div',{class:'field'},h('label',null,O.tr('Endpoint','Адрес')),h('div',{class:'mono s mut',style:{wordBreak:'break-all'}},url)));
+    if(usedKey){
+      const idx=keys.indexOf(usedKey);
+      body.append(h('div',{class:'note'},O.tr('Key used: ','Использован ключ: ')+'#'+(idx+1)+' · '+usedKey.slice(0,4)+'…'+usedKey.slice(-4)
+        +(keys.length>1?' ('+O.tr('of ','из ')+keys.length+')':'')));
+    }
 
     if(fresh.length){
       body.append(h('div',{class:'grp'},O.tr('New models','Новые модели')));
@@ -1124,7 +1243,10 @@ O.openConnect=async()=>{
             }[p.id];
             if(base){
               statusBoxAuto.textContent=O.tr('Loading models…','Загружаю модели…');
-              const list=await probeModels(base,key);
+              let list=null;
+              try{list=await probeModels(base,key)}catch(e){
+                statusBoxAuto.textContent=O.tr('Models not loaded: ','Модели не загрузились: ')+(e.message||e);
+              }
               if(list&&list.length){
                 const t2=O.native.cfgRead();let o2={};try{if(t2.trim())o2=O.parseJsonc(t2)}catch{}
                 o2.provider=o2.provider||{};
@@ -1234,27 +1356,19 @@ O.openCustomProvider=parentSheet=>{
     let url=urlInp.value.trim().replace(/\/+$/,'');if(!url)return O.toast('Введите Base URL');
     if(!url.startsWith('http://')&&!url.startsWith('https://'))url='https://'+url;
     urlInp.value=url;const key=keyInp.value.trim();
+    const local=/127\.0\.0\.1|localhost/.test(url);
+    // A remote provider without a key answers 401/402/429 — that is not a useful "model list".
+    if(!key&&!local){
+      statusBox.textContent=O.tr('Enter an API key first: unauthenticated probes return 401/402/429.','Сначала введите API-ключ: прозвон без авторизации возвращает 401/402/429.');
+      O.toast(O.tr('API key required','Нужен API-ключ'),2600);
+      try{keyInp.focus()}catch(_){}
+      return;
+    }
     probeBtn.disabled=true;statusBox.textContent='Прозваниваю API...';
     try{
-      let target=url.endsWith('/models')?url:(url+'/models');
-      const hd={'Accept':'application/json'};if(key)hd['Authorization']='Bearer '+key;
-      if(url.includes('openrouter.ai')||idInp.value==='openrouter'){
-        hd['HTTP-Referer']='https://opencode.mobile';
-        hd['X-Title']='OpenCode Mobile';
-      }
-      // Native bridge first: a WebView fetch to a third-party host is blocked by CORS.
-      let json=null;
-      const nat=O.native.netGetAsync
-        ?await O.native.netGetAsync(target,hd,20000)
-        :(O.native.netGet?O.native.netGet(target,hd,20000):null);
-      if(nat&&nat.ok&&nat.body){try{json=JSON.parse(nat.body)}catch(_){json=null}}
-      if(!json){
-        const resp=await fetch(target,{method:'GET',headers:hd});
-        if(!resp.ok)throw new Error('HTTP '+resp.status);
-        json=await resp.json();
-      }
-      const raw=Array.isArray(json)?json:(json.data||json.models||[]);
-      foundModels=raw.map(m=>typeof m==='string'?m:(m.id||m.name)).filter(Boolean);
+      const extra=(url.includes('openrouter.ai')||idInp.value==='openrouter')
+        ?{'HTTP-Referer':'https://opencode.mobile','X-Title':'OpenCode Mobile'}:{};
+      foundModels=await probeModels(url,key,extra);
       if(!foundModels.length){statusBox.textContent='Ответ получен, но список моделей пуст.';modelList.classList.add('hide');return}
       statusBox.textContent='Найдено '+foundModels.length+' моделей:';
       modelList.textContent='';modelList.classList.remove('hide');sel.clear();
@@ -1263,7 +1377,7 @@ O.openCustomProvider=parentSheet=>{
         chk.onchange=()=>{if(chk.checked)sel.add(mid);else sel.delete(mid)};
         modelList.append(h('label',{style:{display:'flex',alignItems:'center',padding:'5px 4px',fontSize:'13px',cursor:'pointer'}},chk,h('span',{class:'mono grow'},mid)))});
       O.toast('Найдено моделей: '+foundModels.length,2000);
-    }catch(e){statusBox.textContent='Ошибка: '+e.message;O.toast('Ошибка прозвона: '+e.message,4000)}
+    }catch(e){statusBox.textContent='Ошибка: '+(e.message||e);O.toast('Ошибка прозвона: '+(e.message||e),4000)}
     finally{probeBtn.disabled=false}}
   },O.icon('search'),'Прозвонить API (получить список моделей)');
 
@@ -1297,7 +1411,7 @@ O.openCustomProvider=parentSheet=>{
     // model catalogue into the config, and only then restart the core once.
     let probed=0;
     try{
-      if(sel.size===0||sel.has('default')){
+      if((sel.size===0||sel.has('default'))&&(key||/127\.0\.0\.1|localhost/.test(url))){
         probeBtn.disabled=true;statusBox.textContent=O.tr('Auto-loading models…','Автоподгружаю модели…');
         const list=await probeModels(url,key);
         if(list&&list.length){
