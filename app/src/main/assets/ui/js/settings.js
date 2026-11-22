@@ -216,10 +216,6 @@ O.openSettings=()=>{
     O.tr('Automatically summarize the session at 85% context usage','Автоматически сжимать сессию при заполнении контекста на 85%'),
     O.autoCompact(),v=>O.setAutoCompact(v));
   const tilesRow=O.listRow('sliders',O.tr('Home tiles','Плитки главного экрана'),O.tr('Choose shortcuts for the empty chat screen','Ярлыки на пустом экране чата'),O.icon('chevR'),()=>O.openHomeTiles());
-  const mascotSpecies=()=>{const m=S.opts.mascot||'deepseek';const names={deepseek:'DeepSeek кит',claude:'Claude искра',anime:'Аниме-девушка'};return names[m]||(O.mascotName?O.mascotName(m):m)};
-  const mascotRow=O.listRow('bot',O.tr('Mascot','Маскот'),
-    (S.opts.mascotOn!==false?O.tr('On','Вкл'):O.tr('Off','Выкл'))+' · '+mascotSpecies()+' · '+(S.opts.mascotSize||44)+'px',
-    O.icon('chevR'),()=>O.openMascotSettings&&O.openMascotSettings());
   const memoryRow=O.listRow('memory',O.tr('Personal memory','Персональная память'),O.tr('Facts about you the agent remembers across sessions','Факты о вас, которые агент помнит между сессиями'),O.icon('chevR'),()=>O.openUserFacts&&O.openUserFacts());
   const tplRow=O.listRow('doc',O.tr('Project templates','Шаблоны проектов'),O.tr('Rule sets injected into every prompt of a chat','Наборы правил, добавляемые в каждый запрос чата'),O.icon('chevR'),()=>O.openProjectTpls&&O.openProjectTpls(false));
   const navRow=O.listRow('layout',O.tr('Bottom bar','Нижний бар'),O.tr('Choose your one-tap tabs','Свои вкладки в один тап'),O.icon('chevR'),()=>O.openNavSettings&&O.openNavSettings());
@@ -230,7 +226,7 @@ O.openSettings=()=>{
   const focusRow=O.toggleRow('eye',O.tr('Focus mode','Фокус-режим'),O.tr('Hide panels — only the conversation','Скрыть панели — только переписка'),O.focusMode(),v=>O.setFocusMode(v));
   const dryRow=O.toggleRow('shield',O.tr('Dry-run mode','Режим Dry-run'),O.tr('Agent proposes commands and diffs without executing','Агент предлагает команды и diff без выполнения'),O.dryRun(),v=>O.setDryRun(v));
   const tourRow=O.listRow('info',O.tr('Feature tour','Обучающий тур'),O.tr('Show the welcome guide again','Показать приветственный гид ещё раз'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openTour(),200)});
-  appCard.append(langRow,themeRow,mascotRow,thinkRow,detailRow,planRow,styleRow,fastRow,autoCompactRow,hapticRow,animRow,lampRow,stageRow,memoryRow,tplRow,focusRow,dryRow,tilesRow,navRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
+  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,fastRow,autoCompactRow,hapticRow,animRow,lampRow,stageRow,memoryRow,tplRow,focusRow,dryRow,tilesRow,navRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
   panes.main.append(appCard);
 
   // 4. Notifications & Sounds
@@ -1096,9 +1092,6 @@ O.openSessionSettings=sid=>{
       O.listRow('branch',O.tr('File tree in the prompt','Дерево файлов в запросе'),
         tree?(tree.count+' '+O.tr('entries','записей')+' · '+O.ago(tree.at)):O.tr('not built yet','ещё не собрано'),
         O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openFileTreeForSession(sid),150)}),
-      // 4) mascot state of this chat
-      O.listRow('bot',O.tr('Mascot state','Состояние маскота'),O.mascotStateFor?O.mascotStateFor(sid):'idle',
-        O.icon('chevR'),()=>{O.setMascotStateFor&&O.setMascotStateFor(sid,'idle');draw()}),
       // 5) folder in the sessions list
       O.listRow('folder',O.tr('List folder','Папка в списке сессий'),
         (O.sessionFolders().find(f=>f.id===O.sessionFolderOf(sid))||{}).name||O.tr('no folder','без папки'),

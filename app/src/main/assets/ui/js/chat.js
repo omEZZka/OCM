@@ -116,11 +116,6 @@ O.chatInit=root=>{
   comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,stickyEl,jumpEl);
   root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,mmFloatBtn,comp);
-  // FIX (mascot fell into the composer): it used to be a child of the scrollable #msgs wrapper,
-  // so typing (which reflows/scrolls the list) shifted and clipped it under the input. It now
-  // lives in the chat pane itself, above everything, and only moves when dragged.
-  if(O.mascotDispose){try{O.mascotDispose()}catch(_){}}
-  if(O.mascotInit){try{O.mascotInit(root)}catch(e){console.error('mascot',e)}}
   bus.on('open',()=>{renderAll()});
   // Live-resync snapshot: merge into the DOM incrementally. NEVER force-scroll here — the user
   // may be reading far above; only follow when already glued to the bottom.
@@ -237,7 +232,6 @@ O.chatInit=root=>{
     else O.toast(t,4000)}}});
   O.on('voice',d=>{if(d&&d.text){ta.value=(ta.value?ta.value+' ':'')+d.text;onInput();ta.focus()}});
   // Keyboard-aware overlay offset: visualViewport shrinks while the soft keyboard is open. Keep the
-  // mascot glued above the input instead of letting it fall behind the keyboard.
   const syncKeyboard=()=>{
     try{
       const vv=window.visualViewport;
@@ -252,11 +246,6 @@ O.chatInit=root=>{
   window.addEventListener('resize',syncKeyboard,{passive:true});
   ta.addEventListener('focus',()=>setTimeout(syncKeyboard,250));
   ta.addEventListener('blur',()=>setTimeout(syncKeyboard,250));
-  // the mascot body lives on the composer ledge: keep it glued when the box grows
-  const reMascot=()=>{try{O.mascotReanchor&&O.mascotReanchor()}catch(_){}};
-  ta.addEventListener('input',()=>setTimeout(reMascot,30));
-  window.addEventListener('resize',()=>setTimeout(reMascot,80),{passive:true});
-  setTimeout(reMascot,400);
   syncKeyboard();
   fsTip=h('div',{id:'fs-tip'});document.body.append(fsTip);
   initPinch();initSelectionThreads();initVoiceWave(micBtn);

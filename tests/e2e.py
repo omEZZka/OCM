@@ -341,22 +341,42 @@ try:
     chk('focus mode exits',pg.locator('#top').is_visible())
     # themes: 24 built-ins + custom editor + import/export
     chk('amoled theme applies',pg.evaluate("OCM.S.opts.theme='amoled';OCM.saveOpts();document.documentElement.dataset.theme")=='amoled')
-    chk('29 built-in themes',pg.evaluate("OCM.themeList().filter(t=>!t.custom).length")==29)
+    chk('129 built-in themes',pg.evaluate("OCM.themeList().filter(t=>!t.custom).length")==129)
+    chk('theme pack adds 100 palettes',pg.evaluate("OCM.THEME_PACK.length")==100)
     # ---- 2.29 UI modes: chat vs terminal, three theme layers, landscape rails ----
     mode=pg.evaluate("""()=>{
       const before=OCM.uiMode();
       OCM.setUiMode('term');
       const termAttr=document.documentElement.dataset.ui;
       const appTerm=OCM.$('#app').dataset.term;
-      const segs=document.querySelectorAll('#ui-mode-bar .ui-mode-seg button').length;
       const saved=JSON.parse(localStorage.getItem('ocm.opts')||'{}').uiMode;
       OCM.setUiMode('chat');
-      return {before,termAttr,appTerm,segs,saved,back:document.documentElement.dataset.ui};
+      OCM.openSessions();
+      const drawerSegs=document.querySelectorAll('.sheet.drawer .ui-mode-seg button').length;
+      const aboveNew=!!document.querySelector('.sheet.drawer .drawer-mode');
+      const segs=drawerSegs;
+      OCM.back();
+      return {before,termAttr,appTerm,segs,saved,aboveNew,back:document.documentElement.dataset.ui};
     }""")
     chk('ui mode defaults to classic chat',mode['before']=='chat')
     chk('ui mode switches to terminal',mode['termAttr']=='term' and mode['appTerm']=='1')
-    chk('ui mode segmented control in header',mode['segs']==2)
+    chk('ui mode segmented control in the sessions drawer',mode['segs']>=2)
     chk('ui mode persists locally',mode['saved']=='term')
+    chk('ui mode switch sits above the quick tabs',mode['aboveNew'])
+    chips=pg.evaluate("""()=>{
+      const bar=document.querySelector('#bottom-bar');
+      const labels=[...bar.querySelectorAll('.bottom-pill')].map(b=>b.textContent.trim());
+      const clarify=bar.querySelector('.bottom-pill:has(.ic)');
+      const chipEls=[...bar.querySelectorAll('.bottom-pill')];
+      const clar=chipEls.find(b=>(b.textContent||'').includes('Уточнить'));
+      if(clar)clar.click();
+      const win=document.getElementById('ask-aside');
+      const opened=!!win&&!win.classList.contains('hide');
+      if(OCM.askAsideClose)OCM.askAsideClose();
+      return {labels,hasClarify:!!clar,opened};
+    }""")
+    chk('clarify is a bottom chip of its own',chips['hasClarify'])
+    chk('clarify chip opens the side chat',chips['opened'])
     chk('ui mode switches back to chat',mode['back']=='chat')
     layers=pg.evaluate("""()=>{
       const g0=OCM.themeLayer('global');
@@ -470,6 +490,29 @@ try:
       out.chatNoRails=!L.classList.contains('show');
       return out;
     }""")
+    cards=pg.evaluate("""async ()=>{
+      OCM.setUiMode('term');
+      OCM.termRailSet({left:true,right:true});
+      await new Promise(r=>setTimeout(r,300));
+      const rail=document.getElementById('term-rail-right');
+      const heads=[...rail.querySelectorAll('.rail-card-h b')].map(b=>b.textContent);
+      const strip=document.querySelector('.term-strip');
+      const modeChip=strip&&strip.querySelector('.term-mode-chip');
+      const ctx=strip&&strip.querySelector('.term-ctx-pill');
+      // cycle the autonomy mode through the public API
+      OCM.setAutonomyMode('plan');
+      await new Promise(r=>setTimeout(r,120));
+      const planOn=OCM.autonomyMode()==='plan'&&modeChip.className.includes('m-plan');
+      OCM.setAutonomyMode('default');
+      await new Promise(r=>setTimeout(r,120));
+      const backOn=OCM.autonomyMode()==='default';
+      OCM.setUiMode('chat');
+      return {heads,hasStrip:!!strip,hasMode:!!modeChip,hasCtx:!!ctx,planOn,backOn};
+    }""")
+    chk('terminal footer strip with autonomy and context',cards['hasStrip'] and cards['hasMode'] and cards['hasCtx'])
+    chk('autonomy mode cycles plan and back',cards['planOn'] and cards['backOn'])
+    chk('right rail shows Changes, Context, Tasks, Background',
+        all(any(k in h for h in cards['heads']) for k in ('Изменения','Контекст','Задачи','Фоновые')))
     chk('landscape terminal shows both rails',rails['leftShown'] and rails['rightShown'])
     chk('sessions rail groups In progress / Idle',rails['groups']==2)
     chk('landscape terminal replaces files pane',rails['filesHidden'])
@@ -817,16 +860,11 @@ try:
       const inB=OCM.getActiveJailbreaks(null,b).some(x=>x.id==='jb_scope');
       const promptA=OCM.jailbreakPromptFor(a).includes('только для A');
       const promptB=OCM.jailbreakPromptFor(b);
-      // mascot state per session
-      OCM.setMascotStateFor(a,'thinking');
-      OCM.setMascotStateFor(b,'idle');
-      const ma=OCM.mascotStateFor(a), mb=OCM.mascotStateFor(b);
       OCM.setSessionJb(a,null);
-      return {inA,inB,promptA,promptB,ma,mb};
+      return {inA,inB,promptA,promptB};
     }""")
     chk('jailbreak applies only to its own session',sc['inA'] and not sc['inB'])
     chk('jailbreak prompt injected per-session',sc['promptA'] and sc['promptB']=='')
-    chk('mascot state isolated per session',sc['ma']=='thinking' and sc['mb']=='idle')
     # folders
     fd=pg.evaluate("""()=>{
       const f=OCM.createSessionFolder('Работа');
@@ -876,288 +914,6 @@ try:
       return {len:p?p.text.length:0};
     }""")
     chk('streamed delta text is complete after coalescing',co['len']==201)
-    # ---- 2.27.1 mascot physics: gravity + pacing ----
-    ph=pg.evaluate("""()=>{
-      const el=document.querySelector('.mascot');
-      if(!el)return {missing:true};
-      const before=el.style.top;
-      // lift the body and let physics drop it back onto the ledger
-      el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:60,clientY:200,pointerId:9,button:0}));
-      el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:120,clientY:80,pointerId:9,buttons:1}));
-      const lifted=parseFloat(el.style.top)||0;
-      el.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:120,clientY:80,pointerId:9}));
-      return new Promise(res=>setTimeout(()=>{
-        const landed=parseFloat(el.style.top)||0;
-        res({before,lifted,landed,missing:false});
-      },2600));
-    }""")
-    chk('mascot has a gravity body',not ph.get('missing'))
-    chk('mascot falls back onto the input ledge',ph['landed']>ph['lifted'])
-    pace=pg.evaluate("""async ()=>{
-      OCM.S.status[OCM.S.sid]={type:'busy'};OCM.bus.emit('status',OCM.S.sid);
-      OCM.mascotTick&&OCM.mascotTick(OCM.S.sid);
-      const el=document.querySelector('.mascot');
-      const xs=[];
-      for(let i=0;i<26;i++){await new Promise(r=>setTimeout(r,120));xs.push(parseFloat(el.style.left)||0)}
-      const uniq=new Set(xs.map(v=>Math.round(v)));
-      // jitter check: no direction reversals inside a single stroll beyond the endpoint
-      let rev=0;for(let i=2;i<xs.length;i++){const a=xs[i-1]-xs[i-2],b=xs[i]-xs[i-1];if(a*b<0&&Math.abs(a)>1&&Math.abs(b)>1)rev++}
-      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
-      return {moved:uniq.size>3,reversals:rev,flip:el.classList.contains('flip')};
-    }""")
-    chk('walking is smooth (no jitter)',pace['reversals']<=2)
-    idle=pg.evaluate("""async ()=>{
-      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
-      OCM.mascotSetRoam&&OCM.mascotSetRoam(true);
-      OCM.mascotWalkNow&&OCM.mascotWalkNow();   // deterministic: start a stroll right now
-      const el=document.querySelector('.mascot');
-      await new Promise(r=>setTimeout(r,300));
-      const xs=[];
-      for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,150));xs.push(parseFloat(el.style.left)||0)}
-      const uniq=new Set(xs.map(v=>Math.round(v)));
-      return {moved:uniq.size>3};
-    }""")
-    chk('mascot walks mostly while idle',idle['moved'])
-    bubble=pg.evaluate("""()=>{
-      OCM.S.status[OCM.S.sid]={type:'busy'};OCM.bus.emit('status',OCM.S.sid);
-      OCM.mascotTick&&OCM.mascotTick(OCM.S.sid);
-      const el=document.querySelector('.mascot');
-      const b=el.querySelector('.mascot-bubble');
-      const has=!!b&&!!b.querySelector('svg');
-      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
-      OCM.mascotTick&&OCM.mascotTick(OCM.S.sid);
-      return {has,after:!!el.querySelector('.mascot-bubble')};
-    }""")
-    chk('coding bubble appears while generating',bubble['has'])
-    termcss=pg.evaluate("""()=>{
-      OCM.setUiMode('term');
-      const el=document.querySelector('.msg.user .m-body');
-      const tool=document.querySelector('#pane-chat .cg-head')||document.querySelector('#pane-chat .tool-h');
-      const cs=el?getComputedStyle(el):null;
-      const title=tool?(tool.querySelector('.cg-title')||tool.querySelector('.t')||tool):null;
-      const ts=title?getComputedStyle(title):null;
-      const mono=s=>/mono|Menlo|Consolas/i.test(s||'');
-      const out={flat:cs?cs.borderTopLeftRadius==='0px':null,
-        toolMono:ts?mono(ts.fontFamily):null,ff:ts?ts.fontFamily:'none',
-        compact:tool?tool.getBoundingClientRect().height<=44:null};
-      OCM.setUiMode('chat');
-      return out;
-    }""")
-    chk('terminal mode flattens user bubbles',termcss['flat'])
-    chk('terminal mode uses monospace for tools',termcss['toolMono'])
-    chk('terminal tool cards are compact',termcss['compact'])
-    # facing: artwork faces left, so moving right must be mirrored
-    face=pg.evaluate("""async ()=>{
-      if(!OCM.S.sid){try{await OCM.newSession()}catch(e){}}
-      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
-      const el=document.querySelector('.mascot');
-      OCM.S.opts.mascot_gaze=false;
-      OCM.mascotSetRoam&&OCM.mascotSetRoam(false);
-      OCM.mascotForceIdle&&OCM.mascotForceIdle();
-      el.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:9}));
-      await new Promise(r=>setTimeout(r,300));
-      // now start a clean walk from the center
-      el.style.left='175px';el.style.top='570px';
-      OCM.mascotSetRoam&&OCM.mascotSetRoam(true);
-      OCM.mascotWalkNow&&OCM.mascotWalkNow();
-      await new Promise(r=>setTimeout(r,400));
-      const log=[];
-      // Only frames where the pet is actually strolling count: after it reaches the target it
-      // stands still and the gaze is free to turn it toward the pointer.
-      for(let i=0;i<50;i++){
-        await new Promise(r=>setTimeout(r,160));
-        const ai=OCM.mascotAI();
-        log.push({x:Math.round(parseFloat(el.style.left)||0),flip:el.classList.contains('flip'),walking:ai.walking&&!ai.held});
-      }
-      let bad=0,n=0;
-      for(let i=1;i<log.length;i++){
-        if(!log[i].walking||!log[i-1].walking)continue;
-        const d=log[i].x-log[i-1].x; if(Math.abs(d)<2)continue;
-        n++; if((d>0)!==log[i].flip)bad++;
-      }
-      OCM.S.opts.mascot_gaze=true;
-      // if the pet happened to rest through the whole window, take one more stroll
-      if(n===0){
-        OCM.S.opts.mascot_gaze=false;
-        OCM.mascotWalkNow&&OCM.mascotWalkNow();
-        const more=[];
-        for(let i=0;i<30;i++){
-          await new Promise(r=>setTimeout(r,150));
-          const a=OCM.mascotAI();
-          more.push({x:Math.round(parseFloat(el.style.left)||0),flip:el.classList.contains('flip'),walking:a.walking&&!a.held});
-        }
-        for(let i=1;i<more.length;i++){
-          if(!more[i].walking||!more[i-1].walking)continue;
-          const d=more[i].x-more[i-1].x; if(Math.abs(d)<2)continue;
-          n++; if((d>0)!==more[i].flip)bad++;
-        }
-        OCM.S.opts.mascot_gaze=true;
-      }
-      return {n,bad};
-    }""")
-    chk('mascot faces the way it walks',face['n']>0 and face['bad']==0)
-    # ---- 2.28 mascot mind ----
-    mind=pg.evaluate("""()=>{
-      if(!OCM.S.sid)return {skip:true};
-      const a=OCM.mascotAI&&OCM.mascotAI();
-      const mm=OCM.mascotMemory();
-      OCM.petMascot();OCM.giveMascotTreat();
-      const after=OCM.mascotMemory();
-      return {ai:!!a,hasDecision:!!(a&&a.decision!==undefined),circadian:a&&a.circadian,
-        affGrew:(after.affection||0)>(mm.affection||0),fed:after.fed>0};
-    }""")
-    if not mind.get('skip'):
-        chk('mascot exposes its decision (transparent AI)',mind['hasDecision'])
-        chk('mascot memory: petting/feeding raises affection',mind['affGrew'] and mind['fed'])
-        chk('mascot has circadian mood',mind['circadian'] in ('sleepy','bright','lazy','awake'))
-    talk=pg.evaluate("""async ()=>{
-      OCM.mascotNap&&OCM.mascotNap();
-      const el=document.querySelector('.mascot');
-      const napped=el.dataset.nap==='1';
-      el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:40,clientY:300,pointerId:5,button:0}));
-      el.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:40,clientY:300,pointerId:5}));
-      await new Promise(r=>setTimeout(r,200));
-      return {napped,wokeUp:!el.dataset.nap};
-    }""")
-    chk('mascot can nap and wake on tap',talk['napped'] and talk['wokeUp'])
-    prop=pg.evaluate("""()=>{
-      const el=document.querySelector('.mascot');
-      // pretend a bash tool is running (stop the poller so it cannot reset the status)
-      const sid=OCM.S.sid;
-      OCM.stopLiveSync&&OCM.stopLiveSync();
-      OCM.S.status[sid]={type:'busy'};
-      OCM.upsertMsg({id:'mtool2',sessionID:sid,role:'assistant',time:{created:Date.now()}});
-      OCM.upsertPart({id:'ptool2',sessionID:sid,messageID:'mtool2',type:'tool',tool:'bash',state:{status:'running',input:{command:'ls'}}});
-      OCM.S.status[sid]={type:'busy'};
-      OCM.mascotTick&&OCM.mascotTick(sid);
-      return new Promise(res=>{
-        setTimeout(()=>{
-          const socket=el.querySelector('.mascot-prop');
-          const shown=!!socket&&socket.children.length>0&&socket.style.display!=='none';
-          OCM.S.status[sid]={type:'idle'};OCM.bus.emit('status',sid);
-          res({hasProp:shown});
-        },1400);
-      });
-    }""")
-    chk('mascot holds the running tool',prop['hasProp'])
-    mindcard=pg.evaluate("""()=>{OCM.openMascotMind();const sh=[...document.querySelectorAll('.sheet')].pop();
-      const t=sh?sh.textContent:'';const has=t.includes('Текущее решение')&&t.includes('Симпатия');
-      OCM.back();return {has}}""")
-    chk('mascot mind card opens',mindcard['has'])
-    # ---- 2.28.1 perf + hygiene ----
-    perf2=pg.evaluate("""async ()=>{
-      // gaze must be coalesced: many pointer events -> at most one style write per frame
-      const el=document.querySelector('.mascot');
-      const sp=el.querySelector('.mascot-sprite');
-      let writes=0;
-      const mo=new MutationObserver(rs=>{for(const r of rs)if(r.attributeName==='style')writes++});
-      mo.observe(sp,{attributes:true,attributeFilter:['style']});
-      for(let i=0;i<60;i++)document.dispatchEvent(new PointerEvent('pointermove',{clientX:100+i,clientY:300+i,bubbles:true}));
-      await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
-      await new Promise(r=>setTimeout(r,120));
-      mo.disconnect();
-      return {writes};
-    }""")
-    chk('gaze is rAF-coalesced (no per-event layout)',perf2['writes']<=3)
-    disp=pg.evaluate("()=>({has:typeof OCM.mascotDispose==='function'})")
-    chk('mascot disposes its global listeners',disp['has'])
-    # ---- 2.28.2 turning: only the body mirrors, overlays stay readable ----
-    turn=pg.evaluate("""async ()=>{
-      OCM.mascotSetRoam(false);
-      const el=document.querySelector('.mascot');
-      const hadFlip=el.classList.contains('flip');
-      el.classList.add('flip');
-      OCM.mascotBubble&&OCM.mascotBubble('thinking');
-      await new Promise(r=>setTimeout(r,60));
-      const body=el.querySelector('.mascot-body');
-      const sp=el.querySelector('.mascot-sprite');
-      const b=el.querySelector('.mascot-bubble');
-      const bm=b?getComputedStyle(b).transform:'';
-      const bodyM=body?getComputedStyle(body).transform:'';
-      // matrix(a,b,c,d,e,f): a<0 means the node is mirrored on X
-      const mirrored=s=>{const m=/matrix\\(([^)]+)\\)/.exec(s||'');return m?parseFloat(m[1])<0:false};
-      const out={hasBody:!!body,browMirrored:mirrored(bm),bodyMirrored:mirrored(bodyM),
-        spriteIsChild:!!(body&&body.contains(sp))};
-      el.classList.toggle('flip',hadFlip);
-      return out;
-    }""")
-    chk('mascot turn mirrors only the body wrapper',turn['hasBody'] and turn['spriteIsChild'] and turn['bodyMirrored'])
-    chk('mascot bubble text stays readable when turned',not turn['browMirrored'])
-    hy=pg.evaluate("""async ()=>{
-      // The gaze contract, tested deterministically:
-      //  a) it is rAF-coalesced (one style write per frame, not per event)
-      //  b) a sustained look to one side turns the body after a short hold
-      //  c) a finger right on the pet does not turn it (dead zone)
-      OCM.mascotSetRoam(false);
-      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
-      const el=document.querySelector('.mascot');
-      el.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:9}));
-      OCM.mascotForceIdle&&OCM.mascotForceIdle();
-      delete el.dataset.nap;
-      el.style.left='150px';el.style.top='560px';
-      await new Promise(r=>setTimeout(r,250));
-      const sp=el.querySelector('.mascot-sprite');
-      // (a) coalescing: 40 events inside one frame -> at most a couple of writes
-      let writes=0;
-      const mo=new MutationObserver(rs=>{for(const r of rs)if(r.attributeName==='style')writes++});
-      mo.observe(sp,{attributes:true,attributeFilter:['style']});
-      for(let i=0;i<40;i++)document.dispatchEvent(new PointerEvent('pointermove',{clientX:200+i,clientY:400,bubbles:true}));
-      await new Promise(r=>setTimeout(r,120));
-      mo.disconnect();
-      // (b) sustained gaze far to the right, sampled over real frames
-      const r0=el.getBoundingClientRect();
-      // the body only turns when the pointer is on the side it is NOT facing yet
-      const facing=OCM.mascotAI().faceDir;
-      const flip0=el.classList.contains('flip');
-      const far={clientX:facing>0?2:window.innerWidth-2,clientY:r0.top+r0.height/2,bubbles:true};
-      let held=false,frames=0;
-      for(let i=0;i<40&&!held;i++){
-        document.dispatchEvent(new PointerEvent('pointermove',far));
-        await new Promise(r=>requestAnimationFrame(r));
-        await new Promise(r=>setTimeout(r,30));
-        frames++;
-        held=el.classList.contains('flip')!==flip0&&OCM.mascotAI().faceDir===-facing;
-      }
-      // (c) dead zone around the body centre
-      const cx=r0.left+r0.width/2;
-      const before=el.classList.contains('flip');
-      for(let i=0;i<10;i++){
-        document.dispatchEvent(new PointerEvent('pointermove',{clientX:cx+2,clientY:r0.top+r0.height/2,bubbles:true}));
-        await new Promise(r=>requestAnimationFrame(r));
-        await new Promise(r=>setTimeout(r,25));
-      }
-      const nearFlip=el.classList.contains('flip');
-      const walking=OCM.mascotAI().walking;
-      OCM.mascotGlanceOff&&OCM.mascotGlanceOff();
-      return {writes,quick:writes>3,held,nearFlip,heldBefore:before,walking,frames};
-    }""")
-    chk('gaze turn has hysteresis (no instant flip)',not hy['quick'] and hy['held'] and not hy['walking'])
-    chk('gaze dead zone keeps the pet still',hy['nearFlip']==hy['heldBefore'])
-
-
-
-    roam=pg.evaluate("""()=>{
-      OCM.mascotSetRoam(false);
-      const still=OCM.S.opts.mascotRoam===false;
-      OCM.mascotSetRoam(true);
-      return {still,back:OCM.S.opts.mascotRoam===true};
-    }""")
-    chk('mascot roaming can be switched off',roam['still'] and roam['back'])
-    mime=pg.evaluate("""()=>{
-      const pets=window.OCM_MASCOT_ART.pets;let ok=0,bad=0;
-      for(const k in pets){
-        const u=pets[k].uri;const m=u.slice(5,u.indexOf(';'));
-        const b64=u.split(',')[1];
-        const head=atob(b64.slice(0,16));
-        const isRiff=head.slice(0,4)==='RIFF'&&head.slice(8,12)==='WEBP';
-        const isGif=head.slice(0,3)==='GIF';
-        const declared=m==='image/webp'?'webp':m==='image/gif'?'gif':m==='image/png'?'png':'?';
-        const real=isRiff?'webp':isGif?'gif':'png';
-        if(declared===real)ok++;else bad++;
-      }
-      return {ok,bad};
-    }""")
-    chk('every pet sprite declares its real format (no black boxes)',mime['bad']==0)
 
 
     pg.evaluate("OCM.back()")
@@ -1867,63 +1623,6 @@ try:
       return {code,edit};
     }""")
     chk('viewer: text code view + edit',vwt['code'] and vwt['edit'])
-    # ---- 2.25 mascot ----
-    mc=pg.evaluate("""()=>{
-      const el=document.querySelector('.mascot');
-      if(!el)return {missing:true};
-      const sp=el.dataset.species;
-      // states follow the app (no pending permissions allowed to mask the idle state)
-      OCM.S.perms=[];OCM.S.questions=[];
-      OCM.S.status[OCM.S.sid]={type:'busy'};OCM.bus.emit('status',OCM.S.sid);
-      const busyState=el.dataset.state;
-      OCM.S.status[OCM.S.sid]={type:'idle'};OCM.bus.emit('status',OCM.S.sid);
-      const idleState=el.dataset.state;
-      // settings list
-      OCM.openMascotSettings();
-      const sh=[...document.querySelectorAll('.sheet')].pop();
-      const species=sh.querySelectorAll('.mascot-prev').length;
-      // pick another species
-      const cells=[...sh.querySelectorAll('.mascot-prev')];
-      cells[4]&&cells[4].click();
-      const picked=OCM.S.opts.mascot;
-      // size control
-      const sizes=[...sh.querySelectorAll('.seg button')].map(b=>b.textContent);
-      OCM.back();
-      const after=document.querySelector('.mascot');
-      return {sp,busyState,idleState,species,picked,sizes,size:after.style.getPropertyValue('--ms')};
-    }""")
-    chk('mascot rendered with species',bool(mc.get('sp')))
-    chk('mascot shows thinking/writing while busy',mc.get('busyState') in ('thinking','writing','waiting'))
-    chk('mascot idles when finished',mc.get('idleState')=='idle')
-    chk('mascot settings: 24+ species',mc.get('species',0)>=24)
-    chk('mascot settings: species selectable',bool(mc.get('picked')) and mc.get('picked')!=mc.get('sp'))
-    chk('mascot settings: size presets','28px' in (mc.get('sizes') or []))
-    # drag: mascot is absolutely positioned and draggable
-    dr=pg.evaluate("""()=>{
-      const el=document.querySelector('.mascot');
-      el.style.left='40px';el.style.top='80px';el.dataset.placed='1';
-      OCM.store.set('mascotPos',{x:40,y:80});
-      const before={l:el.style.left,t:el.style.top};
-      el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:50,clientY:90,pointerId:1,button:0}));
-      el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:160,clientY:200,pointerId:1,buttons:1}));
-      el.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:160,clientY:200,pointerId:1}));
-      const afterDrag={l:el.style.left,t:el.style.top};
-      return new Promise(res=>setTimeout(()=>{
-        const saved=OCM.store.get('mascotPos',null);
-        res({before,afterDrag,saved,left:el.style.left,top:el.style.top});
-      },1100));
-    }""")
-    chk('mascot drags and remembers position',dr['saved'] and dr['afterDrag']['l']!=dr['before']['l'])
-    # off switch in settings
-    off=pg.evaluate("""()=>{
-      const before=OCM.S.opts.mascotOn;
-      OCM.S.opts.mascotOn=false;OCM.saveOpts();OCM.mascotRefresh();
-      const hidden=document.querySelector('.mascot').style.display==='none';
-      OCM.S.opts.mascotOn=true;OCM.saveOpts();OCM.mascotRefresh();
-      const shown=document.querySelector('.mascot').style.display!=='none';
-      return {before,hidden,shown};
-    }""")
-    chk('mascot can be hidden and shown',off['hidden'] and off['shown'])
     # ---- continue / regenerate send no visible user bubble ----
     cg=pg.evaluate("""async ()=>{
       const sid='ses_cg';OCM.S.sessions.unshift({id:sid,title:'cg',time:{created:1,updated:Date.now()}});

@@ -39,8 +39,6 @@ for need in ['signInGuest', 'resetInstall', 'authLogin', 'authLogout', 'signInEm
         fail.append(f'MainActivity.kt is missing the {need} bridge')
 # 3. leftover markers in the UI
 for f in sorted(os.listdir(UI)):
-    if f == 'mascot-art.js':  # base64 artwork, not source code
-        continue
     src = open(os.path.join(UI, f), encoding='utf-8').read()
     for m in ('TODO', 'XXX', 'FIXME', '待补充'):
         if m in src:

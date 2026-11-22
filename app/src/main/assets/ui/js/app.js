@@ -57,9 +57,19 @@ function build(){
     ['search','search',()=>O.tr('Search','Поиск'),()=>O.openGlobalSearch()],
     ['projects','folder',()=>O.tr('Projects','Проекты'),()=>O.openProjects()],
     ['sessions','list',()=>O.tr('Sessions','Сессии'),()=>O.openSessions()],
-    ['voice','mic',()=>O.tr('Voice','Голос'),()=>O.onMicChoice&&O.onMicChoice()]
+    ['voice','mic',()=>O.tr('Voice','Голос'),()=>O.onMicChoice&&O.onMicChoice()],
+    ['clarify','bulb',()=>O.tr('Clarify','Уточнить'),()=>{
+      const draft=O.$('#composer textarea');
+      O.askAsideOpen&&O.askAsideOpen(draft&&draft.value||'');
+      if(draft&&draft.value){draft.value='';draft.dispatchEvent(new Event('input'))}
+    }]
   ];
-  O.navTabs=()=>{const v=O.store.get('navTabs',['chat','files']);return Array.isArray(v)&&v.length?v.filter(x=>NAV_DEFS.some(d=>d[0]===x)):['chat','files']};
+  O.navTabs=()=>{
+    const v=O.store.get('navTabs',['chat','files','clarify']);
+    if(!Array.isArray(v)||!v.length)return['chat','files','clarify'];
+    const known=v.filter(x=>NAV_DEFS.some(d=>d[0]===x));
+    return known.length?known:['chat','files','clarify'];
+  };
   const buildBottom=()=>{
     bottomBar.textContent='';B={};
     O.navTabs().forEach(id=>{
@@ -105,11 +115,12 @@ function build(){
   const fx=h('button',{class:'focus-exit',title:O.tr('Exit focus mode','Выйти из фокуса'),onclick:()=>O.setFocusMode(false)},O.icon('x'));
   document.body.append(fx);
 
-  // Mode switch: always reachable in the header, and at the top of the landscape rail.
-  if(O.uiModeSeg){
-    topLeft.append(h('div',{id:'ui-mode-bar'},O.uiModeSeg()));
-  }
   if(O.termRailsInit)O.termRailsInit(app,P.chat,P.side);
+  // terminal footer strip (autonomy + context) is mounted above the composer inside the pane
+  if(O.termStripMount){
+    const host=SP.term&&SP.term.parentNode;
+    try{O.termStripMount(P.chat)}catch(_){}
+  }
   O.filesInit(P.files);
   O.chatInit(P.chat);
   O.termInit(SP.term);
@@ -160,7 +171,6 @@ function bottomMenu(){
   // menu entry is just the entry point — nothing is ever written to the shared AGENTS.md.
   const jbOwn=O.sessionJbIds&&O.sessionJbIds(S.sid);
   const jbCount=jbOwn?jbOwn.size:(O.getActiveJailbreakIds?O.getActiveJailbreakIds().size:0);
-  const mascotOn=S.opts.mascotOn!==false;
   O.actions(O.tr('Menu','Меню'),[
     {label:O.tr('Jailbreaks for this chat','Джейлбрейки этого чата'),
       sub:!S.sid?O.tr('open a chat first','сначала откройте чат')
@@ -168,17 +178,6 @@ function bottomMenu(){
       icon:'shield',fn:()=>{
         if(!S.sid)return O.toast(O.tr('Open a chat first','Сначала откройте чат'),1800);
         O.openSessionJailbreaks&&O.openSessionJailbreaks(S.sid);
-      }},
-    {label:O.tr('Mascot tuning…','Настройки маскота…'),
-      sub:mascotOn?O.tr('Gaze, hints, tools, glow, speed — per feature','Взгляд, подсказки, инструменты, свечение, скорость — по отдельности')
-        :O.tr('Mascot is hidden','Маскот скрыт'),
-      icon:'bot',fn:()=>{O.openMascotTuning?O.openMascotTuning():O.openMascotSettings&&O.openMascotSettings()}},
-    {label:O.tr('Mascot workshop','Мастерская маскота'),sub:O.tr('100 ideas, pick what comes next','100 идей, выберите, что дальше'),icon:'bulb',fn:()=>O.openMascotIdeas&&O.openMascotIdeas()},
-    {label:O.tr('Clarify (side agent)','Уточнить (боковой агент)'),
-      sub:O.tr('Ask without interrupting the running task','Спросить, не прерывая текущую задачу'),icon:'bulb',fn:()=>{
-        const draft=O.$('#composer textarea');
-        O.askAsideOpen&&O.askAsideOpen(draft&&draft.value||'');
-        if(draft&&draft.value){draft.value='';draft.dispatchEvent(new Event('input'))}
       }},
     {label:O.tr('Interface: ','Интерфейс: ')+(O.isTermMode&&O.isTermMode()?O.tr('Terminal','Терминал'):O.tr('Classic chat','Классический чат')),
       sub:O.tr('Mode, three theme layers, landscape panels','Режим, три слоя тем, панели в альбоме'),icon:'sliders',fn:()=>O.openUiModeSettings&&O.openUiModeSettings()},

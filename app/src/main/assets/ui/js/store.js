@@ -5,7 +5,7 @@ const bus=O.bus={h:{},on(n,f){(this.h[n]=this.h[n]||[]).push(f);return()=>this.o
   emit(n,...a){(this.h[n]||[]).slice().forEach(f=>{try{f(...a)}catch(e){console.error(n,e)}})}};
 const S=O.S={dir:'',sessions:[],sid:null,status:{},perms:[],questions:[],todos:{},diffs:{},
   providers:[],agents:[],commands:[],cfg:{},agent:'build',model:null,variant:null,mcp:{},lsp:[],branch:'',
-  offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false,mascot:'deepseek',mascotOn:true,mascotSize:44,uiMode:'chat'},O.store.get('opts',{}))};
+  offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false,uiMode:'chat'},O.store.get('opts',{}))};
 O.saveOpts=()=>{O.store.set('opts',S.opts);document.documentElement.dataset.theme=S.opts.theme;document.documentElement.style.setProperty('--fs',S.opts.fs+'px')};
 // Auto theme: follow the Android/system dark-mode preference when enabled.
 // The manual choice is remembered separately so toggling auto off restores it.
@@ -710,7 +710,7 @@ O.rotateProviderKey=async(pid,quiet)=>{
   return ok;
 };
 
-// ---- session-scoped state (jailbreaks, mascot, file tree) ----
+// ---- session-scoped state (jailbreaks, file tree) ----
 // Everything here is keyed by session id so switching chats never leaks state into another.
 O.sessionJailbreaks=()=>O.store.get('sessionJailbreaks',{});
 O.sessionJailbreak=sid=>{
@@ -725,19 +725,6 @@ O.setSessionJailbreak=(sid,ids)=>{
   if(O.updateReadmeForModel)O.updateReadmeForModel(S.model?S.model.modelID:null);
   bus.emit('sessionJailbreak',sid);
   bus.emit('sessions');
-};
-O.sessionMascotState=()=>O.store.get('sessionMascot',{});
-O.mascotStateFor=sid=>(O.sessionMascotState()[sid||S.sid])||'idle';
-O.setMascotStateFor=(sid,state)=>{
-  if(!sid)return;
-  const m=O.sessionMascotState();
-  if(m[sid]===state)return;
-  m[sid]=state;
-  // bound the map: only the 40 most recent sessions keep an animation state
-  const keys=Object.keys(m);
-  if(keys.length>40){keys.slice(0,keys.length-40).forEach(k=>delete m[k])}
-  O.store.set('sessionMascot',m);
-  bus.emit('mascotState',sid,state);
 };
 // File tree cached per session+dir: { sid, dir, at, text, count }
 O.fileTreeFor=sid=>O.store.get('fileTree.'+(sid||S.sid),null);

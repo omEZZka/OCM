@@ -98,7 +98,10 @@ O.openSessions=()=>{
     O.icon('dots'),h('span',null,O.tr('More','Ещё')),O.icon('chevD','drawer-more-chev'));
   const newBtn=h('button',{class:'btn pri wide drawer-new',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));
   const offs=[];
-  const s=O.sheet(O.tr('Sessions','Сессии'),h('div',{class:'drawer-v2'},newBtn,q,tagBar,navGrid,moreBtn,moreBox,h('div',{class:'drawer-sess-head'},O.icon('chat'),h('b',null,O.tr('Recent sessions','Недавние сессии'))),list,hits),{drawer:true,
+  // Interface mode sits at the top of the drawer, right above the quick-tab chips: one tap
+  // to flip classic chat <-> terminal without leaving the session list.
+  const modeBar=O.uiModeSeg?h('div',{class:'drawer-mode'},O.uiModeSeg()):null;
+  const s=O.sheet(O.tr('Sessions','Сессии'),h('div',{class:'drawer-v2'},modeBar,newBtn,q,tagBar,navGrid,moreBtn,moreBox,h('div',{class:'drawer-sess-head'},O.icon('chat'),h('b',null,O.tr('Recent sessions','Недавние сессии'))),list,hits),{drawer:true,
     onClose:()=>{clearTimeout(hitTimer);offs.splice(0).forEach(f=>{try{f()}catch(_){}})}});
   function drawTags(){
     tagBar.textContent='';

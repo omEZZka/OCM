@@ -99,13 +99,69 @@ O.toggleUiMode=()=>O.setUiMode(O.isTermMode()?'chat':'term');
 // ---- sidebar segmented control (Chat / Terminal) ------------------------
 O.uiModeSeg=()=>{
   const seg=h('div',{class:'seg ui-mode-seg',title:O.tr('Interface mode','Режим интерфейса')});
-  const btn=(m,label,icon)=>h('button',{class:O.uiMode()===m?'on':'',onclick:()=>{
-    O.setUiMode(m);
-    seg.querySelectorAll('button').forEach((b,i)=>b.classList.toggle('on',MODES[i]===m));
-  }},O.icon(icon),h('span',null,label));
+  const btn=(m,label,icon)=>h('button',{class:'ui-mode-'+m,onclick:()=>O.setUiMode(m)},
+    O.icon(icon),h('span',null,label));
   seg.append(btn('chat',O.tr('Chat','Чат'),'chat'),btn('term',O.tr('Terminal','Терминал'),'terminal'));
+  const sync=()=>seg.querySelectorAll('button').forEach(b=>{
+    b.classList.toggle('on',b.classList.contains('ui-mode-'+O.uiMode()));
+  });
+  sync();
+  // one listener per control: every open segmented control follows the mode, wherever it lives
+  bus.on('uiMode',sync);
   return seg;
 };
+
+// ---- terminal status strip: autonomy mode + context usage, like a CLI footer ----
+const AUTONOMY=[
+  ['default',['Manual','Вручную'],'shield'],
+  ['plan',['Plan','План'],'list'],
+  ['dry',['Dry-run','Без запуска'],'eye']
+];
+O.autonomyMode=()=>{
+  if(O.dryRun&&O.dryRun())return 'dry';
+  if(O.planMode&&O.planMode())return 'plan';
+  return 'default';
+};
+O.setAutonomyMode=m=>{
+  if(m==='dry'){if(O.planMode&&O.planMode())O.setPlanMode(false);O.setDryRun&&O.setDryRun(true)}
+  else if(m==='plan'){if(O.dryRun&&O.dryRun())O.setDryRun&&O.setDryRun(false);O.setPlanMode&&O.setPlanMode(true)}
+  else{if(O.planMode&&O.planMode())O.setPlanMode(false);if(O.dryRun&&O.dryRun())O.setDryRun&&O.setDryRun(false)}
+  bus.emit('planMode');bus.emit('dryRun');bus.emit('autonomy');
+};
+let strip=null,stripMode=null,stripCtx=null;
+const ctxPct=()=>{
+  try{const u=O.contextUsage&&O.contextUsage(S.sid);return u&&u.pct!=null?Math.round(u.pct):null}catch(_){return null}
+};
+const renderStrip=()=>{
+  if(!strip)return;
+  const m=O.autonomyMode();
+  const def=AUTONOMY.find(x=>x[0]===m)||AUTONOMY[0];
+  stripMode.textContent='';
+  stripMode.className='term-mode-chip m-'+m;
+  stripMode.append(O.icon(def[2]),h('span',null,O.tr(def[1][0],def[1][1])));
+  const pct=ctxPct();
+  stripCtx.className='term-ctx-pill'+(pct!=null&&pct>=80?' hot':'');
+  stripCtx.textContent=pct!=null?(pct+'% '+O.tr('context','контекст')):O.tr('context —','контекст —');
+};
+O.termStripMount=host=>{
+  if(strip||!host)return;
+  stripMode=h('button',{class:'term-mode-chip',onclick:()=>{
+    const items=AUTONOMY.map(([m,t,ic])=>({label:O.tr(t[0],t[1]),
+      sub:m===O.autonomyMode()?O.tr('active','включён'):'',icon:ic,
+      fn:()=>{O.setAutonomyMode(m);renderStrip()}}));
+    O.actions(O.tr('Agent mode','Режим агента'),items);
+  }});
+  stripCtx=h('button',{class:'term-ctx-pill',onclick:()=>O.openTokensModal&&O.openTokensModal()});
+  const slash=h('button',{class:'term-slash',title:O.tr('Commands','Команды'),onclick:()=>{
+    const ta=O.$('#composer textarea');
+    if(ta){ta.value='/';ta.dispatchEvent(new Event('input'));ta.focus()}
+  }},O.icon('terminal'),h('span',null,'/'));
+  strip=h('div',{class:'term-strip'},stripMode,stripCtx,h('span',{class:'grow'}),slash);
+  host.insertBefore(strip,host.firstChild);
+  renderStrip();
+  ['status','open','meta','autonomy','planMode','dryRun','msg','idle'].forEach(e=>bus.on(e,()=>renderStrip()));
+};
+O.termStripRefresh=renderStrip;
 
 // ---- landscape three-column session rail --------------------------------
 const railState=()=>O.store.get('termRail',{left:true,right:true,leftW:230,rightW:340});
@@ -147,7 +203,7 @@ O.termRailsInit=(appEl,chatPane,sidePane)=>{
     h('div',{class:'rail-head'},h('b',{class:'grow'},O.tr('Sessions','Сессии')),
       h('button',{class:'ibtn s',title:O.tr('New chat','Новый чат'),onclick:()=>O.newSession()},O.icon('plus')),
       h('button',{class:'ibtn s',title:O.tr('Hide panel','Скрыть панель'),onclick:()=>O.termRailSet({left:false})},O.icon('chevL'))),
-    O.uiModeSeg?O.uiModeSeg():null,
+    O.uiModeSeg?h('div',{class:'rail-mode'},O.uiModeSeg()):null,
     railLList);
   gripL=h('div',{class:'rail-grip',title:O.tr('Resize','Ширина')});
   railRList=h('div',{class:'rail-list'});
@@ -186,29 +242,93 @@ O.termRailsInit=(appEl,chatPane,sidePane)=>{
     addEventListener('pointerup',up);addEventListener('touchend',up);
   };
   drag(gripL,'left');drag(gripR,'right');
-  ['sessions','status','open','idle','diff'].forEach(e=>bus.on(e,()=>{try{O.termLayout()}catch(_){}}));
+  ['sessions','status','open','idle','diff','todo'].forEach(e=>bus.on(e,()=>{try{O.termLayout()}catch(_){}}));
 };
 
-// Diff preview for the right rail: reuse the existing renderer, no new logic.
-const railDiffs=host=>{
-  host.textContent='';
-  const sid=S.sid;if(!sid){host.append(h('div',{class:'rail-empty'},O.tr('no session','нет сессии')));return}
-  const list=O.msgs(sid).list;
-  const found=[];
-  for(let i=list.length-1;i>=0&&found.length<12;i--){
+// Right rail = a card stack (Claude-Code style): Changes / Context / Tasks / Background.
+// Every card is collapsed by default and opens one at a time; all data comes from state we
+// already have, so nothing here duplicates agent logic.
+const railOpen=new Set();
+const railCard=(key,icon,title,sub,build)=>{
+  const body=h('div',{class:'rail-card-b'+(railOpen.has(key)?'':' hide')});
+  body.append(build());
+  const head=h('button',{class:'rail-card-h'+(railOpen.has(key)?' on':''),onclick:()=>{
+    if(railOpen.has(key))railOpen.delete(key);else railOpen.add(key);
+    body.classList.toggle('hide',!railOpen.has(key));
+    head.classList.toggle('on',railOpen.has(key));
+  }},O.icon(icon),h('b',{class:'grow'},title),sub?h('span',{class:'rail-card-s'},sub):null,O.icon('chevD'));
+  return h('div',{class:'rail-card'},head,body);
+};
+const collectDiffs=()=>{
+  const sid=S.sid;if(!sid)return[];
+  const list=O.msgs(sid).list;const found=[];
+  for(let i=list.length-1;i>=0&&found.length<20;i--){
     for(const p of list[i].parts||[]){
       const md=p.type==='tool'&&p.state&&p.state.metadata;
-      if(md&&md.diff)found.push({file:(p.state.input&&(p.state.input.filePath||p.state.input.path))||p.tool||'diff',diff:md.diff});
+      if(md&&md.diff)found.push({file:(p.state.input&&(p.state.input.filePath||p.state.input.path||p.state.input.pattern))||p.tool||'diff',diff:md.diff});
       if(p.type==='patch'&&p.diff)found.push({file:(p.files&&p.files[0]&&(p.files[0].path||p.files[0]))||'patch',diff:p.diff});
     }
   }
-  if(!found.length){host.append(h('div',{class:'rail-empty'},O.tr('No changes yet','Изменений пока нет')));return}
-  found.forEach(f=>{
-    const body=h('div',{class:'rail-diff-b hide'},O.unifiedEl(String(f.diff).slice(0,20000)));
-    const head=h('button',{class:'rail-diff-h',onclick:()=>body.classList.toggle('hide')},
-      O.icon('edit'),h('span',{class:'mono grow'},O.rel(f.file)),O.icon('chevD'));
-    host.append(h('div',{class:'rail-diff'},head,body));
+  return found;
+};
+const diffCount=diff=>{
+  let add=0,del=0;
+  String(diff||'').split('\n').forEach(l=>{
+    if(l.startsWith('+')&&!l.startsWith('+++'))add++;
+    else if(l.startsWith('-')&&!l.startsWith('---'))del++;
   });
+  return {add,del};
+};
+const railCards=host=>{
+  host.textContent='';
+  const diffs=collectDiffs();
+  const tot=diffs.reduce((a,d)=>{const c=diffCount(d.diff);a.add+=c.add;a.del+=c.del;return a},{add:0,del:0});
+  host.append(railCard('changes','edit',O.tr('Changes','Изменения'),
+    diffs.length?(diffs.length+' · +'+tot.add+' −'+tot.del):O.tr('none','нет'),
+    ()=>{
+      if(!diffs.length)return h('div',{class:'rail-empty'},O.tr('No changes yet','Изменений пока нет'));
+      const box=h('div');
+      diffs.forEach(f=>{
+        const c=diffCount(f.diff);
+        const b=h('div',{class:'rail-diff-b hide'},O.unifiedEl(String(f.diff).slice(0,20000)));
+        box.append(h('div',{class:'rail-diff'},
+          h('button',{class:'rail-diff-h',onclick:()=>b.classList.toggle('hide')},
+            O.icon('edit'),h('span',{class:'mono grow'},O.rel(f.file)),
+            h('span',{class:'rail-diff-n'},'+'+c.add+' −'+c.del),O.icon('chevD')),
+          b));
+      });
+      return box;
+    }));
+  const pct=ctxPct();
+  host.append(railCard('context','zap',O.tr('Context','Контекст'),pct!=null?pct+'%':null,()=>{
+    const box=h('div',{class:'rail-ctx'});
+    box.append(h('div',{class:'rail-bar'},h('i',{style:{width:Math.max(2,Math.min(100,pct||0))+'%'}})),
+      h('button',{class:'btn sm wide',style:{marginTop:'8px'},onclick:()=>O.openTokensModal&&O.openTokensModal()},
+        O.icon('zap'),O.tr('Token details','Детали токенов')));
+    return box;
+  }));
+  const todos=(S.todos&&S.todos[S.sid])||[];
+  host.append(railCard('tasks','list',O.tr('Tasks','Задачи'),
+    todos.length?(todos.filter(t=>t.status==='completed').length+'/'+todos.length):null,
+    ()=>{
+      if(!todos.length)return h('div',{class:'rail-empty'},O.tr('No plan yet','Плана пока нет'));
+      const box=h('div',{class:'rail-tasks'});
+      todos.slice(0,8).forEach(t=>box.append(h('div',{class:'rail-task'+(t.status==='completed'?' done':'')},
+        O.icon(t.status==='completed'?'check':'chevR'),h('span',null,t.content))));
+      return box;
+    }));
+  const kids=(S.sessions||[]).filter(s=>s.parentID===S.sid||s.parentFork===S.sid);
+  host.append(railCard('bg','bot',O.tr('Background','Фоновые'),kids.length?String(kids.length):null,()=>{
+    if(!kids.length)return h('div',{class:'rail-empty'},O.tr('No subagents','Субагентов нет'));
+    const box=h('div');
+    kids.slice(0,8).forEach(k=>{
+      const st=S.status[k.id];const run=st&&st.type!=='idle';
+      box.append(h('button',{class:'rail-item',onclick:()=>O.openSession(k.id)},
+        h('span',{class:'rail-dot'+(run?' run':'')}),
+        h('span',{class:'rail-title'},O.sessionTitle(k))));
+    });
+    return box;
+  }));
 };
 
 O.termLayout=()=>{
@@ -230,7 +350,7 @@ O.termLayout=()=>{
   if(filesPane)filesPane.style.display=(show)?'none':'';
   app.dataset.termWide=show?'1':'0';
   if(show&&r.left)railList(railLList,'left');
-  if(show&&r.right)railDiffs(railRList);
+  if(show&&r.right)railCards(railRList);
 };
 
 // ---- settings sheet -----------------------------------------------------
