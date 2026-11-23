@@ -140,29 +140,29 @@ object ProxyShim {
          }
      }
  
-     private fun handleRotateIp(c: Context, uid: String, out: BufferedOutputStream) {
-         try {
-             // Trigger WARP IP rotation via the opencode server
-             // This calls the opencode CLI to rotate the WARP exit
-             val home = Runtime.home(c, uid)
-             val pb = java.lang.ProcessBuilder(
-                 "/bin/sh", "-c",
-                 "cd $HOME && /usr/local/bin/opencode warp rotate 2>&1"
-             ).directory(home)
-             pb.environment().put("HOME", home.absolutePath)
-             val p = pb.start()
-             val outStr = p.inputStream.bufferedReader().use { it.readText() }
-             val errStr = p.errorStream.bufferedReader().use { it.readText() }
-             val code = p.waitFor()
-             if (code == 0) {
-                 writeJson(out, 200, JSONObject().put("ok", true).put("output", outStr.take(500)))
-             } else {
-                 writeJson(out, 500, error("warp rotate failed: $code - ${errStr.take(500)}"))
-             }
-         } catch (e: Exception) {
-             writeJson(out, 500, error("rotate-ip error: ${e.message}"))
-         }
-     }
+private fun handleRotateIp(c: Context, uid: String, out: BufferedOutputStream) {
+          try {
+              // Trigger WARP IP rotation via the opencode server
+              // This calls the opencode CLI to rotate the WARP exit
+              val home = Runtime.home(c, uid)
+              val pb = java.lang.ProcessBuilder(
+                  "/bin/sh", "-c",
+                  "cd \$HOME && /usr/local/bin/opencode warp rotate 2>&1"
+              ).directory(home)
+              pb.environment().put("HOME", home.absolutePath)
+              val p = pb.start()
+              val outStr = p.inputStream.bufferedReader().use { it.readText() }
+              val errStr = p.errorStream.bufferedReader().use { it.readText() }
+              val code = p.waitFor()
+              if (code == 0) {
+                  writeJson(out, 200, JSONObject().put("ok", true).put("output", outStr.take(500)))
+              } else {
+                  writeJson(out, 500, error("warp rotate failed: $code - ${errStr.take(500)}"))
+              }
+          } catch (e: Exception) {
+              writeJson(out, 500, error("rotate-ip error: ${e.message}"))
+          }
+      }
  
      private fun handleResponses(c: Context, uid: String, headers: Map<String, String>, raw: String, out: BufferedOutputStream) {
         val body = try { JSONObject(raw) } catch (e: Exception) { writeJson(out, 400, error("invalid json: ${e.message}")); return }
