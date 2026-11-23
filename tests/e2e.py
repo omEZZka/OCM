@@ -968,17 +968,19 @@ try:
       const sel=getSelection();sel.removeAllRanges();sel.addRange(range);
       document.dispatchEvent(new Event('selectionchange'));
       return new Promise(res=>setTimeout(()=>{
-        const btn=document.querySelector('.sel-ask');
+        const btn=document.querySelector('.sel-ask button');
         const ok=!!btn;
         if(btn)btn.click();
         const quoted=document.querySelector('#composer textarea').value.startsWith('>');
+        const copyBtn=document.querySelector('.sel-ask button:last-child');
         sel.removeAllRanges();
         document.querySelector('#composer textarea').value='';
-        res({ok,quoted});
+        res({ok,quoted,canCopy:!!copyBtn});
       },500));
     }""")
     chk('selection ask button appears',selthread.get('ok'))
     chk('fragment quoted into composer',selthread.get('quoted'))
+    chk('fragment can be copied on its own',selthread.get('canCopy'))
     # ---- 2.21: voice wave reacts to stt events ----
     wave=pg.evaluate("""()=>{
       const mic=document.querySelector('.mic-btn');

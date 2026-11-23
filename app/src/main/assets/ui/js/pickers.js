@@ -76,6 +76,10 @@ O.openSessions=()=>{
     sect(O.tr('Sessions','Сессии')),
     navItem('down',O.tr('Import session','Импорт сессии'),()=>importSessionFile()),
     navItem('branch',O.tr('Dialog branches','Ветки диалога'),()=>O.openBranchTree&&O.openBranchTree()),
+    navItem('branch',O.tr('Branch tree','Дерево веток'),()=>{
+      if(O.openSessionBranchesPanel)O.openSessionBranchesPanel();
+      else O.openBranchTree&&O.openBranchTree();
+    }),
     sect(O.tr('Media','Медиа')),
     navItem('film',O.tr('Video chat','Чат: Видео'),()=>O.openMedia&&O.openMedia('video')),
     navItem('wave',O.tr('Voice chat','Чат: Голос'),()=>O.openMedia&&O.openMedia('tts')),
@@ -131,9 +135,32 @@ O.openSessions=()=>{
     if(diff<31)return O.tr('This month','В этом месяце');
     return d.toLocaleDateString(undefined,{year:'numeric',month:'long'});
   };
-  function draw(){list.textContent='';drawTags();runHitSearch();const f=q.value.toLowerCase();
+  // 71: session state groups (Working / Idle / Archived). The filter chip row lives next to
+  // the tag chips, so picking a state never fights the tag filter.
+  let stateGroup=O.store.get('sessionStateFilter','active');
+  const stateBar=h('div',{class:'fchips',style:{margin:'4px 0 8px'}});
+  const stateChip=(key,label)=>h('button',{class:'chip'+(stateGroup===key?' on':''),onclick:()=>{
+    stateGroup=key;O.store.set('sessionStateFilter',key);draw();
+  }},label);
+  const drawState=()=>{
+    stateBar.textContent='';
+    stateBar.append(
+      stateChip('active',O.tr('Active','Активные')),
+      stateChip('run',O.tr('Working','В работе')),
+      stateChip('idle',O.tr('Idle','Простой')),
+      stateChip('archived',O.tr('Archived','Архив')),
+      stateChip('all',O.tr('Everything','Все')));
+  };
+  function draw(){list.textContent='';drawState();drawTags();runHitSearch();const f=q.value.toLowerCase();
     let items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f)&&(!activeTag||O.sessionTag(x.id)===activeTag));
     if(activeFolder)items=items.filter(x=>O.sessionFolderOf(x.id)===activeFolder);
+    // state filter: archived chats are hidden unless the user explicitly looks at them
+    const runningOf=x=>{const st=S.status[x.id];return !!(st&&st.type!=='idle')};
+    if(stateGroup==='active')items=items.filter(x=>!O.isArchived(x.id));
+    else if(stateGroup==='archived')items=items.filter(x=>O.isArchived(x.id));
+    else if(stateGroup==='run')items=items.filter(x=>!O.isArchived(x.id)&&runningOf(x));
+    else if(stateGroup==='idle')items=items.filter(x=>!O.isArchived(x.id)&&!runningOf(x));
+    list.append(stateBar);
     // Pinned: one flat block ordered by user priority (pin array order), never split by days.
     const pinOrder=O.pinnedSessions();
     const pinRank=id=>{const i=pinOrder.indexOf(id);return i<0?1e9:i};
@@ -166,7 +193,9 @@ O.openSessions=()=>{
       if(!f&&!pin){
         const fid=O.sessionFolderOf(x.id);
         const g=fid?(O.sessionFolders().find(ff=>ff.id===fid)||{}).name||O.tr('Folder','Папка')
-                  :(O.isWorkSession(x.id)?O.tr('Working set','Рабочие'):dayKey(x.time&&x.time.updated));
+                  :(O.isArchived(x.id)?O.tr('Archived','Архив')
+                    :(O.isWorkSession(x.id)?O.tr('Working set','Рабочие')
+                    :(runningOf(x)?O.tr('In progress','В работе'):O.tr('Idle','Простой'))));
         if(g!==lastGroup){
           lastGroup=g;
           list.append(h('div',{class:'grp',style:{marginTop:'10px'}},g));
@@ -180,7 +209,9 @@ O.openSessions=()=>{
       const pend=O.sessionPending(x.id);
       list.append(h('div',{class:'settings-row sess-row'+(x.id===S.sid?' on':'')},
         h('button',{class:'settings-row-text',onclick:()=>{s.close();O.openSession(x.id)}},
-          h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},pin?O.icon('pin','pin-ic'):null,h('span',{class:'sess-title'},O.sessionTitle(x)),isWork?h('span',{class:'sess-badge work',title:O.tr('Working set','Рабочая сессия')},O.icon('star')):null,x.local?h('span',{class:'mut s'},'· offline'):null),
+          h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},
+            O.isUnread&&O.isUnread(x)?h('span',{class:'sess-unread',title:O.tr('New answer','Новый ответ')}):null,
+            pin?O.icon('pin','pin-ic'):null,h('span',{class:'sess-title'},O.sessionTitle(x)),isWork?h('span',{class:'sess-badge work',title:O.tr('Working set','Рабочая сессия')},O.icon('star')):null,x.local?h('span',{class:'mut s'},'· offline'):null),
           h('span',{class:'sess-sub'},(tag?'#'+tag+'  ':'')+(sm&&(sm.additions||sm.deletions)?'+'+sm.additions+' -'+sm.deletions:'')+sessionStatBit(x))),
         pend.q?h('span',{class:'sess-badge q',title:O.tr('Question pending','Ждёт ответа на вопрос')},O.icon('at'),pend.q>1?h('i',null,pend.q):null):null,
         pend.p?h('span',{class:'sess-badge p',title:O.tr('Permission pending','Ждёт разрешения')},O.icon('excl'),pend.p>1?h('i',null,pend.p):null):null,
@@ -256,7 +287,12 @@ function sessActions(x){const pin=O.isPinned(x.id);const po=O.pinnedSessions();c
       {label:O.tr('Share','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(json);else O.native.copy(json)}}]);
   }},
   {label:x.share?O.tr('Stop sharing','Отключить шаринг'):O.tr('Share','Поделиться'),icon:'share',fn:async()=>{try{if(x.share){await api('DELETE','/session/'+x.id+'/share')}else{const r=await api('POST','/session/'+x.id+'/share',{});if(r.share){O.native.copy(r.share.url);O.native.share(r.share.url)}}}catch(e){O.toast(e.message)}}},
-  {label:O.tr('Fork','Форк'),icon:'branch',fn:async()=>{try{const r=await api('POST','/session/'+x.id+'/fork',{});await O.loadSessions();O.openSession(r.id)}catch(e){O.toast(e.message)}}},
+  {label:O.tr('Duplicate','Дублировать'),icon:'copy',fn:async()=>{try{const r=await api('POST','/session/'+x.id+'/fork',{});await O.loadSessions();O.openSession(r.id)}catch(e){O.toast(e.message)}}},
+  {label:O.isArchived(x.id)?O.tr('Restore from archive','Вернуть из архива'):O.tr('Archive','В архив'),icon:'down',fn:()=>{
+    O.archiveSession(x.id,!O.isArchived(x.id));
+    O.toast(O.isArchived(x.id)?O.tr('Archived','В архиве'):O.tr('Restored','Восстановлено'),1400);
+  }},
+  {label:O.tr('Mark as read','Отметить прочитанным'),icon:'check',fn:()=>{O.markSeen(x.id);bus.emit('sessions')}},
   {label:O.tr('Compact context','Сжать контекст'),icon:'refresh',fn:async()=>{
     if(!S.model)return O.toast(O.tr('No model selected','Модель не выбрана'));
     const doCompact=await O.confirm(O.tr('Compact session?','Сжать сессию?'),O.tr('This will summarize the conversation to free up context.','Это сожмёт диалог для освобождения контекста.'),O.tr('Compact','Сжать'));

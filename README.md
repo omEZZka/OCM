@@ -3,8 +3,8 @@
 </p>
 <p align="center">Настоящий OpenCode на Android-телефоне. Без root и без отдельного компьютера.</p>
 <p align="center">
-  <a href="https://github.com/lovereplit-bit/OCM/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/lovereplit-bit/OCM?style=flat-square" /></a>
-  <a href="https://github.com/lovereplit-bit/OCM/actions/workflows/build.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/lovereplit-bit/OCM/build.yml?style=flat-square&branch=main" /></a>
+  <a href="https://github.com/omEZZka/OCM/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/omEZZka/OCM?style=flat-square" /></a>
+  <a href="https://github.com/omEZZka/OCM/actions/workflows/build.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/omEZZka/OCM/build.yml?style=flat-square&branch=main" /></a>
   <a href="https://t.me/OpenCodeMob"><img alt="Telegram" src="https://img.shields.io/badge/telegram-OpenCodeMob-26A5E4?style=flat-square&logo=telegram&logoColor=white" /></a>
 </p>
 
@@ -13,14 +13,35 @@
 ### Установка
 
 Скачайте `OpenCode-<версия>-<сборка>.apk` со страницы
-[Releases](https://github.com/lovereplit-bit/OCM/releases/latest) и установите.
+[Releases](https://github.com/omEZZka/OCM/releases/latest) и установите.
 
 - Android 11 или новее, 64-битный ARM (arm64-v8a)
 - Первый запуск распаковывает Linux-окружение (пару минут, один раз)
 - Работает сразу: первый же запуск открывает чат, бесплатные модели отвечают без входа
 - Обновления приходят по воздуху: **Настройки → Обновления**
 
-Текущая версия приложения: **1.0.8** (откат на рабочую линейку с ядром OpenCode **1.x**).
+Текущая версия приложения: **2.30.0**.
+
+### Все сборки
+
+Все выпуски лежат в [Releases](https://github.com/omEZZka/OCM/releases) — 85 версий, каждая со своим APK:
+
+| Линейка | Что было |
+|---|---|
+| 2.30.x | Чип «Уточнить», переключатель режимов в меню сессий, терминальный вид с рамкой композера, 100 новых тем, маскоты удалены |
+| 2.29.x | Терминальный режим (портрет и три колонки в альбоме), три слоя тем, боковой агент «Уточнить» |
+| 2.28.x | Разум маскота: взгляд, память, настроения, подсказки |
+| 2.27.x | Маскоты: пиксельные спрайты, физика, свободное перемещение |
+| 2.26.x | Мультимодальные агенты, медиа-студия |
+| 2.25.x | Пузыри чата, пиксельные темы |
+| 2.0.x – 2.24.x | Оформление, файловый менеджер, провайдеры, терминал |
+
+Самый свежий APK всегда здесь: [releases/latest](https://github.com/omEZZka/OCM/releases/latest).
+
+### Сборка из исходников
+
+APK собирается только в GitHub Actions (`.github/workflows/build.yml`), локально Gradle не нужен:
+каждый push в `main` выпускает новый релиз `build-N` с номером версии из `VERSION_NAME`.
 Ветка 1.x закреплена сознательно: в ней чат с ИИ работает из коробки.
 
 ### Что внутри

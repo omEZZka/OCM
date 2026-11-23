@@ -9,6 +9,13 @@ function build(){
 
   // Compact header: hamburger + tokens on the left, session title + ⋮ menu on the right.
   T.menu=h('button',{class:'top-menu-btn',onclick:()=>O.openSessions()},O.icon('menu'));
+  // 79: the two most recent chats are one tap away, without opening the drawer.
+  O.longPress(T.menu,()=>{
+    const rec=O.recentSessions?O.recentSessions():[];
+    if(!rec.length)return;
+    const target=rec.find(x=>x.id!==S.sid)||rec[0];
+    O.openSession(target.id);
+  },500);
   const BOLT_SVG='<svg viewBox="0 0 24 24" width="13" height="13" fill="#71717a" style="display:inline-block;vertical-align:middle;margin-right:3px;"><path d="M13 2L3 14h7v8l11-13h-8l1-7z"/></svg>';
   T.tokensVal=h('span',{class:'top-tokens-val'},'0 tok');
   T.tokens=h('button',{class:'top-tokens-btn',style:{display:'none'},title:O.tr('Session Tokens / Context','Токены сессии / Контекст'),onclick:()=>O.openTokensModal()},h('span',{class:'tok-bolt',html:BOLT_SVG}),T.tokensVal);

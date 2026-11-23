@@ -489,6 +489,39 @@ O.pushRecentModel=k=>{if(!k)return;const l=O.recentModels().filter(x=>x!==k);l.u
 O.sessionOrder=()=>O.store.get('sessionOrder',[]);
 O.setSessionOrder=arr=>{O.store.set('sessionOrder',arr);bus.emit('sessions')};
 O.moveSessionInOrder=(id,toIndex)=>{const o=O.sessionOrder();const i=o.indexOf(id);if(i<0)return;o.splice(i,1);o.splice(toIndex,0,id);O.setSessionOrder(o)};
+// ---- archive + unread + recency (sessions drawer) ----
+O.archivedSessions=()=>{const v=O.store.get('archivedSessions',[]);return Array.isArray(v)?v:[]};
+O.isArchived=id=>O.archivedSessions().includes(id);
+O.archiveSession=(id,on)=>{
+  const l=O.archivedSessions().filter(x=>x!==id);
+  if(on!==false)l.push(id);
+  O.store.set('archivedSessions',l);bus.emit('sessions');bus.emit('session');
+};
+// "Seen" marker: the drawer shows a dot while the newest answer is newer than the last visit.
+O.markSeen=sid=>{
+  if(!sid)return;
+  O.store.set('seenAt.'+sid,Date.now());
+  bus.emit('session');
+};
+O.seenAt=sid=>O.store.get('seenAt.'+(sid||S.sid),0);
+O.isUnread=s=>{
+  if(!s)return false;
+  const upd=(s.time&&s.time.updated)||0;
+  if(!upd)return false;
+  const st=S.status[s.id];
+  if(st&&st.type!=='idle')return false;      // working: not "new" yet
+  return upd>O.seenAt(s.id);
+};
+// Two most recent chats, for one-tap switching back and forth.
+O.recentSessions=()=>{
+  const pool=(S.sessions||[]).filter(s=>!O.isArchived(s.id));
+  return pool
+    .map(s=>({s,at:Math.max(O.seenAt(s.id)||0,(s.time&&s.time.updated)||0)}))
+    .sort((a,b)=>b.at-a.at)
+    .slice(0,2)
+    .map(x=>x.s);
+};
+
 // ---- session folders (collapsible groups in the sessions drawer) ----
 // A folder is {id,name,icon,color,order}; membership is session -> folderId, so a session lives in
 // at most one folder and deleting a folder never deletes chats.
@@ -946,6 +979,21 @@ O.removeQueued=(sid,i)=>{
   const l=O.promptQueue(sid);l.splice(i,1);
   O.store.set('promptQueue.'+sid,l);bus.emit('queue',sid);
 };
+// Send the whole queue right away (used by the "Now" button): the caller re-enters the normal
+// send pipeline per item, so nothing about model selection or hooks is duplicated here.
+O.flushQueue=async()=>{
+  const sid=S.sid;if(!sid)return 0;
+  let sent=0;
+  for(let guard=0;guard<20;guard++){
+    const it=O.peekPrompt(sid);
+    if(!it)break;
+    const ok=await (O.chatSendText?O.chatSendText(it.text,{fromQueue:true,atts:it.atts,mentions:it.mentions}):Promise.resolve(false));
+    if(ok===false)break;
+    O.commitPrompt(sid);sent++;
+  }
+  if(sent)O.toast(O.tr('Sent from the queue: ','Отправлено из очереди: ')+sent,1600);
+  return sent;
+};
 
 // ---- task time estimate (9): rolling history of turn durations ----
 O.recordTurnTime=(sid,ms)=>{
@@ -1021,6 +1069,29 @@ O.sessionBranches=rootId=>{
   while(map[root]&&all.some(x=>x.id===map[root])&&guard++<20)root=map[root];
   return build(root,0);
 };
+// 74: visual branch tree (current family), one tap to jump to a branch.
+O.openSessionBranchesPanel=()=>{
+  if(!S.sid)return O.toast(O.tr('Open a session first','Сначала откройте сессию'),2000);
+  const root=O.sessionBranches(S.sid);
+  const body=h('div');
+  if(!root)body.append(h('div',{class:'note'},O.tr('No branches yet — fork this chat to create one','Веток пока нет — создайте форк этого чата')));
+  const walk=(node,depth)=>{
+    if(!node)return;
+    const st=S.status[node.id];const running=st&&st.type!=='idle';
+    body.append(h('button',{class:'settings-row'+(node.id===S.sid?' on':''),style:{paddingLeft:(10+Math.min(6,depth)*16)+'px'},
+      onclick:async()=>{s.close();await O.openSession(node.id)}},
+      h('span',{class:'rail-dot'+(running?' run':'')}),
+      O.icon(node.id===S.sid?'check':'branch'),
+      h('div',{class:'settings-row-text'},h('b',null,node.title),
+        h('span',null,O.ago(node.updated)+(node.id===S.sid?' · '+O.tr('current','текущая'):'')))));
+    node.children.forEach(c=>walk(c,depth+1));
+  };
+  if(root)walk(root,0);
+  const s=O.sheet(O.tr('Branch tree','Дерево веток'),body,{full:true});
+  body.append(h('div',{class:'note',style:{marginTop:'10px'}},
+    O.tr('Only this session family is shown. Forking creates a new branch with the full context.','Показана только семья текущей сессии. Форк создаёт ветку с полным контекстом.')));
+};
+
 O.noteFork=(childId,parentId)=>{
   if(!childId||!parentId)return;
   const m=O.store.get('forkParents',{});m[childId]=parentId;
@@ -1034,7 +1105,7 @@ O.openBranchTree=()=>{
     if(!node)return;
     body.append(h('button',{class:'settings-row',style:{paddingLeft:(12+depth*18)+'px'},onclick:async()=>{s.close();await O.openSession(node.id)}},
       O.icon(node.id===S.sid?'check':'branch'),
-      h('div',{class:'settings-row-text'},h('b',null,node.title),h('span',null,O.ago(node.updated)+(node.id===S.sid?' · '+O.tr('current','текущая'):'')))));
+        h('span',null,O.ago(node.updated)+(node.id===S.sid?' · '+O.tr('current','текущая'):''))));
     node.children.forEach(c=>walk(c,depth+1));
   };
   if(tree)walk(tree,0);else body.append(h('div',{class:'note'},O.tr('No branches','Веток нет')));
@@ -1277,7 +1348,7 @@ O.openSession=async(sid,fresh)=>{
   if(!sid){bus.emit('open',null);return}
   if(String(sid).startsWith('local_')){
     await O.loadCachedMsgs(sid);
-    O.pickDefaults();bus.emit('meta');bus.emit('open',sid);return;
+    O.pickDefaults();bus.emit('meta');bus.emit('open',sid);O.markSeen(sid);return;
   }
   O.startLiveSync(sid);
   const ok=m=>m&&O.modelInfo(m.providerID,m.modelID);
@@ -1351,7 +1422,8 @@ O.openSession=async(sid,fresh)=>{
   }else if(lastErr){S.offline=true;bus.emit('conn')}
   api('GET','/session/'+sid+'/todo',null,{dir:sdir}).then(t=>{S.todos[sid]=t;bus.emit('todo',sid)}).catch(()=>{});
   api('GET','/session/'+sid+'/diff',null,{dir:sdir}).then(d=>{S.diffs[sid]=d;bus.emit('diff',sid)}).catch(()=>{});
-  O.loadPending()};
+  O.loadPending();
+  O.markSeen(sid)};
 O.newSession=async()=>{const s=await api('POST','/session',{});if(!S.sessions.some(x=>x.id===s.id))S.sessions.unshift(s);bus.emit('sessions');await O.openSession(s.id,true);return s};
 O.setDir=async(dir)=>{
   S.dir=dir;O.dir=dir;O.store.set('dir',dir);

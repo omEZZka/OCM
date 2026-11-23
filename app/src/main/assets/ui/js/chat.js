@@ -113,7 +113,25 @@ O.chatInit=root=>{
     ]);
   },500);
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
-  comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
+  // Mode badge: the composer border and a small pill show what the agent is allowed to do.
+  const modeBadge=h('button',{class:'cbox-mode',title:O.tr('Agent mode','Режим агента'),onclick:()=>{
+    if(O.setAutonomyMode){
+      const order=['default','plan','dry'];
+      const cur=O.autonomyMode?O.autonomyMode():'default';
+      O.setAutonomyMode(order[(order.indexOf(cur)+1)%order.length]);
+      O.toast(O.tr('Mode: ','Режим: ')+O.uiMode&&O.autonomyMode?O.autonomyMode():'',1200);
+    }
+  }});
+  const syncModeBadge=()=>{
+    const m=O.autonomyMode?O.autonomyMode():'default';
+    modeBadge.className='cbox-mode m-'+m;
+    modeBadge.textContent='';
+    modeBadge.append(O.icon(m==='plan'?'list':m==='dry'?'eye':'shield'),
+      h('span',null,m==='plan'?O.tr('Plan','План'):m==='dry'?O.tr('Dry-run','Без запуска'):O.tr('Manual','Вручную')));
+  };
+  syncModeBadge();
+  ['autonomy','planMode','dryRun'].forEach(e=>bus.on(e,syncModeBadge));
+  comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,modeBadge,ta,cbarRow),fileIn);
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,stickyEl,jumpEl);
   root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,mmFloatBtn,comp);
   bus.on('open',()=>{renderAll()});
@@ -445,7 +463,7 @@ if(O.nightLamp())document.documentElement.classList.add('night-lamp');
 // ---- selection threads (34): select a fragment of an answer → ask about exactly it ----
 function initSelectionThreads(){
   let selBtn=null;
-  const hide=()=>{if(selBtn){selBtn.remove();selBtn=null}};
+  const hide=()=>{if(selBtn){if(selBtn._twin)selBtn._twin.remove();selBtn.remove();selBtn=null}};
   document.addEventListener('selectionchange',O.debounce(()=>{
     const sel=document.getSelection();
     if(!sel||sel.isCollapsed||!sel.rangeCount){hide();return}
@@ -456,13 +474,30 @@ function initSelectionThreads(){
     const r=sel.getRangeAt(0).getBoundingClientRect();
     if(!r.width&&!r.height){hide();return}
     hide();
-    selBtn=h('button',{class:'sel-ask',style:{left:Math.max(8,Math.min(innerWidth-170,r.left+r.width/2-80))+'px',top:Math.max(8,r.top-44)+'px'},
-      onclick:()=>{
+    selBtn=h('div',{class:'sel-ask',style:{left:Math.max(8,Math.min(innerWidth-190,r.left+r.width/2-90))+'px',top:Math.max(8,r.top-44)+'px'}},
+      h('button',{onclick:()=>{
         const quote=txt;hide();sel.removeAllRanges();
         O.insertPrompt('> '+quote.split('\n').join('\n> ')+'\n\n');
         O.toast(O.tr('Fragment quoted — add your question','Фрагмент процитирован — добавьте вопрос'),2000);
-      }},O.icon('at'),O.tr('Ask about this','Спросить об этом'));
+      }},O.icon('at'),O.tr('Ask','Спросить')),
+      // copying just a fragment of an answer (requested explicitly)
+      h('button',{title:O.tr('Copy fragment','Копировать фрагмент'),onclick:e=>{
+        e.stopPropagation();
+        try{O.native.copy(txt);O.toast(O.tr('Fragment copied','Фрагмент скопирован'),1400)}catch(_){}
+        hide();sel.removeAllRanges();
+      }},O.icon('copy'),O.tr('Copy','Копировать')));
     document.body.append(selBtn);
+    // copy exactly the highlighted fragment — the second most useful thing to do with a selection
+    const copyBtn=h('button',{class:'sel-ask sel-copy',style:{left:Math.max(8,Math.min(innerWidth-90,r.left+r.width/2+85))+'px',top:Math.max(8,r.top-44)+'px'},
+      title:O.tr('Copy selection','Копировать выделение'),
+      onclick:()=>{
+        try{O.native.copy(txt)}catch(_){}
+        try{navigator.clipboard&&navigator.clipboard.writeText(txt)}catch(_){}
+        O.toast(O.tr('Selection copied','Выделение скопировано'),1400);
+        hide();sel.removeAllRanges();
+      }},O.icon('copy'));
+    document.body.append(copyBtn);
+    selBtn._twin=copyBtn;
   },250));
   msgsEl.addEventListener('scroll',hide,{passive:true});
   msgsEl.addEventListener('touchstart',e=>{if(selBtn&&!selBtn.contains(e.target))hide()},{passive:true});
@@ -509,6 +544,7 @@ function renderAll(){
   for(const k of [...openGroups])if(!keepKey(k))openGroups.delete(k);
   for(const k of [...manualGroups])if(!keepKey(k))manualGroups.delete(k);
   const list=S.sid?O.visibleMsgs(S.sid):[];
+  histIdx=-1;
   if(draftSid!==S.sid){
     draftSid=S.sid;clearTimeout(draftTimer);
     ta.value=S.sid?(O.getDraft(S.sid)||''):'';
@@ -1084,7 +1120,7 @@ function fillPart(el,p,m,fresh){
   case'agent':el.className='part fchips';el.textContent='';el.append(h('span',{class:'chip'},O.icon('bot'),h('span',null,'@'+p.name)));break;
   case'patch':el.className='part';el.textContent='';el.append(h('span',{class:'chip'},O.icon('edit'),h('span',null,'Изменено файлов: '+((p.files||[]).length))));break;
   case'retry':el.className='part warn s';el.textContent='Повтор: '+((p.error&&p.error.data&&p.error.data.message)||'запрос не удался');break;
-  case'compaction':el.className='part sep';el.textContent='Контекст сжат';break}}
+  case'compaction':el.className='part compaction-note';el.textContent='';el.append(O.icon('refresh'),h('span',null,O.tr('Context compacted — older turns were summarised','Контекст сжат — старые сообщения свёрнуты в краткое содержание')));break}}
 function getMsgDiff(m){
   let added=0,deleted=0,found=false;
   for(const p of m.parts){
@@ -1458,13 +1494,42 @@ function toolBody(p){const st=p.state||{},i=st.input||{},md=st.metadata||{};
     if(sid)b.append(h('button',{class:'btn sm',style:{marginTop:'8px'},onclick:()=>openChild(sid)},'Открыть сессию субагента'));if(out)b.append(pre(out.slice(0,3000),'code-pre'));break}
   default:if(Object.keys(i).length)b.append(pre(JSON.stringify(i,null,2).slice(0,3000),'code-pre'));if(out)b.append(pre(out.slice(0,6000),'code-pre'))}
   if(st.status==='error'&&st.error)b.append(h('div',{class:'errbox'},String(st.error)));return b}
+// Colour families so the log reads at a glance: shell = red-ish, edits = accent,
+// reads = muted, searches = blue, delegation = green.
+const TOOL_KIND={bash:'tk-shell',edit:'tk-edit',write:'tk-edit',patch:'tk-edit',apply_patch:'tk-edit',
+  read:'tk-read',list:'tk-read',glob:'tk-search',grep:'tk-search',codesearch:'tk-search',
+  webfetch:'tk-web',websearch:'tk-web',task:'tk-agent',todowrite:'tk-task',todoread:'tk-task',skill:'tk-skill'};
+const toolKind=p=>TOOL_KIND[p.tool]||'tk-other';
+// The same tool called N times in a row folds into one row: "Read × 4".
+const toolRepeat=(p)=>{
+  try{
+    const msgs=O.msgs(S.sid).list;
+    let n=1;
+    for(let i=msgs.length-1;i>=0&&n<99;i--){
+      for(const q of msgs[i].parts||[]){
+        if(q.type!=='tool'||q.id===p.id)continue;
+        if(q.tool!==p.tool)continue;
+        const a=q.state&&q.state.input&&(q.state.input.filePath||q.state.input.path||q.state.input.pattern);
+        const b=p.state&&p.state.input&&(p.state.input.filePath||p.state.input.path||p.state.input.pattern);
+        if(a!==b)continue;
+        n++;
+      }
+    }
+    return n;
+  }catch(_){return 1}
+};
 function fillTool(el,p){const st=p.state||{},m=toolMeta(p),isOpen=open.has(p.id);
-  el.className='part tool '+(st.status||'pending')+(isOpen?' open':'');el.textContent='';el._p=p;
+  el.className='part tool '+toolKind(p)+' '+(st.status||'pending')+(isOpen?' open':'');el.textContent='';el._p=p;
+  // 33: the icon carries the tool colour, 31: everything fits on one line, 32: repeats fold
+  m.ic=O.icon(m.ic);m.ic.classList.add('tool-kind');
+  const rep=toolRepeat(p);
   const stat=st.status==='running'||st.status==='pending'?h('span',{class:'spin'}):st.status==='error'?O.icon('alert','err'):O.icon('check','ok');
   // Tool headers always toggle: gating on the "details" setting made taps dead when it was off,
   // which looked like an empty, unresponsive card.
   el.append(h('button',{class:'tool-h',onclick:()=>{manualParts.add(p.id);el._auto=0;open.has(p.id)?open.delete(p.id):open.add(p.id);fillTool(el,el._p)}},
-    O.icon(m.ic),h('span',{class:'t'},m.t||p.tool||O.tr('Tool','Инструмент')),h('span',{class:'sub grow'},m.s||''),stat,O.icon('chevR','chev')));
+    m.ic,h('span',{class:'t'},m.t||p.tool||O.tr('Tool','Инструмент')),
+    rep>1?h('span',{class:'tool-rep'},'×'+rep):null,
+    h('span',{class:'sub grow'},m.s||''),stat,O.icon('chevR','chev')));
   if(isOpen)el.append(h('div',{class:'tool-b'},toolBody(p)))}
 async function openChild(sid){try{if(!O.child(sid)){const s=await api('GET','/session/'+sid);(S.childSessions=S.childSessions||{})[sid]=s}}catch{}trail.push(S.sid);await O.openSession(sid);bus.emit('session')}
 O.openChild=openChild;
@@ -1933,8 +1998,21 @@ function renderQueueBar(){
   if(!bar){bar=h('div',{class:'queue-bar'});comp.querySelector('.cbox').prepend(bar)}
   bar.textContent='';
   bar.append(h('span',{class:'mut s'},O.tr('Queued: ','В очереди: ')+items.length));
-  items.slice(0,3).forEach((it,i)=>bar.append(h('span',{class:'chip'},h('span',{class:'media-clip',style:{maxWidth:'140px'}},it.text),
-    h('button',{class:'chip-x',onclick:()=>O.removeQueued(S.sid,i)},O.icon('x')))));
+  items.slice(0,3).forEach((it,i)=>bar.append(h('span',{class:'chip',title:O.tr('Take back to the input','Забрать в поле ввода')},
+    h('span',{class:'media-clip',style:{maxWidth:'140px'}},it.text),
+    h('button',{class:'chip-x',onclick:e=>{
+      e.stopPropagation();
+      // ✕ puts the text back into the composer instead of destroying it
+      const cur=ta.value||'';
+      ta.value=cur?(it.text+'\n'+cur):it.text;
+      O.removeQueued(S.sid,i);
+      onInput();autosize();ta.focus();
+      O.toast(O.tr('Back in the input','Вернул в поле ввода'),1400);
+    }},O.icon('x')))));
+  // send everything now, without waiting for the current turn to finish
+  bar.append(h('button',{class:'chip queue-now',title:O.tr('Send the queue now','Отправить очередь сейчас'),
+    onclick:()=>O.flushQueue&&O.flushQueue()},
+    O.icon('send'),h('span',null,O.tr('Now','Сейчас'))));
 }
 function autosize(){
   // JUMP FIX: height='auto' collapsed the composer for a frame on EVERY keystroke — the chat
@@ -2236,10 +2314,19 @@ function flyBubble(text){
   }catch(_){}
 }
 // Programmatic send used by call mode, widgets and the queue: same pipeline as a tapped message.
+// Per-session prompt history: the composer restores its own list when you switch chats.
+const histKey=sid=>'promptHist.'+(sid||S.sid);
+const histLoad=()=>{const v=O.store.get(histKey(),[]);return Array.isArray(v)?v:[]};
+const histPush=t=>{
+  const l=histLoad().filter(x=>x!==t);l.push(String(t).slice(0,4000));
+  O.store.set(histKey(),l.slice(-60));
+};
+O.promptHistory=histLoad;
 O.chatSendText=(text,ex)=>{
   const t=String(text||'').trim();
   const hasEx=ex&&((ex.atts&&ex.atts.length)||(ex.mentions&&ex.mentions.length));
   if(!t&&!hasEx)return false;
+  if(!ex||!ex.fromQueue)histPush(t);
   if(ex){atts=atts.concat((ex.atts||[]).slice(0,8));mentions=mentions.concat(ex.mentions||[]);renderAtts()}
   ta.value=t;autosize();updateSend();
   // FIX: onSend is async — returning a bare `true` made the queue delete an item that was
