@@ -319,7 +319,6 @@ const stripWake=text=>{
 // ---- (43) voice navigation: commands executed locally, not sent to the model ----
 const NAV=[
   [/^(открой |open )?(файлы|files)$/,()=>{O.setTab('files');return O.tr('Files','Файлы')}],
-  [/^(открой |open )?(терминал|terminal)$/,()=>{O.setTab('term');return O.tr('Terminal','Терминал')}],
   [/^(открой |open )?(изменения|changes)$/,()=>{O.setTab('changes');return O.tr('Changes','Изменения')}],
   [/^(открой |open )?(чат|chat)$/,()=>{O.setTab('chat');return O.tr('Chat','Чат')}],
   [/^(открой |open )?(настройки|settings)$/,()=>{O.openSettings();return O.tr('Settings','Настройки')}],

@@ -62,7 +62,6 @@ O.openSessions=()=>{
   const navGrid=h('div',{class:'drawer-grid'},
     tile('chat',O.tr('Chat','Чат'),()=>O.setTab('chat')),
     tile('folder',O.tr('Files','Файлы'),()=>O.setTab('files')),
-    tile('terminal',O.tr('Terminal','Терминал'),()=>O.setTab('term')),
     tile('branch',O.tr('Changes','Правки'),()=>O.setTab('changes')),
     tile('folder',O.tr('Projects','Проекты'),()=>O.openProjects()),
     tile('search',O.tr('Search','Поиск'),()=>O.openGlobalSearch()),
@@ -102,10 +101,7 @@ O.openSessions=()=>{
     O.icon('dots'),h('span',null,O.tr('More','Ещё')),O.icon('chevD','drawer-more-chev'));
   const newBtn=h('button',{class:'btn pri wide drawer-new',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));
   const offs=[];
-  // Interface mode sits at the top of the drawer, right above the quick-tab chips: one tap
-  // to flip classic chat <-> terminal without leaving the session list.
-  const modeBar=O.uiModeSeg?h('div',{class:'drawer-mode'},O.uiModeSeg()):null;
-  const s=O.sheet(O.tr('Sessions','Сессии'),h('div',{class:'drawer-v2'},modeBar,newBtn,q,tagBar,navGrid,moreBtn,moreBox,h('div',{class:'drawer-sess-head'},O.icon('chat'),h('b',null,O.tr('Recent sessions','Недавние сессии'))),list,hits),{drawer:true,
+  const s=O.sheet(O.tr('Sessions','Сессии'),h('div',{class:'drawer-v2'},newBtn,q,tagBar,navGrid,moreBtn,moreBox,h('div',{class:'drawer-sess-head'},O.icon('chat'),h('b',null,O.tr('Recent sessions','Недавние сессии'))),list,hits),{drawer:true,
     onClose:()=>{clearTimeout(hitTimer);offs.splice(0).forEach(f=>{try{f()}catch(_){}})}});
   function drawTags(){
     tagBar.textContent='';
@@ -1383,10 +1379,9 @@ O.openCustomProvider=parentSheet=>{
     h('div',{class:'mono s',style:{wordBreak:'break-all',marginTop:'4px'}},'llama-server -m /root/models/model.gguf --port 8080 --host 127.0.0.1'),
     h('div',{style:{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}},
       h('button',{class:'btn sm',type:'button',onclick:()=>{
-        // start llama.cpp in the term panel; the user pastes the command once
-        O.setTab('term');
-        setTimeout(()=>O.termRun&&O.termRun('llama-server -m /root/models/model.gguf --port 8080 --host 127.0.0.1'),250);
-      }},O.icon('terminal'),O.tr('Run in Terminal','Запустить в терминале')),
+        O.native.copy('llama-server -m /root/models/model.gguf --port 8080 --host 127.0.0.1');
+        O.toast(O.tr('Command copied','Команда скопирована'));
+      }},O.icon('copy'),O.tr('Copy command','Скопировать команду')),
       h('button',{class:'btn sm',type:'button',onclick:()=>{
         idInp.value='llamacpp';nameInp.value='llama.cpp (local)';urlInp.value='http://127.0.0.1:8080/v1';keyInp.value='';
       }},O.icon('check'),O.tr('Use as provider','Использовать как провайдера'))));

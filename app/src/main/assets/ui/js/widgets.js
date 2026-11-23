@@ -30,7 +30,7 @@ O.dispatchAction=async function(act,target,data){
       break;
     case'open_term':
     case'term':
-      O.setTab('term');
+      O.toast(O.tr('Terminal UI removed','Терминальный интерфейс убран'));
       break;
     case'preview':
     case'web_preview':
@@ -685,7 +685,7 @@ O.openTermFavs=()=>{
   const draw=()=>{
     body.textContent='';
     O.termFavs().forEach((c,i)=>body.append(h('div',{class:'settings-row'},
-      h('button',{class:'settings-row-text',onclick:()=>{s.close();O.setTab('term');setTimeout(()=>O.termRun&&O.termRun(c),250)}},
+      h('button',{class:'settings-row-text',onclick:()=>{s.close();O.native.copy(c);O.toast(O.tr('Copied','Скопировано'))}},
         h('b',{class:'mono'},c)),
       h('button',{class:'ibtn s',onclick:()=>{O.store.set('termFavs',O.termFavs().filter((_,j)=>j!==i));draw()}},O.icon('trash')))));
     body.append(h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:async()=>{
@@ -835,7 +835,6 @@ O.openTour=()=>{
 const TILE_DEFS=[
   ['chat','chat',()=>O.tr('Chat','Чат'),()=>{O.setTab('chat')}],
   ['files','folder',()=>O.tr('Files','Файлы'),()=>O.setTab('files')],
-  ['term','terminal',()=>O.tr('Terminal','Терминал'),()=>O.setTab('term')],
   ['changes','branch',()=>O.tr('Changes','Изменения'),()=>O.setTab('changes')],
   ['photo','image',()=>O.tr('Photo','Фото'),()=>O.openMedia('image')],
   ['video','film',()=>O.tr('Video','Видео'),()=>O.openMedia('video')],

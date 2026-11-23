@@ -113,25 +113,7 @@ O.chatInit=root=>{
     ]);
   },500);
   const cbarRow=h('div',{class:'cbar-row'},cbarLeft,cbarRight);
-  // Mode badge: the composer border and a small pill show what the agent is allowed to do.
-  const modeBadge=h('button',{class:'cbox-mode',title:O.tr('Agent mode','Режим агента'),onclick:()=>{
-    if(O.setAutonomyMode){
-      const order=['default','plan','dry'];
-      const cur=O.autonomyMode?O.autonomyMode():'default';
-      O.setAutonomyMode(order[(order.indexOf(cur)+1)%order.length]);
-      O.toast(O.tr('Mode: ','Режим: ')+O.uiMode&&O.autonomyMode?O.autonomyMode():'',1200);
-    }
-  }});
-  const syncModeBadge=()=>{
-    const m=O.autonomyMode?O.autonomyMode():'default';
-    modeBadge.className='cbox-mode m-'+m;
-    modeBadge.textContent='';
-    modeBadge.append(O.icon(m==='plan'?'list':m==='dry'?'eye':'shield'),
-      h('span',null,m==='plan'?O.tr('Plan','План'):m==='dry'?O.tr('Dry-run','Без запуска'):O.tr('Manual','Вручную')));
-  };
-  syncModeBadge();
-  ['autonomy','planMode','dryRun'].forEach(e=>bus.on(e,syncModeBadge));
-  comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,modeBadge,ta,cbarRow),fileIn);
+  comp=h('div',{id:'composer'},popEl,h('div',{class:'cbox'},nokeyEl,attsEl,ta,cbarRow),fileIn);
   const wrap=h('div',{class:'chat-msgs-wrap',style:{position:'relative',flex:1,minHeight:0,display:'flex',flexDirection:'column'}},msgsEl,stickyEl,jumpEl);
   root.append(wrap,revEl,todoEl,statusEl,dockEl,mmProgressEl,mmFloatBtn,comp);
   bus.on('open',()=>{renderAll()});
@@ -2077,7 +2059,6 @@ const BUILTINS=[
  {n:'details',d:'Вид команд: свёрнутые пачки → авто → карточки',i:'code',run:()=>{const order=['fold','auto','cards'];const nxt=order[(order.indexOf(toolView())+1)%order.length];S.opts.toolView=nxt;O.saveOpts();O.toast(nxt==='fold'?O.tr('Commands: folded packs','Команды: свёрнутые пачки'):nxt==='auto'?O.tr('Commands: live pack opens itself','Команды: активная пачка раскрывается сама'):O.tr('Commands: classic cards','Команды: классические карточки'),1800);renderAll()}},
  {n:'status',d:'Серверы MCP, LSP и плагины',i:'server',run:()=>O.openStatus()},
  {n:'files',d:'Файлы проекта',i:'folder',run:()=>O.setTab('files')},
- {n:'terminal',d:'Терминал',i:'terminal',run:()=>O.setTab('term')},
  {n:'settings',d:'Настройки приложения',i:'sliders',run:()=>O.openSettings()},
  {n:'help',d:'Что я умею',i:'info',run:()=>O.openHelp()},
  {n:'exit',d:'Свернуть приложение (сервер продолжает работать)',i:'out',run:()=>OC.minimize()}];

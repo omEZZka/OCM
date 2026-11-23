@@ -5,7 +5,7 @@ const bus=O.bus={h:{},on(n,f){(this.h[n]=this.h[n]||[]).push(f);return()=>this.o
   emit(n,...a){(this.h[n]||[]).slice().forEach(f=>{try{f(...a)}catch(e){console.error(n,e)}})}};
 const S=O.S={dir:'',sessions:[],sid:null,status:{},perms:[],questions:[],todos:{},diffs:{},
   providers:[],agents:[],commands:[],cfg:{},agent:'build',model:null,variant:null,mcp:{},lsp:[],branch:'',
-  offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false,uiMode:'chat'},O.store.get('opts',{}))};
+  offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false},O.store.get('opts',{}))};
 O.saveOpts=()=>{O.store.set('opts',S.opts);document.documentElement.dataset.theme=S.opts.theme;document.documentElement.style.setProperty('--fs',S.opts.fs+'px')};
 // Auto theme: follow the Android/system dark-mode preference when enabled.
 // The manual choice is remembered separately so toggling auto off restores it.

@@ -740,7 +740,7 @@ O.on('perms',()=>{if(permUI)permUI()});
 O.openCompat=function(){const fl=O.native.state().flags||{};
   sub('Совместимость и логи',h('div',null,O.toggleRow('shield','Безопасный режим (без seccomp)','Медленнее, но помогает, если сервер не запускается на некоторых телефонах',fl.noseccomp,v=>OC.setFlag('noseccomp',v)),
     h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{OC.restartServer();O.toast('Перезапуск сервера...')}},O.icon('refresh'),'Перезапустить сервер'),
-    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{const t=OC.readLog();sub('Лог сервера',h('pre',{class:'term-pre',style:{maxHeight:'none'}},t||'(пусто)'))}},O.icon('terminal'),'Смотреть лог сервера'),
+    h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{const t=OC.readLog();sub('Лог сервера',h('pre',{style:{maxHeight:'none',overflow:'auto',whiteSpace:'pre-wrap',wordBreak:'break-word'}},t||'(пусто)'))}},O.icon('list'),'Смотреть лог сервера'),
     h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>O.runDiagnostics()},O.icon('shield'),O.tr('Connection diagnostics','Диагностика подключения')),
     h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>O.openErrorJournal()},O.icon('bug'),O.tr('Error journal','Журнал ошибок'))))}
 
@@ -828,7 +828,7 @@ O.runDiagnostics=async()=>{
   body.append(h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{s.close();OC.restartServer()}},O.icon('refresh'),O.tr('Restart server','Перезапустить сервер')));
   const tail=(d.logTail||'').trim();
   body.append(h('div',{class:'grp',style:{marginTop:'14px'}},O.tr('Server log (tail)','Лог сервера (хвост)')));
-  body.append(h('pre',{class:'term-pre',style:{maxHeight:'260px'}},tail||O.tr('(empty)','(пусто)')));
+  body.append(h('pre',{style:{maxHeight:'260px',overflow:'auto',whiteSpace:'pre-wrap',wordBreak:'break-word',fontSize:'12px'}},tail||O.tr('(empty)','(пусто)')));
 };
 
 function openAbout(){const st=O.native.state();
@@ -1194,7 +1194,7 @@ O.getActiveJailbreak=()=>{
 const BASE_SYSTEM_INSTRUCTIONS = `# OpenCode Mobile Environment & Instructions (v2.0.1)
 
 You are running inside **OpenCode Mobile** directly on native Android (ARM64 / aarch64 architecture).
-You have full access to a complete Linux userspace environment, terminal tools, and native Android integrations.
+You have full access to a complete Linux userspace environment and native Android integrations.
 
 ## 1. Environment & Architecture
 - Platform: Native Android Linux Userspace (ARM64 / aarch64).

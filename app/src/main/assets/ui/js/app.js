@@ -1,6 +1,6 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
-let built=false,tab='chat',sideTab='term',T={},P={},B={},SP={},SB={};
+let built=false,tab='chat',sideTab='changes',T={},P={},B={},SP={},SB={};
 const wide=()=>innerWidth>=820;
 
 function build(){
@@ -46,11 +46,9 @@ function build(){
   P.chat=h('div',{id:'pane-chat',class:'pane'});
   P.side=h('div',{id:'pane-side',class:'pane'});
 
-  SP.term=h('div',{class:'side-pane'});
-  SP.changes=h('div',{class:'side-pane'});
-  SB.term=h('button',{onclick:()=>O.setTab('term')},O.tr('Terminal','Терминал'));
-  SB.changes=h('button',{onclick:()=>O.setTab('changes')},O.tr('Changes','Изменения'));
-  P.side.append(h('div',{id:'side-tabs'},SB.term,SB.changes),SP.term,SP.changes);
+  SP.changes=h('div',{class:'side-pane show'});
+  SB.changes=h('button',{class:'on',onclick:()=>O.setTab('changes')},O.tr('Changes','Изменения'));
+  P.side.append(h('div',{id:'side-tabs'},SB.changes),SP.changes);
 
   const main=h('div',{id:'main'},P.files,P.chat,P.side);
 
@@ -59,7 +57,6 @@ function build(){
   const NAV_DEFS=[
     ['chat','chat',()=>O.tr('Chat','Чат'),()=>O.setTab('chat')],
     ['files','folder',()=>O.tr('Files','Файлы'),()=>O.setTab('files')],
-    ['term','terminal',()=>O.tr('Terminal','Терминал'),()=>O.setTab('term')],
     ['changes','branch',()=>O.tr('Changes','Изменения'),()=>O.setTab('changes')],
     ['search','search',()=>O.tr('Search','Поиск'),()=>O.openGlobalSearch()],
     ['projects','folder',()=>O.tr('Projects','Проекты'),()=>O.openProjects()],
@@ -122,15 +119,8 @@ function build(){
   const fx=h('button',{class:'focus-exit',title:O.tr('Exit focus mode','Выйти из фокуса'),onclick:()=>O.setFocusMode(false)},O.icon('x'));
   document.body.append(fx);
 
-  if(O.termRailsInit)O.termRailsInit(app,P.chat,P.side);
-  // terminal footer strip (autonomy + context) is mounted above the composer inside the pane
-  if(O.termStripMount){
-    const host=SP.term&&SP.term.parentNode;
-    try{O.termStripMount(P.chat)}catch(_){}
-  }
   O.filesInit(P.files);
   O.chatInit(P.chat);
-  O.termInit(SP.term);
   O.changesInit(SP.changes);
 
   // Horizontal swipe on the chat: left -> Files, right -> Sessions drawer
@@ -162,14 +152,10 @@ function layout(){
   app.dataset.mode=w?'wide':'narrow';
   P.files.classList.toggle('show',!w&&tab==='files');
   P.chat.classList.toggle('show',!w&&tab==='chat');
-  P.side.classList.toggle('show',!w&&(tab==='term'||tab==='changes'));
-  SP.term.classList.toggle('show',sideTab==='term');
+  P.side.classList.toggle('show',!w&&tab==='changes');
   SP.changes.classList.toggle('show',sideTab==='changes');
-  SB.term.classList.toggle('on',sideTab==='term');
   SB.changes.classList.toggle('on',sideTab==='changes');
   for(const k in B){if(k!=='more')B[k].classList.toggle('active',tab===k)}
-  if(O.termShown)O.termShown();
-  if(O.termLayout)O.termLayout();
 }
 
 function bottomMenu(){
@@ -186,9 +172,6 @@ function bottomMenu(){
         if(!S.sid)return O.toast(O.tr('Open a chat first','Сначала откройте чат'),1800);
         O.openSessionJailbreaks&&O.openSessionJailbreaks(S.sid);
       }},
-    {label:O.tr('Interface: ','Интерфейс: ')+(O.isTermMode&&O.isTermMode()?O.tr('Terminal','Терминал'):O.tr('Classic chat','Классический чат')),
-      sub:O.tr('Mode, three theme layers, landscape panels','Режим, три слоя тем, панели в альбоме'),icon:'sliders',fn:()=>O.openUiModeSettings&&O.openUiModeSettings()},
-    {label:O.tr('Terminal','Терминал'),icon:'terminal',fn:()=>O.setTab('term')},
     {label:O.tr('Changes','Изменения'),icon:'branch',fn:()=>O.setTab('changes')},
     {label:O.tr('Bottom bar…','Нижний бар…'),sub:O.tr('Choose your tabs','Выбрать свои вкладки'),icon:'sliders',fn:()=>O.openNavSettings()},
     {label:memOn?O.tr('Memory: on','Память: вкл'):O.tr('Memory: off','Память: выкл'),sub:O.tr('Project map and rules generation','Создание карты проекта и правил'),icon:'memory',fn:()=>{
@@ -223,7 +206,7 @@ if(O.store.get('focusMode',false))document.documentElement.classList.add('focus-
 
 O.setTab=t=>{
   tab=t;
-  if(t==='term'||t==='changes')sideTab=t;
+  if(t==='changes')sideTab='changes';
   layout();
   if(t==='files')O.refreshFiles(false);
   if(t==='changes')O.refreshChanges();

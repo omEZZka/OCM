@@ -144,7 +144,7 @@ O.openThemes=()=>{
     },500);
     return card;
   };
-  // 129 palettes: filter by family and by name instead of one endless wall of cards
+  // 1100+ palettes: filter by light/dark and name
   let fam='all',needle='';
   const countEl=h('span',{class:'mut s'});
   const search=h('input',{type:'search',placeholder:O.tr('Find a theme…','Найти тему…'),style:{margin:'6px 0'}});
@@ -152,7 +152,9 @@ O.openThemes=()=>{
   const famRow=h('div',{class:'fchips',style:{flexWrap:'wrap',margin:'6px 0'}});
   const drawFams=()=>{
     famRow.textContent='';
-    [['all',O.tr('All','Все'),''] ,['dark',O.tr('Dark','Тёмные'),''],['light',O.tr('Light','Светлые'),''],['terminal',O.tr('Terminal','Терминал'),''],['pack',O.tr('Pack','Коллекция'),'']]
+    const all=O.themeList();
+    const dk=all.filter(t=>!t.light).length,lt=all.filter(t=>!!t.light).length;
+    [['all',O.tr('All','Все')+' ('+all.length+')'],['dark',O.tr('Dark','Тёмные')+' ('+dk+')'],['light',O.tr('Light','Светлые')+' ('+lt+')']]
       .forEach(([k,l])=>famRow.append(chip(l,fam===k,()=>{fam=k;renderGrid()})));
   };
   const renderGrid=()=>{
@@ -162,8 +164,6 @@ O.openThemes=()=>{
     const shown=all.filter(t=>{
       if(fam==='dark'&&t.light)return false;
       if(fam==='light'&&!t.light)return false;
-      if(fam==='terminal'&&t.tag!=='terminal')return false;
-      if(fam==='pack'&&!(O.THEME_PACK&&O.THEME_PACK.some(p=>p.id===t.id)))return false;
       if(!needle)return true;
       const hay=(t.name+' '+t.id+' '+(t.tag||'')).toLowerCase();
       return hay.includes(needle.toLowerCase());
@@ -174,7 +174,7 @@ O.openThemes=()=>{
   };
   search.oninput=()=>{needle=search.value;renderGrid()};
   renderGrid();
-  body.append(h('div',{class:'grp'},O.tr('Themes — tap to apply, hold for actions','Темы — тап применить, долгое нажатие — действия')),search,countEl,famRow,grid,
+  body.append(h('div',{class:'grp'},O.tr('Themes — light/dark, tap to apply','Темы — светлые/тёмные, тап применить')),search,countEl,famRow,grid,
     h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>{s.close();setTimeout(()=>O.openThemeEditor(null),200)}},O.icon('plus'),O.tr('Create custom theme','Создать свою тему')),
     h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{s.close();setTimeout(()=>O.importTheme(),200)}},O.icon('down'),O.tr('Import theme from JSON','Импорт темы из JSON')),
     h('div',{class:'grp'},O.tr('Font size','Размер текста')),
