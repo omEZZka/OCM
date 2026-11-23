@@ -541,7 +541,7 @@ O.setSessionFolder=(sid,id)=>{
 O.createSessionFolder=(name,icon)=>{
   const l=O.sessionFolders();
   const f={id:'sf_'+Date.now().toString(36),name:String(name||'').trim()||O.tr('Folder','Папка'),
-    icon:icon||'folder',color:'',order:l.length};
+    icon:icon||'folder',color:'',order:l.length,rules:''};
   l.push(f);O.store.set('sessionFolders',l);bus.emit('sessions');return f;
 };
 O.renameSessionFolder=(id,name)=>{
@@ -769,6 +769,8 @@ O.dropFileTreeFor=sid=>O.store.remove('fileTree.'+(sid||S.sid));
 // Falls back to the current directory so old sessions keep working.
 O.sessionDir=sid=>{
   if(!sid)return S.dir;
+  const fid=O.sessionFolderOf(sid);
+  if(fid){const fd=O.sessionFolderDir(fid);if(fd)return fd}
   const m=O.store.get('sessionDirs',{});
   return m[sid]||S.dir;
 };
@@ -777,6 +779,36 @@ O.setSessionDir=async(sid,dir)=>{
   if(dir&&dir!==S.dir)m[sid]=dir;else delete m[sid];
   O.store.set('sessionDirs',m);
   if(sid===S.sid)await O.setDir(dir||S.dir);
+  bus.emit('sessions');
+};
+// ---- per-folder working directory ----
+// A session folder can have its own working directory; every session inside
+// works in that directory instead of its own per-session dir or the global S.dir.
+O.sessionFolderDir=fid=>{
+  if(!fid)return S.dir;
+  const m=O.store.get('sessionFolderDirs',{});
+  return m[fid]||S.dir;
+};
+O.setSessionFolderDir=async(fid,dir)=>{
+  const m=O.store.get('sessionFolderDirs',{});
+  if(dir&&dir!==S.dir)m[fid]=dir;else delete m[fid];
+  O.store.set('sessionFolderDirs',m);
+  if(S.sid&&O.sessionFolderOf(S.sid)===fid)await O.setDir(dir||S.dir);
+  bus.emit('sessions');
+};
+// ---- per-folder rules ----
+// Each session folder can carry its own rules text; every session inside
+// inherits them as additional instructions (merged with the session's own jailbreak/template).
+O.sessionFolderRules=fid=>{
+  if(!fid)return '';
+  const m=O.store.get('sessionFolderRules',{});
+  return String(m[fid]||'');
+};
+O.setSessionFolderRules=(fid,rules)=>{
+  const m=O.store.get('sessionFolderRules',{});
+  rules=String(rules||'').trim();
+  if(rules)m[fid]=rules;else delete m[fid];
+  O.store.set('sessionFolderRules',m);
   bus.emit('sessions');
 };
 

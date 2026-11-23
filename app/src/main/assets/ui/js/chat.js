@@ -1686,6 +1686,8 @@ O.openContextPreview=()=>{
   if(styleTxt)extras.push(O.tr('Answer style','Стиль ответа'));
   if(O.dryRun&&O.dryRun())extras.push('Dry-run');
   if(mmA&&mmA.memory!==false&&O.mmMemory(mmA))extras.push(O.tr('Team memory','Память команды'));
+  const folderRules=O.folderRulesFor?O.folderRulesFor(S.sid):'';
+  if(folderRules)extras.push(O.tr('Folder rules','Правила папки'));
   if(extras.length)body.append(h('div',{class:'settings-card'},row('edit',O.tr('Extra instructions','Доп. инструкции'),extras.join(' · '))));
   const used=mentions.filter(m=>ta.value.includes(m.tok));
   if(used.length||atts.length){
@@ -2192,6 +2194,9 @@ async function onSend(modelOverride,fromQueue){
   if(factsTxt)parts.push({type:'text',text:factsTxt,synthetic:true});
   const tplTxt=O.tplTextFor?O.tplTextFor(S.sid):'';
   if(tplTxt)parts.push({type:'text',text:tplTxt,synthetic:true});
+  // Folder rules: injected for every session inside a session folder.
+  const folderRules=O.folderRulesFor?O.folderRulesFor(S.sid):'';
+  if(folderRules)parts.push({type:'text',text:folderRules,synthetic:true});
   // Session-scoped jailbreak: injected here (not into the shared AGENTS.md), so it only ever
   // applies to this chat.
   const jbTxt=O.jailbreakPromptFor?O.jailbreakPromptFor(S.sid):'';

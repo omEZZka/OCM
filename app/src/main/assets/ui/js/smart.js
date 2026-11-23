@@ -79,6 +79,13 @@ O.tplTextFor=sid=>{
   const t=O.projectTpls().find(x=>x.id===id);
   return t?'[Контекст проекта: '+t.prompt+']':'';
 };
+// Rules injected into every prompt of sessions inside this folder.
+O.folderRulesFor=sid=>{
+  const fid=O.sessionFolderOf(sid||S.sid);
+  if(!fid)return '';
+  const r=O.sessionFolderRules?O.sessionFolderRules(fid):'';
+  return r?'[Правила папки: '+r+']':'';
+};
 O.openProjectTpls=(pick)=>{
   const body=h('div');
   const draw=()=>{

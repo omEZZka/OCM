@@ -234,11 +234,20 @@ async function restartApp(){
 }
 function folderMenu(f){
   const n=O.sessions.filter(x=>O.sessionFolderOf(x.id)===f.id).length;
+  const curDir=O.sessionFolderDir(f.id).replace(/^\/root/, '~');
   O.actions(f.name,[
     {label:O.tr('Open folder','Открыть папку'),icon:'folder',fn:()=>{activeFolderSetter(f.id)}},
     {label:O.tr('Rename folder','Переименовать папку'),icon:'edit',fn:async()=>{
       const v=await O.ask(O.tr('Folder name','Название папки'),null,f.name);
       if(v){O.renameSessionFolder(f.id,v);bus.emit('sessions')}
+    }},
+    {label:O.tr('Working directory','Рабочая папка'),sub:curDir,icon:'folder',fn:()=>{
+      O.browseDir(O.sessionFolderDir(f.id),dir=>{O.setSessionFolderDir(f.id,dir);O.toast(O.tr('Working folder: ','Рабочая папка: ')+dir,1800)});
+    }},
+    {label:O.tr('Folder rules','Правила папки'),sub:O.sessionFolderRules(f.id).slice(0,60)||O.tr('none','нет'),icon:'rule',fn:async()=>{
+      const cur=O.sessionFolderRules(f.id);
+      const v=await O.ask(O.tr('Folder rules','Правила папки'),O.tr('Rules applied to all sessions in this folder','Правила, применяемые ко всем сессиям в этой папке'),cur);
+      if(v!=null){O.setSessionFolderRules(f.id,v);O.toast(O.tr('Rules saved','Правила сохранены'),1600);}
     }},
     {label:O.tr('Move up','Выше'),icon:'up',fn:()=>{O.moveSessionFolder(f.id,-1)}},
     {label:O.tr('Move down','Ниже'),icon:'down',fn:()=>{O.moveSessionFolder(f.id,1)}},

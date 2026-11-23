@@ -1088,6 +1088,34 @@ O.openSessionSettings=sid=>{
           O.openSessionSettings(sid);
         })});
       }),
+// 4) folder working directory (only when this chat lives in a session folder)
+      (()=>{
+        const fid=O.sessionFolderOf(sid);
+        if(!fid)return null;
+        const fd=O.sessionFolderDir(fid);
+        const f=O.sessionFolders().find(x=>x.id===fid);
+        return O.listRow('folder',O.tr('Folder working directory','Рабочая папка папки'),fd,O.icon('chevR'),()=>{
+          s.close();
+          O.browseDir(fd,d=>{O.setSessionFolderDir(fid,d).then(async()=>{
+            await O.ensureFileTree&&O.ensureFileTree(sid,true);
+            O.toast(O.tr('Folder working directory set','Рабочая папка папки задана'),2000);
+            O.openSessionSettings(sid);
+          })});
+        });
+      })(),
+      // 5) folder rules (only when this chat lives in a session folder)
+      (()=>{
+        const fid=O.sessionFolderOf(sid);
+        if(!fid)return null;
+        const rules=O.sessionFolderRules?O.sessionFolderRules(fid):'';
+        return O.listRow('rule',O.tr('Folder rules','Правила папки'),rules||O.tr('none','нет'),O.icon('chevR'),()=>{
+          s.close();
+          const cur=rules;
+          O.ask(O.tr('Folder rules','Правила папки'),O.tr('Rules applied to all sessions in this folder','Правила, применяемые ко всем сессиям в этой папке'),cur).then(v=>{
+            if(v!=null){O.setSessionFolderRules(fid,v);draw();O.toast(O.tr('Rules saved','Правила сохранены'),1600);}
+          });
+        });
+      })(),
       // 3) file tree
       O.listRow('branch',O.tr('File tree in the prompt','Дерево файлов в запросе'),
         tree?(tree.count+' '+O.tr('entries','записей')+' · '+O.ago(tree.at)):O.tr('not built yet','ещё не собрано'),
