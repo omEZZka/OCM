@@ -742,6 +742,19 @@ O.rotateProviderKey=async(pid,quiet)=>{
   if(ok&&!quiet)O.toast(O.tr('Switched to key ','Переключился на ключ ')+(idx+1)+'/'+list.length,2500);
   return ok;
 };
+// Manual IP rotation for OpenCode Zen provider (free-tier models).
+// Requires the local WARP proxy to be running (separate setup).
+O.rotateZenIp=async()=>{
+  try{
+    const r=await api('POST','/instance/rotate-ip',{});
+    if(r.ok)O.toast(O.tr('IP rotated','IP сменён'),2000);
+    else O.toast(O.tr('Rotate failed: ','Не удалось сменить IP: ')+(r.error||'unknown'),3000);
+    return r.ok;
+  }catch(e){
+    O.toast(e.message||String(e),3000);
+    return false;
+  }
+};
 
 // ---- session-scoped state (jailbreaks, file tree) ----
 // Everything here is keyed by session id so switching chats never leaks state into another.

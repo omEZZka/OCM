@@ -19,7 +19,12 @@ function build(){
   const BOLT_SVG='<svg viewBox="0 0 24 24" width="13" height="13" fill="#71717a" style="display:inline-block;vertical-align:middle;margin-right:3px;"><path d="M13 2L3 14h7v8l11-13h-8l1-7z"/></svg>';
   T.tokensVal=h('span',{class:'top-tokens-val'},'0 tok');
   T.tokens=h('button',{class:'top-tokens-btn',style:{display:'none'},title:O.tr('Session Tokens / Context','Токены сессии / Контекст'),onclick:()=>O.openTokensModal()},h('span',{class:'tok-bolt',html:BOLT_SVG}),T.tokensVal);
-  const topLeft=h('div',{class:'top-left-box'},T.menu,T.tokens);
+  // Zen IP rotation chip (OpenCode free-tier models only): manual rotate on tap.
+  T.zenIp=h('button',{class:'top-zen-btn hide',title:O.tr('Rotate IP for Zen models','Сменить IP для моделей Zen'),onclick:async()=>{
+    if(O.rotateZenIp){await O.rotateZenIp();return}
+    try{const r=await api('POST','/instance/rotate-ip',{});O.toast(r.ok?O.tr('IP rotated','IP сменён'):O.tr('Rotate failed','Не удалось сменить IP'),2000)}catch(e){O.toast(e.message,3000)}
+  }},O.icon('zen','zen-ic'));
+  const topLeft=h('div',{class:'top-left-box'},T.menu,T.tokens,T.zenIp);
   T.title=h('button',{class:'top-title',title:O.tr('Sessions','Сессии'),onclick:()=>O.openSessions()},h('span',{class:'top-title-txt'},O.tr('OpenCode','OpenCode')),h('span',{class:'top-title-dot hide'}));
   O.longPress(T.title,()=>{
     const s=S.sid&&S.sessions.find(x=>x.id===S.sid);if(!s)return;
@@ -284,6 +289,11 @@ function updateTop(){
     const txt=tok.total>0?(O.fmtK(tok.total)+' tok'):'0 tok';
     const pct=tok.pct!=null?(' · '+tok.pct+'%'):'';
     T.tokensVal.textContent=txt+pct;
+  }
+  // Zen IP rotation chip: show only when current model is from OpenCode provider
+  if(T.zenIp){
+    const isZen=S.model&&S.model.providerID==='opencode';
+    T.zenIp.classList.toggle('hide',!isZen);
   }
   // Status indicator in the ⋮ menu button if MCP needs attention
   const v=Object.values(S.mcp||{});
