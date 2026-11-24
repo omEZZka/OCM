@@ -145,6 +145,7 @@ O.openSettings=()=>{
   const modelsCard=h('div',{class:'settings-card'});
   modelsCard.append(
     O.listRow('cpu',O.tr('Active Model','Текущая модель'),S.model?S.model.providerID+'/'+S.model.modelID:O.tr('Not selected','Не выбрана'),O.icon('chevR'),()=>O.openModels()),
+    O.listRow('down',O.tr('Local models (offline)','Локальные модели (офлайн)'),O.tr('One-tap install of open GGUF models · hardware filter · search','Установка открытых GGUF-моделей в 1 тап · фильтр по железу · поиск'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openLocalModels&&O.openLocalModels(),200)}),
     O.listRow('key',O.tr('Connect Providers','Подключить провайдеров'),'OpenCode Zen, OpenAI, Anthropic, Gemini, DeepSeek...',O.icon('chevR'),()=>O.openConnect()),
     O.listRow('search',O.tr('Custom API Provider','Свой API провайдер'),'OpenAI-compatible, Groq, OpenRouter...',O.icon('chevR'),()=>O.openCustomProvider(s)),
     O.listRow('refresh',O.tr('Fallback models','Резервные модели'),O.fallbackModels().length?O.fallbackModels().join(', '):O.tr('Used automatically when the main model fails','Автопереключение при ошибке основной модели'),O.icon('chevR'),()=>openFallback()),
@@ -226,8 +227,18 @@ O.openSettings=()=>{
   const focusRow=O.toggleRow('eye',O.tr('Focus mode','Фокус-режим'),O.tr('Hide panels — only the conversation','Скрыть панели — только переписка'),O.focusMode(),v=>O.setFocusMode(v));
   const dryRow=O.toggleRow('shield',O.tr('Dry-run mode','Режим Dry-run'),O.tr('Agent proposes commands and diffs without executing','Агент предлагает команды и diff без выполнения'),O.dryRun(),v=>O.setDryRun(v));
   const tourRow=O.listRow('info',O.tr('Feature tour','Обучающий тур'),O.tr('Show the welcome guide again','Показать приветственный гид ещё раз'),O.icon('chevR'),()=>{s.close();setTimeout(()=>O.openTour(),200)});
-  appCard.append(langRow,themeRow,thinkRow,detailRow,planRow,styleRow,fastRow,autoCompactRow,hapticRow,animRow,lampRow,stageRow,memoryRow,tplRow,focusRow,dryRow,tilesRow,navRow,tourRow,overlayRow,overlayLegend,onlyBusyRow);
+  // Intuitive grouping: one giant card was impossible to scan — split into small titled groups
+  // so every function is one glance away instead of a long scroll.
+  appCard.append(langRow,themeRow,animRow,hapticRow,lampRow);
   panes.main.append(appCard);
+  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Chat & Agent behaviour','Чат и поведение агента')));
+  panes.main.append(h('div',{class:'settings-card'},thinkRow,detailRow,planRow,styleRow,fastRow,autoCompactRow,stageRow,focusRow,dryRow));
+  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Knowledge & Memory','Знания и память')));
+  panes.main.append(h('div',{class:'settings-card'},memoryRow,tplRow));
+  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Interface layout','Раскладка интерфейса')));
+  panes.main.append(h('div',{class:'settings-card'},tilesRow,navRow,tourRow));
+  panes.main.append(h('div',{class:'settings-section-title'},O.tr('Floating indicator','Плавающий индикатор')));
+  panes.main.append(h('div',{class:'settings-card'},overlayRow,overlayLegend,onlyBusyRow));
 
   // 4. Notifications & Sounds
   panes.system.append(h('div',{class:'settings-section-title'},O.tr('Notifications & Sounds','Звуки и уведомления')));

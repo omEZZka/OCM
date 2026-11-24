@@ -2,6 +2,25 @@
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 const search=(ph,fn)=>h('input',{placeholder:ph,oninput:e=>fn(e.target.value.toLowerCase()),style:{marginBottom:'8px'}});
 
+// ---- collapsible provider groups ----
+// Only EXPANDED ids are persisted: a provider is collapsed by default, and once the user opens
+// a group it stays open across redraws, sheet re-opens and app restarts.
+O.expandedProviders=()=>{const v=O.store.get('expandedProviders',[]);return Array.isArray(v)?v:[]};
+O.isProviderExpanded=pid=>O.expandedProviders().includes(pid);
+O.toggleProviderExpanded=pid=>{
+  const l=O.expandedProviders();const i=l.indexOf(pid);
+  if(i>=0)l.splice(i,1);else l.push(pid);
+  O.store.set('expandedProviders',l);
+};
+// A clickable provider header: chevron + name + count; long-press opens the provider menu.
+O.providerGroupHead=(label,count,expanded,onToggle)=>{
+  const head=h('button',{class:'model-group-head prov-head',style:{display:'flex',alignItems:'center',gap:'6px',width:'100%',textAlign:'left',cursor:'pointer'},onclick:onToggle},
+    O.icon(expanded?'chevD':'chevR'),
+    h('span',{class:'grow'},label),
+    h('span',{class:'mut s'},String(count)));
+  return head;
+};
+
 // ---- sessions drawer ----
 O.sessionPending=sid=>{
   const q=(S.questions||[]).filter(x=>x.sessionID===sid).length;
@@ -727,10 +746,16 @@ O.openModels=()=>{
     });
 
     groups.forEach(g=>{
-      const head=h('div',{class:'model-group-head'},h('span',null,g.pname));
+      // Provider folders collapse by default; the expanded state is remembered persistently.
+      // While searching or filtering by provider everything is force-expanded so hits stay visible.
+      const expanded=!!filterText||providerFilter===g.pid||O.isProviderExpanded(g.pid);
+      const head=O.providerGroupHead(g.pname,g.items.length,expanded,()=>{O.toggleProviderExpanded(g.pid);draw()});
+      O.longPress(head,()=>providerMenu(g.pid,{pname:g.pname}),500);
+      listEl.append(head);
+      if(!expanded)return;
       const groupCard=h('div',{class:'group-card'});
       g.items.forEach(x=>groupCard.append(rowFor(x)));
-      listEl.append(head,groupCard);
+      listEl.append(groupCard);
     });
     hiddenRow();
   }

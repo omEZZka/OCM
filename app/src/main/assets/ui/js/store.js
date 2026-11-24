@@ -1546,8 +1546,8 @@ O.continueGeneration=async(sid,opts)=>{
     'Продолжи ровно с того места, где предыдущий ответ был оборван. Не повторяй уже написанное, '+
     'не начинай заново, не добавляй вступлений или извинений. Продолжай сразу с текста.';
   const parts=[];
-  if(tail)parts.push({type:'text',text:'[Предыдущий ответ, оборван на этом месте]:\n…'+tail+'\n…'});
-  parts.push({type:'text',text:instr});
+  if(tail)parts.push({type:'text',text:'[Предыдущий ответ, оборван на этом месте]:\n…'+tail+'\n…',synthetic:true});
+  parts.push({type:'text',text:instr,synthetic:true});
   const mid=O.mid();
   // Continue must NOT post a visible user bubble: the instruction is transport, not a message.
   // All parts are synthetic → the card is hidden by showPart and renders as nothing.

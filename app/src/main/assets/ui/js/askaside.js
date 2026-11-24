@@ -2,9 +2,10 @@
 // ==========================================================================
 // ASK-ASIDE ("Уточнить")
 // A side agent answers a question WHILE the main agent keeps working.
-//   • floating mini-window above the composer (drag, collapse to a pill)
+//   • floating mini-window above the composer (drag, collapse to header)
 //   • the side chat is a FORK of the current session → full context, own history
-//   • read-only tools: the side agent may look, never touch files or run bash
+//   • read-only by default; the RESET button inside makes a fresh fork with FULL tools
+//   • "full view" button opens the side session as a normal chat
 //   • a status chip in the HUD dock, main stream untouched
 //   • per-session memory of previous clarifications
 //   • voice dictation into the mini composer
@@ -14,7 +15,7 @@
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 
 const MEM_KEY=sid=>'askAside.'+sid;
-const state={sid:null,open:false,collapsed:false,busy:false,err:'',log:[],fork:null,pos:null};
+const state={sid:null,open:false,collapsed:false,busy:false,err:'',log:[],fork:null,pos:null,full:false};
 let win=null,list=null,inp=null,pill=null,sendBtn=null,micBtn=null,headTitle=null,drag=null;
 
 const mem=sid=>{const v=O.store.get(MEM_KEY(sid||S.sid),null);return Array.isArray(v)?v:[]};
@@ -35,6 +36,14 @@ const READONLY_DIRECTIVE=[
   'Если для ответа нужно изменить файлы — объясни что и где, но не делай этого.'
 ].join('\n');
 const READONLY_DENY=['bash','edit','write','patch','task','multiedit','notebookedit'];
+// FULL-ACCESS directive: sent once right after a manual session reset inside the clarify window.
+const FULL_DIRECTIVE=[
+  '[РЕЖИМ УТОЧНЕНИЯ — ПОЛНЫЙ ДОСТУП]',
+  'Сессия уточнения сброшена пользователем: предыдущие ограничения «только чтение» больше НЕ действуют.',
+  'Тебе доступны все инструменты: bash, edit, write, patch, task и остальные.',
+  'У тебя полный контекст родительской сессии. Выполняй уточнённую задачу до конца.',
+  'Не начинай заново то, что уже сделано в родительской сессии — продолжай и исправляй.'
+].join('\n');
 
 const busyMain=()=>{const st=S.status[S.sid];return !!st&&st.type!=='idle'};
 
@@ -73,11 +82,8 @@ function renderLog(){
   list.scrollTop=list.scrollHeight;
 }
 function renderPill(){
-  if(!pill)return;
-  pill.textContent='';
-  pill.append(O.icon('bulb'),h('span',null,O.tr('Clarify','Уточнить')),
-    state.busy?h('span',{class:'spin'}):null);
-  pill.classList.toggle('hide',state.open&&!state.collapsed);
+  // The floating pill overlapped the chat and duplicated the bottom-bar tab: removed for good.
+  if(pill){try{pill.remove()}catch(_){};pill=null}
 }
 function setCollapsed(v){
   state.collapsed=v;
@@ -99,8 +105,10 @@ async function ask(text){
   try{
     sid=await ensureFork();
     const mid=O.mid();
-    const parts=[{type:'text',text:READONLY_DIRECTIVE,synthetic:true},{type:'text',text}];
-    // The fork carries the parent context; the directive keeps this turn read-only.
+    // After a manual reset the side agent keeps full tools; otherwise it stays read-only so the
+    // main agent's running turn is never disturbed.
+    const parts=[{type:'text',text:state.full?FULL_DIRECTIVE:READONLY_DIRECTIVE,synthetic:true},{type:'text',text}];
+    // The fork carries the parent context; the directive sets the access level for this turn.
     await api('POST','/session/'+sid+'/prompt_async',{
       messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,parts
     },{timeout:30000});
@@ -131,8 +139,8 @@ async function waitAnswer(sid,mid){
       if((info.role||'')!=='assistant')continue;
       for(const p of m.parts||[]){
         if(p.type==='text'&&p.text)txt+=p.text;
-        // read-only guard: reject a tool the side agent should not have used
-        if(p.type==='tool'&&READONLY_DENY.includes(String(p.tool||'').toLowerCase())){
+        // read-only guard (skipped after a manual reset — full tools are allowed then)
+        if(!state.full&&p.type==='tool'&&READONLY_DENY.includes(String(p.tool||'').toLowerCase())){
           txt+='\n['+O.tr('blocked write tool: ','заблокирован инструмент записи: ')+p.tool+']';
         }
       }
@@ -169,6 +177,44 @@ function autosize(){
   inp.style.height='auto';
   inp.style.height=Math.min(96,Math.max(34,inp.scrollHeight))+'px';
 }
+// Reset the side session: a FRESH fork of the parent (full context) with full tool access.
+async function resetSide(){
+  if(state.busy)return O.toast(O.tr('Wait for the current answer','Дождитесь текущего ответа'),2000);
+  if(!S.sid)return O.toast(O.tr('Open a chat first','Сначала откройте чат'),2000);
+  const ok=await O.confirm(
+    O.tr('Reset clarification session?','Сбросить сессию уточнения?'),
+    O.tr('A fresh branch of the current chat is created. The side agent gets full tool access (bash, edit, write) and the complete parent context. The main chat is untouched.','Будет создана новая ветка текущего чата. Боковой агент получит доступ ко всем инструментам (bash, edit, write) и полный контекст. Основной чат не меняется.'),
+    O.tr('Reset','Сбросить'),true);
+  if(!ok)return;
+  try{
+    const r=await api('POST','/session/'+S.sid+'/fork',{});
+    const sid=r&&r.id;
+    if(!sid)throw new Error(O.tr('Could not fork the session','Не удалось создать ветку сессии'));
+    state.fork={sid,parent:S.sid};
+    state.full=true;
+    state.log=[];state.err='';
+    try{if(window.OC&&OC.silentSession)OC.silentSession(sid)}catch(_){}
+    try{if(O.noteFork)O.noteFork(sid,S.sid)}catch(_){}
+    try{await O.loadSessions()}catch(_){}
+    renderLog();updateNote();
+    O.toast(O.tr('Session reset · full tool access','Сессия сброшена · полный доступ к инструментам'),2600);
+  }catch(e){state.err=(e&&e.message)||String(e);renderLog()}
+}
+// Full view: open the side session as a normal chat with all messages, tools and parts.
+function openFullView(){
+  const sid=state.fork&&state.fork.sid;
+  if(!sid)return O.toast(O.tr('Ask something first — the branch is created on the first question','Сначала задайте вопрос — ветка создаётся при первом запросе'),2600);
+  O.askAsideClose();
+  try{O.setTab('chat')}catch(_){}
+  O.openSession(sid);
+}
+function updateNote(){
+  if(!win)return;
+  const n=win.querySelector('.aa-note');
+  if(n)n.textContent=state.full
+    ?O.tr('Full access · tools enabled · session reset','Полный доступ · инструменты включены · сессия сброшена')
+    :O.tr('Read-only side agent · the main task keeps running','Боковой агент только читает · основная задача продолжается');
+}
 function build(){
   if(win)return;
   list=h('div',{class:'aa-list'});
@@ -181,14 +227,15 @@ function build(){
   headTitle=h('b',{class:'grow'},O.tr('Clarify','Уточнить'));
   const head=h('div',{class:'aa-head'},
     O.icon('bulb'),headTitle,
+    h('button',{class:'ibtn s',title:O.tr('Reset session · full tools','Сбросить сессию · полный доступ'),onclick:resetSide},O.icon('refresh')),
+    h('button',{class:'ibtn s',title:O.tr('Full session view','Полный вид сессии'),onclick:openFullView},O.icon('ext')),
     h('button',{class:'ibtn s',title:O.tr('Collapse','Свернуть'),onclick:()=>setCollapsed(true)},O.icon('chevD')),
     h('button',{class:'ibtn s',title:O.tr('Close','Закрыть'),onclick:()=>O.askAsideClose()},O.icon('x')));
   const foot=h('div',{class:'aa-foot'},inp,micBtn,sendBtn);
   win=h('div',{id:'ask-aside',class:'ask-aside'},head,list,
     h('div',{class:'aa-note'},O.tr('Read-only side agent · the main task keeps running','Боковой агент только читает · основная задача продолжается')),
     foot);
-  pill=h('button',{id:'ask-aside-pill',class:'aa-pill hide',onclick:()=>{state.open=true;win.classList.remove('hide');setCollapsed(false);renderLog()}},O.icon('bulb'),h('span',null,O.tr('Clarify','Уточнить')));
-  document.body.append(win,pill);
+  document.body.append(win);
   // drag by the header
   const down=e=>{
     if(e.target.closest('button'))return;
@@ -282,8 +329,8 @@ O.askAsideBindComposer=comp=>{
 setTimeout(()=>{try{O.askAsideBindComposer(O.$('#composer'))}catch(_){}},600);
 bus.on('open',()=>{
   // a new chat: the fork belongs to the old one, drop it and the visible log
-  state.fork=null;state.log=[];state.err='';state.sid=S.sid;
-  if(state.open)renderLog();
+  state.fork=null;state.log=[];state.err='';state.sid=S.sid;state.full=false;
+  if(state.open){renderLog();updateNote()}
   updateChip();
 });
 bus.on('status',()=>{if(state.open&&headTitle)headTitle.textContent=busyMain()?O.tr('Clarify · main agent is working','Уточнить · основной агент работает'):O.tr('Clarify','Уточнить')});

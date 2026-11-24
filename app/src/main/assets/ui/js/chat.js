@@ -97,7 +97,12 @@ O.chatInit=root=>{
   // Composer chips: ONLY + / mode / model / voice / send. Outline, context, plan and the avatar
   // moved into the mode chip's long-press menu — the row overflowed on narrow phones.
   const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentChip,modelChip);
-  const cbarRight=h('div',{class:'cbar-right'},micBtn,sendBtn);
+  // Zen IP rotation chip (only for OpenCode provider models): manual rotate on tap.
+  const zenIpBtn=h('button',{class:'hud-icon-btn zen-ip-btn hide',title:O.tr('Rotate IP for Zen models','Сменить IP для моделей Zen'),onclick:async()=>{
+    if(O.rotateZenIp){await O.rotateZenIp();return}
+    try{const r=await api('POST','/instance/rotate-ip',{});O.toast(r.ok?O.tr('IP rotated','IP сменён'):O.tr('Rotate failed','Не удалось сменить IP'),2000)}catch(e){O.toast(e.message,3000)}
+  }},O.icon('zen','zen-ic'));
+  const cbarRight=h('div',{class:'cbar-right'},zenIpBtn,micBtn,sendBtn);
   O.longPress(agentChip,()=>{
     O.actions(O.tr('Chat tools','Инструменты чата'),[
       {label:O.tr('Who is answering','Кто отвечает'),sub:O.tr('Model, mode, state, context','Модель, режим, состояние, контекст'),icon:'bot',fn:agentCard},
@@ -1234,31 +1239,59 @@ O.secondOpinion=async m=>{
   const cur=S.model?S.model.providerID+'/'+S.model.modelID:'';
   const others=O.allModels().filter(x=>!O.isModelHidden(x.pid+'/'+x.mid)&&(x.pid+'/'+x.mid)!==cur);
   if(!others.length)return O.toast(O.tr('No other models','Других моделей нет'),2500);
-  O.actions(O.tr('Second opinion — pick a model','Второе мнение — выберите модель'),others.slice(0,12).map(x=>({
-    label:x.name||x.mid,sub:x.pid,icon:'cpu',fn:async()=>{
-      const body=h('div');
-      const s2=O.sheet(O.tr('Second opinion: ','Второе мнение: ')+(x.name||x.mid),body,{full:true});
-      body.append(h('div',{class:'note'},O.tr('Original answer','Исходный ответ')),h('div',{class:'card',style:{padding:'10px',whiteSpace:'pre-wrap',fontSize:'13px',maxHeight:'30vh',overflow:'auto'}},msgText(m)));
-      const out=h('div',{class:'card',style:{padding:'10px',whiteSpace:'pre-wrap',fontSize:'13px',marginTop:'8px'}},O.tr('Asking…','Спрашиваю…'));
-      body.append(h('div',{class:'note',style:{marginTop:'8px'}},O.tr('New answer','Новый ответ')),out);
-      try{
-        const ses=await api('POST','/session',{title:'Opinion · '+x.mid});
-        try{if(window.OC&&OC.silentSession)OC.silentSession(ses.id)}catch(_){}
-        await api('POST','/session/'+ses.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:{providerID:x.pid,modelID:x.mid},parts:[{type:'text',text:msgText(user)}]},{timeout:30000});
-        const deadline=Date.now()+180000;
-        while(Date.now()<deadline){
-          await new Promise(r=>setTimeout(r,1500));
-          const st=await api('GET','/session/status',null,{timeout:5000}).catch(()=>null);
-          const t0=st&&st[ses.id],t=typeof t0==='string'?t0:(t0&&t0.type);
-          if(!t||t==='idle'||t==='error')break;
-        }
-        const arr=await api('GET','/session/'+ses.id+'/message',null,{timeout:20000});
-        let txt='';for(const mm of arr||[])if(mm.info&&mm.info.role==='assistant'){const t2=(mm.parts||[]).filter(p=>p.type==='text').map(p=>p.text).join('\n');if(t2.trim())txt=t2}
-        out.textContent=txt||O.tr('(no answer)','(нет ответа)');
-        try{await api('DELETE','/session/'+ses.id)}catch(_){}
-      }catch(e){out.textContent=e.message||String(e)}
-    }
-  })));
+  const runOpinion=async x=>{
+    const body=h('div');
+    const s2=O.sheet(O.tr('Second opinion: ','Второе мнение: ')+(x.name||x.mid),body,{full:true});
+    body.append(h('div',{class:'note'},O.tr('Original answer','Исходный ответ')),h('div',{class:'card',style:{padding:'10px',whiteSpace:'pre-wrap',fontSize:'13px',maxHeight:'30vh',overflow:'auto'}},msgText(m)));
+    const out=h('div',{class:'card',style:{padding:'10px',whiteSpace:'pre-wrap',fontSize:'13px',marginTop:'8px'}},O.tr('Asking…','Спрашиваю…'));
+    body.append(h('div',{class:'note',style:{marginTop:'8px'}},O.tr('New answer','Новый ответ')),out);
+    try{
+      const ses=await api('POST','/session',{title:'Opinion · '+x.mid});
+      try{if(window.OC&&OC.silentSession)OC.silentSession(ses.id)}catch(_){}
+      await api('POST','/session/'+ses.id+'/prompt_async',{messageID:O.mid(),agent:S.agent,model:{providerID:x.pid,modelID:x.mid},parts:[{type:'text',text:msgText(user)}]},{timeout:30000});
+      const deadline=Date.now()+180000;
+      while(Date.now()<deadline){
+        await new Promise(r=>setTimeout(r,1500));
+        const st=await api('GET','/session/status',null,{timeout:5000}).catch(()=>null);
+        const t0=st&&st[ses.id],t=typeof t0==='string'?t0:(t0&&t0.type);
+        if(!t||t==='idle'||t==='error')break;
+      }
+      const arr=await api('GET','/session/'+ses.id+'/message',null,{timeout:20000});
+      let txt='';for(const mm of arr||[])if(mm.info&&mm.info.role==='assistant'){const t2=(mm.parts||[]).filter(p=>p.type==='text').map(p=>p.text).join('\n');if(t2.trim())txt=t2}
+      out.textContent=txt||O.tr('(no answer)','(нет ответа)');
+      try{await api('DELETE','/session/'+ses.id)}catch(_){}
+    }catch(e){out.textContent=e.message||String(e)}
+  };
+  // Full picker: ALL models grouped into collapsible provider folders (shared remembered state).
+  let q2='';
+  const list2=h('div');
+  const qInp=h('input',{placeholder:O.tr('Search models...','Поиск моделей...'),style:{marginBottom:'8px'},oninput:e=>{q2=e.target.value.toLowerCase();draw2()}});
+  const pick=O.sheet(O.tr('Second opinion — pick a model','Второе мнение — выберите модель'),h('div',null,qInp,list2),{full:true});
+  function draw2(){
+    list2.textContent='';
+    let items=others;
+    if(q2)items=items.filter(x=>(x.name+' '+x.mid+' '+(x.pname||x.pid)).toLowerCase().includes(q2));
+    if(!items.length){list2.append(h('div',{class:'mut',style:{padding:'16px'}},O.tr('No models match','Модели не найдены')));return}
+    const byPid=new Map();
+    items.forEach(x=>{let g=byPid.get(x.pid);if(!g){g={pid:x.pid,pname:x.pname||(x.pid==='opencode'?'OpenCode Zen':x.pid),items:[]};byPid.set(x.pid,g)}g.items.push(x)});
+    byPid.forEach(g=>{
+      const expanded=!!q2||O.isProviderExpanded(g.pid);
+      list2.append(O.providerGroupHead(g.pname,g.items.length,expanded,()=>{O.toggleProviderExpanded(g.pid);draw2()}));
+      if(!expanded)return;
+      const card=h('div',{class:'group-card'});
+      g.items.forEach(x=>{
+        const free=O.isModelFree(x);
+        card.append(h('button',{class:'model-row',onclick:()=>{pick.close();runOpinion(x)}},
+          h('div',{class:'model-row-left'},
+            h('div',{style:{display:'flex',alignItems:'center',gap:'6px',flexWrap:'wrap'}},
+              h('span',{class:'model-row-title'},x.name||x.mid),
+              h('span',{class:'badge-model '+(free?'badge-free':'badge-paid')},free?O.tr('Free','Бесплатно'):O.tr('Paid','Платная'))),
+            h('span',{class:'model-row-sub'},x.pname||x.pid))));
+      });
+      list2.append(card);
+    });
+  }
+  draw2();
 };
 function metaUpdate(el,m){
   const meta=el.lastChild;const i=m.info;
@@ -1958,6 +1991,9 @@ function updateChips(){
       ].filter(Boolean));
     });
   }
+  // Zen IP chip lives between the model chip and the mic; visible only for OpenCode Zen models.
+  const zenBtn=comp&&comp.querySelector('.zen-ip-btn');
+  if(zenBtn)zenBtn.classList.toggle('hide',!(m&&m.providerID==='opencode'));
   const nokey=!m&&!S.offline&&S.up;
   nokeyEl.classList.toggle('hide',!nokey);
   ta.disabled=!!S.offline&&!S.up;

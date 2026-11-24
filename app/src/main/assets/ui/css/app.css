@@ -927,6 +927,10 @@ a:hover {
 .model-group-head:first-child {
   padding-top: 4px;
 }
+/* clickable collapsible provider header */
+.prov-head { background: none; border: none; font: inherit; color: var(--mut); }
+.prov-head .ic svg { width: 14px; height: 14px; }
+.prov-head:active { opacity: 0.7; }
 
 .model-row {
   display: flex;
@@ -3921,17 +3925,7 @@ html.night-lamp #msgs { filter: brightness(.92) sepia(.14); }
   border: 1px solid var(--line); border-radius: 9px;
   padding: 7px 9px; font-size: 12.5px; line-height: 1.35;
 }
-.aa-pill {
-  position: fixed; z-index: 59;
-  right: 12px; bottom: calc(96px + var(--kb, 0px));
-  display: flex; align-items: center; gap: 5px;
-  padding: 7px 11px; border-radius: 999px;
-  background: var(--card); color: var(--fg);
-  border: 1px solid var(--line2); box-shadow: var(--shadow-1);
-  font-size: 11.5px;
-}
-.aa-pill.hide { display: none; }
-.aa-pill .ic svg { width: 13px; height: 13px; color: var(--acc); }
+/* floating clarify pill removed: it overlapped the chat and duplicated the bottom-bar tab */
 .aa-chip {
   display: flex; align-items: center; gap: 7px; width: 100%;
   padding: 8px 12px; margin-top: 6px;
