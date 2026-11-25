@@ -693,8 +693,7 @@ O.mmResume=async()=>{
   const doneJobs=(res.jobs||[]).filter(j=>j.result&&j.result.trim());
   const todoJobs=(res.jobs||[]).filter(j=>!(j.result&&j.result.trim()));
   if(!todoJobs.length&&doneJobs.length){
-    // everything finished — only the synthesis was lost
-    O.continueGeneration(sess,{custom:O.tr('Finish the multimodal run: synthesise the final answer from the role results.','Заверши мультимодальный прогон: синтезируй финальный ответ из результатов ролей.')});
+    O.toast(O.tr('Multimodal results are ready — ask the model to synthesise them.','Результаты мультимодального прогона готовы — попросите модель их синтезировать.'),3500);
     return;
   }
   const run=O.mm.run={sid:sess,abort:false,paused:false,roleAborts:new Set(),jobs:[],started:Date.now(),phase:'role',phaseStart:Date.now(),leadModel:lead.modelID||''};

@@ -188,7 +188,7 @@ O.chatInit=root=>{
         doCompact();
       }
     }
-    renderContinue();flushPartTimers();
+    flushPartTimers();
     // final exact pass: streaming used throttled renders, the settled message must be exact.
     // FIX (turn merge): merged cards must re-sync as a whole turn, not per source message —
     // otherwise a settled pack kept stale streaming text of its merged parts.
@@ -202,7 +202,7 @@ O.chatInit=root=>{
       for(const p of m.parts){const pe=partEls.get(p.id);if(pe&&(p.type==='text'||p.type==='reasoning')){pe._t=null;fillPart(pe,p,m,false)}}
     }
   });
-  bus.on('msg',()=>renderContinue());
+
   bus.on('meta',updateChips);bus.on('conn',updateChips);
   bus.on('serror',p=>{if(p&&(!p.sessionID||p.sessionID===S.sid)){const e=p.error;const t=e&&(e.data&&e.data.message||e.name);if(t&&e.name!=='MessageAbortedError'){
     const kind=O.errorKind(e,t);
@@ -586,7 +586,7 @@ function renderAll(){
   const restored=!active&&restoreReadPos();
   if(!restored){stick=true;scrollEnd(true);pinBottom(active?15000:(list.length>60?6000:4000))}
   scheduleSticky();syncAgentPulse();
-  renderDock();renderStatus();renderContinue();renderRecovery();renderRevert();renderTodos();updateSend();updateChips()}
+  renderDock();renderStatus();renderRecovery();renderRevert();renderTodos();updateSend();updateChips()}
 
 function maybeLoadOlder(){
   if(loadingOlder||!pendingHead.length)return;
@@ -1365,7 +1365,6 @@ function metaUpdate(el,m){
         model:{label:O.tr('Choose another model','Выбрать другую модель'),fn:()=>O.openModels()},
         network:{label:O.tr('Check connection','Проверить подключение'),fn:()=>O.runDiagnostics&&O.runDiagnostics()},
         context:{label:O.tr('Compact the session','Сжать сессию'),fn:()=>doCompact()},
-        'output-length':{label:O.tr('Continue generation','Продолжить генерацию'),fn:()=>O.continueGeneration()},
       }[kind];
       if(O.logError)O.logError(kind,em);
       el.firstChild.append(h('div',{class:'errbox'},em,
@@ -1383,7 +1382,6 @@ function msgMenu(m){O.actions(m.info.role==='user'?'Сообщение':'Отв�
     {label:O.tr('Copy JSON','Скопировать JSON'),icon:'copy',fn:()=>O.native.copy(json)},
     {label:O.tr('Share','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(json);else O.native.copy(json)}}])}},
   m.info.role==='user'?{label:'Отменить отсюда',sub:'Откатить это сообщение и всё после него',icon:'undo',fn:()=>revertTo(m)}:null,
-  m.info.role==='assistant'?{label:O.tr('Continue generation','Продолжить генерацию'),sub:O.tr('Resume from where it was cut','Продолжить с места обрыва'),icon:'play',fn:()=>O.continueGeneration()} : null,
   m.info.role==='assistant'?{label:O.tr('Edit prompt and retry','Изменить запрос и повторить'),sub:O.tr('Fixes a wrong instruction instead of regenerating blind','Правит неверную инструкцию вместо слепой перегенерации'),icon:'edit',fn:()=>editAndRetry(m)}:null,
   m.info.role==='assistant'?{label:O.tr('Regenerate (more focused)','Перегенерировать (суше)'),sub:O.tr('Same prompt, lower temperature','Тот же запрос, ниже температура'),icon:'refresh',fn:()=>regenerate(m,'focused')}:null,
   m.info.role==='assistant'?{label:O.tr('Regenerate (more creative)','Перегенерировать (смелее)'),sub:O.tr('Same prompt, higher temperature','Тот же запрос, выше температура'),icon:'bulb',fn:()=>regenerate(m,'creative')}:null,
@@ -1621,34 +1619,7 @@ function renderMmProgress(){const r=O.mm.run;mmProgressEl.textContent='';
     },1000);
   }
 }
-let contEl=null;
-function renderContinue(){
-  const host=statusEl.parentNode;
-  if(!contEl){
-    contEl=h('div',{class:'continue-bar hide',style:{padding:'0 10px 6px'}});
-    host.insertBefore(contEl,statusEl);
-  }
-  const mmRes=!O.mm.run&&O.mmHasResumable&&O.mmHasResumable();
-  const show=!!S.sid&&(O.canContinue(S.sid)||mmRes);
-  if(!show){contEl.classList.add('hide');contEl.textContent='';contEl._sig='';return}
-  // Rebuild only when the underlying state changed: renderStatus runs on every status tick.
-  const last=O.lastAssistant(S.sid);
-  const sig=S.sid+'|'+(last?last.msg.info.id:'')+'|'+(last&&last.text.length)+'|'+(last&&last.msg.info.error?1:0)+'|'+(mmRes?1:0);
-  if(contEl._sig===sig)return;
-  contEl._sig=sig;
-  contEl.textContent='';
-  contEl.classList.remove('hide');
-  if(mmRes)contEl.append(h('button',{class:'btn sm pri',style:{marginRight:'6px'},onclick:()=>O.mmResume()},O.icon('play'),O.tr('Resume MM run','Возобновить MM-прогон')));
-  if(!O.canContinue(S.sid))return;
-  contEl.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'8px',padding:'8px 12px'}},
-    O.icon('play'),
-    h('span',{class:'grow',style:{fontSize:'13px'}},O.tr('Generation was interrupted','Генерация прервана')),
-    h('button',{class:'btn sm pri',onclick:()=>{O.continueGeneration();renderContinue()}},O.tr('Continue','Продолжить')),
-    h('button',{class:'ibtn s',title:O.tr('Continue with a custom note','Продолжить с пояснением'),onclick:async()=>{
-      const v=await O.ask(O.tr('Continue with instruction','Продолжить с уточнением'),O.tr('What should it do next?','Что сделать дальше?'),'',true);
-      if(v!==null)O.continueGeneration(S.sid,{custom:v||undefined});
-    }},O.icon('edit'))));
-}
+
 // ---- conversation outline: jump to any of your prompts in a long chat ----
 O.openOutline=()=>{
   if(!S.sid)return O.toast(O.tr('Open a session first','Сначала откройте сессию'),2000);
@@ -1747,14 +1718,13 @@ function renderRecovery(){
   const fl=O.inflight&&O.inflight();
   const st=fl&&S.status[fl.sid];
   const busyNow=st&&st.type!=='idle';
-  const show=fl&&fl.sid===S.sid&&!busyNow&&Date.now()-fl.at<86400000&&!(O.canContinue&&O.canContinue(S.sid));
+  const show=fl&&fl.sid===S.sid&&!busyNow&&Date.now()-fl.at<86400000;
   if(!show){recEl.classList.add('hide');recEl.textContent='';return}
   recEl.classList.remove('hide');recEl.textContent='';
   recEl.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'8px',padding:'8px 12px'}},
     O.icon('refresh'),
     h('span',{class:'grow',style:{fontSize:'13px'}},O.tr('Request was interrupted by an app restart','Запрос прерван перезапуском приложения')),
-    h('button',{class:'btn sm pri',onclick:()=>{O.clearInflight();renderRecovery();O.continueGeneration(S.sid)}},O.tr('Continue','Продолжить')),
-    fl.text?h('button',{class:'btn sm',onclick:()=>{const t=fl.text;O.clearInflight();renderRecovery();O.insertPrompt(t)}},O.tr('Edit','Править')):null,
+    fl.text?h('button',{class:'btn sm pri',onclick:()=>{const t=fl.text;O.clearInflight();renderRecovery();O.insertPrompt(t)}},O.tr('Edit and resend','Править и отправить')):null,
     h('button',{class:'ibtn s',title:O.tr('Dismiss','Скрыть'),onclick:()=>{O.clearInflight();renderRecovery()}},O.icon('x'))));
 }
 // One status line that answers "what is happening right now": phase, current tool and elapsed time.
@@ -1777,7 +1747,7 @@ function statusPhrase(){
 }
 function renderStatus(){
   const s=S.status[S.sid];
-  renderContinue();renderRecovery();
+  renderRecovery();
   statusEl.textContent='';
   if(!s||s.type==='idle'){statusEl.classList.add('hide');clearInterval(statusT);statusT=null;S._statusSince=0;return}
   statusEl.classList.remove('hide');
@@ -2002,13 +1972,11 @@ function updateChips(){
 }
 function updateSend(){
   const b=busy(),has=!!ta.value.trim()||!!atts.length;
-  // Smart stop (47): after an abort the empty send button becomes "continue" in one tap.
-  const canCont=!b&&!has&&S.sid&&O.canContinue&&O.canContinue(S.sid);
-  sendBtn.className=b&&!has?'stop':(has?'ready':(canCont?'resume':''));
+  sendBtn.className=b&&!has?'stop':(has?'ready':'');
   sendBtn.textContent='';
-  sendBtn.append(O.icon(b&&!has?'stop':(b&&has?'plus':(canCont?'play':'send'))));
-  sendBtn.disabled=!b&&!has&&!canCont;
-  sendBtn.title=canCont?O.tr('Continue from the cut','Продолжить с места обрыва'):'';
+  sendBtn.append(O.icon(b&&!has?'stop':(b&&has?'plus':'send')));
+  sendBtn.disabled=!b&&!has;
+  sendBtn.title='';
   renderQueueBar();
 }
 function renderQueueBar(){
@@ -2195,7 +2163,7 @@ async function onSend(modelOverride,fromQueue){
     return}
   const text=ta.value.trim();
   if(!text&&!atts.length){
-    if(S.sid&&O.canContinue&&O.canContinue(S.sid)){O.continueGeneration();return}
+
     return}
   sending=true;setTimeout(()=>{sending=false},800);
   if(O.native.haptic)O.native.haptic('light');
@@ -2219,9 +2187,6 @@ async function onSend(modelOverride,fromQueue){
     return false;
   }
   const parts=[];
-  if(O.updateReadmeForModel && S.model && S.model.modelID){
-    O.updateReadmeForModel(S.model.modelID);
-  }
   // (10) Answer style: a short instruction rides along as a synthetic part (not shown as user text).
   const styleTxt=O.answerStyleText?O.answerStyleText():'';
   if(styleTxt)parts.push({type:'text',text:'[Стиль ответа: '+styleTxt+']',synthetic:true});
@@ -2248,8 +2213,16 @@ async function onSend(modelOverride,fromQueue){
   });
   // Screenshots the agent took mid-turn (phone shot) ride along THIS prompt as real attachments.
   // Lightweight file tree cached for this session's project folder (token-cheap navigation).
+  // Send only when changed/missing to avoid repeating the full tree in every message (context bloat).
   const ft=O.fileTreeFor&&O.fileTreeFor(S.sid);
-  if(ft&&ft.text)parts.push({type:'text',text:'[Дерево файлов проекта '+ft.dir+']\n'+ft.text,synthetic:true});
+  if(ft&&ft.text){
+    const ftKey='ft.sent.'+S.sid;
+    const ftHash=String(ft.text.length)+':'+ft.text.slice(0,120)+':'+ft.text.slice(-120);
+    if(O.store.get(ftKey,'')!==ftHash){
+      parts.push({type:'text',text:'[Дерево файлов проекта '+ft.dir+']\n'+ft.text,synthetic:true});
+      O.store.set(ftKey,ftHash);
+    }
+  }
   if(O.takeVisionQueue){
     const vq=O.takeVisionQueue();
     vq.forEach(v=>{parts.push(v);atts.push(v)});

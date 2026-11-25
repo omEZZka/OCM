@@ -344,8 +344,8 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
     try{for(const [k,rec] of [...deltaQ]){if(rec.t)clearTimeout(rec.t);deltaQ.delete(k);bus.emit('part',p.sessionID,rec.m,rec.pt)}}catch(_){}
     const was=S.status[p.sessionID];
     S.status[p.sessionID]={type:'idle'};bus.emit('status',p.sessionID);
-    // Some server builds deliver only session.status:idle; emit idle here too or the queue,
-    // continue-bar and turn timers never fire (deduped on the UI side).
+    // Some server builds deliver only session.status:idle; emit idle here too or the queue
+    // and turn timers never fire (deduped on the UI side).
     if(!was||was.type!=='idle')bus.emit('idle',p.sessionID);
     const fl=O.inflight&&O.inflight();if(fl&&fl.sid===p.sessionID)O.clearInflight();
     if(p.sessionID===S.sid){O.syncSessionMessages(p.sessionID)}
@@ -775,7 +775,7 @@ O.setSessionJailbreak=(sid,ids)=>{
 // File tree cached per session+dir: { sid, dir, at, text, count }
 O.fileTreeFor=sid=>O.store.get('fileTree.'+(sid||S.sid),null);
 O.setFileTreeFor=(sid,tree)=>O.store.set('fileTree.'+(sid||S.sid),tree);
-O.dropFileTreeFor=sid=>O.store.remove('fileTree.'+(sid||S.sid));
+O.dropFileTreeFor=sid=>{sid=sid||S.sid;O.store.remove('fileTree.'+sid);O.store.remove('ft.sent.'+sid)};
 
 // ---- per-session project directory ----
 // Each chat can live in its own folder instead of everything sharing the global S.dir.
@@ -1512,10 +1512,6 @@ O.contextLeft=sid=>{
   const left=Math.max(0,u.lim-u.tot);
   return{left,lim:u.lim,pct:Math.round(left*100/u.lim),usedPct:u.pct};
 };
-// ---- "continue generation" ----
-// OpenCode has no dedicated continue endpoint, so we resume by sending a single synthetic prompt
-// with `noReply:false` and an explicit instruction. The last assistant text is passed as context so
-// the model resumes exactly where the stream was cut (stop button, quota, network, app kill).
 O.lastAssistant=(sid)=>{
   const l=O.visibleMsgs(sid||S.sid);
   for(let i=l.length-1;i>=0;i--){
@@ -1525,44 +1521,6 @@ O.lastAssistant=(sid)=>{
     return {msg:m,text:t};
   }
   return null;
-};
-O.canContinue=(sid)=>{
-  const st=S.status[sid||S.sid];
-  if(st&&st.type!=='idle')return false; // already generating
-  const last=O.lastAssistant(sid);
-  if(!last)return false;
-  // Only offer it when the previous answer was actually interrupted (no completion time) or
-  // ended with an abort/error.
-  if(last.msg.info.error)return true;
-  return !(last.msg.info.time&&last.msg.info.time.completed);
-};
-O.continueGeneration=async(sid,opts)=>{
-  sid=sid||S.sid;
-  if(!sid||!S.model)return O.toast(O.tr('Select a model first','Сначала выберите модель'),2500);
-  const last=O.lastAssistant(sid);
-  if(!last)return O.toast(O.tr('Nothing to continue','Нечего продолжать'),2000);
-  const tail=last.text.slice(-4000);
-  const instr=opts&&opts.custom?opts.custom:
-    'Продолжи ровно с того места, где предыдущий ответ был оборван. Не повторяй уже написанное, '+
-    'не начинай заново, не добавляй вступлений или извинений. Продолжай сразу с текста.';
-  const parts=[];
-  if(tail)parts.push({type:'text',text:'[Предыдущий ответ, оборван на этом месте]:\n…'+tail+'\n…',synthetic:true});
-  parts.push({type:'text',text:instr,synthetic:true});
-  const mid=O.mid();
-  // Continue must NOT post a visible user bubble: the instruction is transport, not a message.
-  // All parts are synthetic → the card is hidden by showPart and renders as nothing.
-  const m=O.upsertMsg({id:mid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:S.model});
-  m.local=true;m.synthetic=true;
-  m.parts=parts.map((p,i)=>Object.assign({id:'prt_local_cont'+i,sessionID:sid,messageID:mid,synthetic:true},p));
-  try{
-    await api('POST','/session/'+sid+'/prompt_async',{messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,parts},{timeout:60000});
-    bus.emit('msg',sid,m);
-    O.toast(O.tr('Continuing…','Продолжаю…'),1500);
-  }catch(e){
-    O.toast(e.message||String(e),4000);
-    // rolled back: drop the hidden transport message so it never survives a failed send
-    try{const s=O.msgs(sid);s.list=s.list.filter(x=>x.info.id!==mid);s.idx.delete(mid)}catch(_){}
-  }
 };
 
 O.replyPermission=async(p,r)=>{
