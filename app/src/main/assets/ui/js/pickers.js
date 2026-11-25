@@ -468,7 +468,8 @@ O.openModels=()=>{
   }
   const folderBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelFolders(()=>draw())},O.icon('folder'),O.tr('Folders & profiles','Папки и профили'));
   const compareBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openModelCompare()},O.icon('branch'),O.tr('Compare models on one prompt','Сравнить модели на одном запросе'));
-  const container=h('div',null,effortCard,selectBar,q,profBar,folderBtn,compareBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
+  const addByIdBtn=h('button',{class:'btn wide',style:{margin:'0 0 8px'},onclick:()=>O.openAddModelById(()=>draw())},O.icon('plus'),O.tr('Add model by ID','Добавить модель по ID'));
+  const container=h('div',null,effortCard,selectBar,q,profBar,folderBtn,compareBtn,addByIdBtn,provBar,listEl,h('div',{style:{height:'10px'}}),bulkRow,swRow,connectCard);
   const s=O.sheet(O.tr('Select model','Выбор модели'),container,{hud:true,full:true});
   // Folder edits from the action sheet / folder manager must repaint the list live.
   const offFolders=bus.on('folders',()=>{if(s.root&&s.root.isConnected)draw()});
@@ -1056,6 +1057,65 @@ O.refreshProviderModels=async pid=>{
     }},O.icon('check'),O.tr('Add selected','Добавить выбранные')+' ('+chosen.size+')'));
   };
   redraw();
+};
+
+O.openAddModelById=(onDone)=>{
+  const body=h('div');
+  let selectedPid='';
+  const provList=h('div');
+  const idInp=h('input',{class:'mono',placeholder:O.tr('Model ID, e.g. gpt-4o-mini','ID модели, напр. gpt-4o-mini'),autocapitalize:'off',autocorrect:'off'});
+  const nameInp=h('input',{placeholder:O.tr('Display name (optional)','Отображаемое имя (необязательно)')});
+  const statusBox=h('div',{class:'mut s',style:{margin:'8px 0'}});
+  const saveBtn=h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:async()=>{
+    const pid=selectedPid;
+    const mid=(idInp.value||'').trim();
+    const mname=(nameInp.value||'').trim()||mid;
+    if(!pid)return O.toast(O.tr('Select a provider first','Сначала выберите провайдера'),2200);
+    if(!mid)return O.toast(O.tr('Enter model ID','Введите ID модели'),2200);
+    let cfgObj=null;
+    try{const t=O.native.cfgRead();cfgObj=t&&t.trim()?O.parseJsonc(t):{}}catch(e){return O.toast(O.tr('Config is not valid JSON: ','Конфиг не является корректным JSON: ')+e.message,4000)}
+    const prov=(cfgObj.provider||{})[pid];
+    if(!prov)return O.toast(O.tr('Provider not found in config','Провайдер не найден в конфиге'),3000);
+    prov.models=prov.models||{};
+    prov.models[mid]=Object.assign({},prov.models[mid]||{},{name:mname});
+    cfgObj.provider=cfgObj.provider||{};cfgObj.provider[pid]=prov;
+    const w=O.native.cfgWrite(JSON.stringify(cfgObj,null,2));
+    if(!w||!w.ok)return O.toast((w&&w.err)||O.tr('Cannot write config','Не удалось записать конфиг'),4000);
+    saveBtn.disabled=true;statusBox.textContent=O.tr('Saving and restarting…','Сохраняю и перезапускаю…');
+    try{await O.api('POST','/instance/dispose',null)}catch(_){}
+    await O.loadMeta();
+    O.toast(O.tr('Model added: ','Модель добавлена: ')+mid,2200);
+    O.invalidateCache&&O.invalidateCache();
+    onDone&&onDone();
+    s.close();
+  }},O.icon('check'),O.tr('Add model','Добавить модель'));
+
+  const drawProviders=()=>{
+    provList.textContent='';
+    const providers=(S.providers||[]).slice().sort((a,b)=>(a.name||a.id||'').localeCompare(b.name||b.id||''));
+    if(!providers.length){
+      provList.append(h('div',{class:'mut',style:{padding:'12px'}},O.tr('No providers connected. Connect a provider first.','Провайдеры не подключены. Сначала подключите провайдера.')));
+      return;
+    }
+    if(!selectedPid||!providers.some(p=>p.id===selectedPid))selectedPid=providers[0].id;
+    providers.forEach(p=>{
+      const on=selectedPid===p.id;
+      provList.append(h('button',{class:'settings-row',style:{width:'100%',textAlign:'left',border:on?'1px solid var(--acc)':'1px solid transparent',borderRadius:'10px',marginBottom:'6px'},onclick:()=>{selectedPid=p.id;drawProviders()}},
+        h('div',{class:'settings-row-icon'},O.icon('server')),
+        h('div',{class:'settings-row-text'},h('b',null,p.name||p.id),h('span',{class:'mono s'},p.id)),
+        on?O.icon('check','ok'):null));
+    });
+  };
+
+  drawProviders();
+  body.append(
+    h('div',{class:'note'},O.tr('Pick a provider, then enter the exact model ID as the API expects it.','Выберите провайдера, затем введите точный ID модели, как его ожидает API.')),
+    h('div',{class:'grp'},O.tr('Provider','Провайдер')),
+    provList,
+    h('div',{class:'field'},h('label',null,O.tr('Model ID','ID модели')),idInp),
+    h('div',{class:'field'},h('label',null,O.tr('Display name','Отображаемое имя')),nameInp),
+    statusBox,saveBtn);
+  const s=O.sheet(O.tr('Add model by ID','Добавить модель по ID'),body,{full:true});
 };
 
 // ---- model folders & profiles ----
