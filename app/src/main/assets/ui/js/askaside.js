@@ -85,10 +85,31 @@ function renderPill(){
   // The floating pill overlapped the chat and duplicated the bottom-bar tab: removed for good.
   if(pill){try{pill.remove()}catch(_){};pill=null}
 }
+function clampPos(){
+  if(!win)return;
+  const r=win.getBoundingClientRect();
+  const w=r.width||Math.min(innerWidth*0.94,380);
+  const hh=r.height||260;
+  let x=r.left, y=r.top;
+  if(x+w>innerWidth-4)x=Math.max(4,innerWidth-w-4);
+  if(y+hh>innerHeight-4)y=Math.max(4,innerHeight-hh-4);
+  if(x<4)x=4;
+  if(y<4)y=4;
+  if(win.style.left||win.style.top||state.pos){
+    win.style.left=x+'px';win.style.top=y+'px';win.style.right='auto';win.style.bottom='auto';
+    state.pos={x,y};
+  }
+}
 function setCollapsed(v){
+  if(typeof v!=='boolean')v=!state.collapsed;
   state.collapsed=v;
-  if(win)win.classList.toggle('collapsed',v);
+  if(win){
+    win.classList.toggle('collapsed',v);
+    const b=win.querySelector('.aa-head .ibtn:nth-last-child(2)')||win.querySelector('.aa-head')._collapseBtn;
+    if(b){b.title=v?O.tr('Expand','Развернуть'):O.tr('Collapse','Свернуть');b.style.transform=v?'rotate(180deg)':''}
+  }
   renderPill();
+  setTimeout(clampPos,0);
 }
 
 // ---- the side turn ------------------------------------------------------
@@ -225,12 +246,14 @@ function build(){
   micBtn=h('button',{class:'ibtn s',title:O.tr('Dictate','Надиктовать'),onclick:dictate},O.icon('mic'));
   sendBtn=h('button',{class:'btn pri sm',onclick:()=>ask(inp.value)},O.icon('send'));
   headTitle=h('b',{class:'grow'},O.tr('Clarify','Уточнить'));
+  const collapseBtn=h('button',{class:'ibtn s',title:O.tr('Collapse/Expand','Свернуть/Развернуть'),onclick:()=>setCollapsed()},O.icon('chevD'));
   const head=h('div',{class:'aa-head'},
     O.icon('bulb'),headTitle,
     h('button',{class:'ibtn s',title:O.tr('Reset session · full tools','Сбросить сессию · полный доступ'),onclick:resetSide},O.icon('refresh')),
     h('button',{class:'ibtn s',title:O.tr('Full session view','Полный вид сессии'),onclick:openFullView},O.icon('ext')),
-    h('button',{class:'ibtn s',title:O.tr('Collapse','Свернуть'),onclick:()=>setCollapsed(true)},O.icon('chevD')),
+    collapseBtn,
     h('button',{class:'ibtn s',title:O.tr('Close','Закрыть'),onclick:()=>O.askAsideClose()},O.icon('x')));
+  head._collapseBtn=collapseBtn;
   const foot=h('div',{class:'aa-foot'},inp,micBtn,sendBtn);
   win=h('div',{id:'ask-aside',class:'ask-aside'},head,list,
     h('div',{class:'aa-note'},O.tr('Read-only side agent · the main task keeps running','Боковой агент только читает · основная задача продолжается')),
@@ -293,7 +316,7 @@ O.askAsideOpen=text=>{
   headTitle.textContent=busyMain()?O.tr('Clarify · main agent is working','Уточнить · основной агент работает'):O.tr('Clarify','Уточнить');
   if(text&&inp){inp.value=String(text);autosize()}
   renderLog();renderPill();updateChip();
-  setTimeout(()=>{try{inp.focus()}catch(_){}},120);
+  setTimeout(()=>{clampPos();try{inp.focus()}catch(_){}},120);
 };
 O.askAsideClose=()=>{
   state.open=false;

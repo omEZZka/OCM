@@ -1,6 +1,6 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
-let built=false,tab='chat',sideTab='changes',T={},P={},B={},SP={},SB={};
+let built=false,tab='chat',sideTab='term',T={},P={},B={},SP={},SB={};
 const wide=()=>innerWidth>=820;
 
 function build(){
@@ -51,9 +51,11 @@ function build(){
   P.chat=h('div',{id:'pane-chat',class:'pane'});
   P.side=h('div',{id:'pane-side',class:'pane'});
 
-  SP.changes=h('div',{class:'side-pane show'});
-  SB.changes=h('button',{class:'on',onclick:()=>O.setTab('changes')},O.tr('Changes','Изменения'));
-  P.side.append(h('div',{id:'side-tabs'},SB.changes),SP.changes);
+  SP.term=h('div',{class:'side-pane show'});
+  SP.changes=h('div',{class:'side-pane'});
+  SB.term=h('button',{class:'on',onclick:()=>O.setTab('term')},O.tr('Terminal','Терминал'));
+  SB.changes=h('button',{onclick:()=>O.setTab('changes')},O.tr('Changes','Изменения'));
+  P.side.append(h('div',{id:'side-tabs'},SB.term,SB.changes),SP.term,SP.changes);
 
   const main=h('div',{id:'main'},P.files,P.chat,P.side);
 
@@ -61,6 +63,7 @@ function build(){
   const bottomBar=h('div',{id:'bottom-bar'});
   const NAV_DEFS=[
     ['chat','chat',()=>O.tr('Chat','Чат'),()=>O.setTab('chat')],
+    ['term','terminal',()=>O.tr('Terminal','Терминал'),()=>O.setTab('term')],
     ['files','folder',()=>O.tr('Files','Файлы'),()=>O.setTab('files')],
     ['changes','branch',()=>O.tr('Changes','Изменения'),()=>O.setTab('changes')],
     ['search','search',()=>O.tr('Search','Поиск'),()=>O.openGlobalSearch()],
@@ -126,6 +129,7 @@ function build(){
 
   O.filesInit(P.files);
   O.chatInit(P.chat);
+  O.termInit(SP.term);
   O.changesInit(SP.changes);
 
   // Horizontal swipe on the chat: left -> Files, right -> Sessions drawer
@@ -157,8 +161,10 @@ function layout(){
   app.dataset.mode=w?'wide':'narrow';
   P.files.classList.toggle('show',!w&&tab==='files');
   P.chat.classList.toggle('show',!w&&tab==='chat');
-  P.side.classList.toggle('show',!w&&tab==='changes');
+  P.side.classList.toggle('show',!w&&(tab==='term'||tab==='changes'));
+  SP.term.classList.toggle('show',sideTab==='term');
   SP.changes.classList.toggle('show',sideTab==='changes');
+  SB.term.classList.toggle('on',sideTab==='term');
   SB.changes.classList.toggle('on',sideTab==='changes');
   for(const k in B){if(k!=='more')B[k].classList.toggle('active',tab===k)}
 }
@@ -211,9 +217,10 @@ if(O.store.get('focusMode',false))document.documentElement.classList.add('focus-
 
 O.setTab=t=>{
   tab=t;
-  if(t==='changes')sideTab='changes';
+  if(t==='term'||t==='changes')sideTab=t;
   layout();
   if(t==='files')O.refreshFiles(false);
+  if(t==='term')O.termShown&&O.termShown();
   if(t==='changes')O.refreshChanges();
 };
 

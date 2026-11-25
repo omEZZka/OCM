@@ -12,3 +12,5 @@ app/src/main/assets/ui/icons/files/
 
 __pycache__/
 *.pyc
+
+app/src/main/assets/rootfs.sha256

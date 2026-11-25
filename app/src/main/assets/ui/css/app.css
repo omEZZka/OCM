@@ -3879,6 +3879,25 @@ html.night-lamp #msgs { filter: brightness(.92) sepia(.14); }
 /* ==========================================================================
    2.29 UI MODES: classic chat vs terminal (agent console)
    ========================================================================== */
+
+/* ---- terminal console (restored) ---- */
+.side-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); }
+.side-tabs button { flex: 1; padding: 10px; font-size: 12.5px; color: var(--mut); border-bottom: 2px solid transparent; background: none; }
+.side-tabs button.on { color: var(--fg); border-color: var(--fg); }
+.tsub { display: flex; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.tsub button { padding: 5px 12px; border-radius: 999px; color: var(--mut); border: 1px solid var(--line); font-size: 12px; }
+.tsub button.on { color: var(--fg); background: var(--bg2); border-color: var(--fg); }
+#agentlog { flex: 1; overflow: auto; padding: 8px 10px; background: var(--code); font-family: "JetBrains Mono", monospace; font-size: 12px; }
+#agentlog .cmd { color: var(--ok); white-space: pre-wrap; word-break: break-all; margin-top: 10px; }
+#agentlog .out { white-space: pre-wrap; word-break: break-all; color: var(--fg); }
+#agentlog .meta { color: var(--mut); font-size: 11px; }
+#xwrap { flex: 1; min-height: 0; background: var(--code); padding: 4px; }
+#xterm, #xhost { height: 100%; }
+#keys { display: flex; gap: 4px; padding: 6px; overflow-x: auto; border-top: 1px solid var(--line); background: var(--bg); }
+#keys button { padding: 6px 12px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); font-family: "JetBrains Mono", monospace; font-size: 12.5px; flex: none; }
+#keys button.on { background: var(--fg); color: var(--bg); }
+.cmdline { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--line); }
+
 /* ==========================================================================
    2.29 ASK-ASIDE: floating clarification mini-chat
    ========================================================================== */
