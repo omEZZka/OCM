@@ -16,7 +16,7 @@ const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 
 const MEM_KEY=sid=>'askAside.'+sid;
 const state={sid:null,open:false,collapsed:false,busy:false,err:'',log:[],fork:null,pos:null,full:false};
-let win=null,list=null,inp=null,pill=null,sendBtn=null,micBtn=null,headTitle=null,drag=null;
+let win=null,list=null,inp=null,modelSelect=null,pill=null,sendBtn=null,micBtn=null,headTitle=null,drag=null;
 
 const mem=sid=>{const v=O.store.get(MEM_KEY(sid||S.sid),null);return Array.isArray(v)?v:[]};
 const memPush=(sid,q,a)=>{
@@ -116,7 +116,11 @@ function setCollapsed(v){
 async function ask(text){
   text=String(text||'').trim();
   if(!text||state.busy)return;
-  if(!S.model)return O.toast(O.tr('Pick a model first','Сначала выберите модель'),2200);
+  const useModel = modelSelect && modelSelect.value ? (() => {
+    const [pid, mid] = modelSelect.value.split('/');
+    return {providerID: pid, modelID: mid};
+  })() : S.model;
+  if(!useModel)return O.toast(O.tr('Pick a model first','Сначала выберите модель'),2200);
   state.sid=S.sid;
   state.err='';
   state.log.push({who:'me',text});
@@ -126,12 +130,13 @@ async function ask(text){
   try{
     sid=await ensureFork();
     const mid=O.mid();
+    const modelToUse = useModel || S.model;
     // After a manual reset the side agent keeps full tools; otherwise it stays read-only so the
     // main agent's running turn is never disturbed.
     const parts=[{type:'text',text:state.full?FULL_DIRECTIVE:READONLY_DIRECTIVE,synthetic:true},{type:'text',text}];
     // The fork carries the parent context; the directive sets the access level for this turn.
     await api('POST','/session/'+sid+'/prompt_async',{
-      messageID:mid,agent:S.agent,model:S.model,variant:S.variant||undefined,parts
+      messageID:mid,agent:S.agent,model:modelToUse,variant:S.variant||undefined,parts
     },{timeout:30000});
     const answer=await waitAnswer(sid,mid);
     state.log.push({who:'bot',text:answer||O.tr('(no text answer)','(нет текстового ответа)')});
@@ -239,6 +244,14 @@ function updateNote(){
 function build(){
   if(win)return;
   list=h('div',{class:'aa-list'});
+  const models = (O.allModels ? O.allModels().filter(x => !O.isModelHidden(x.pid+'/'+x.mid)).slice(0, 12) : []);
+  const curModelKey = S.model ? S.model.providerID+'/'+S.model.modelID : '';
+  const modelOpts = models.map(m => ({value: m.pid+'/'+m.mid, text: m.name||m.mid, selected: (m.pid+'/'+m.mid)===curModelKey}));
+  if(!modelOpts.find(o=>o.selected) && models.length) modelOpts[0].selected = true;
+  modelSelect=h('select',{class:'aa-model-select',onchange:()=>{
+    const [pid,mid]=modelSelect.value.split('/');
+    if(O.setModel&&pid&&mid)O.setModel(pid,mid);
+  }}, modelOpts.map(o=>h('option',{value:o.value,selected:o.selected},o.text)));
   inp=h('textarea',{rows:1,class:'aa-inp',placeholder:O.tr('Ask without interrupting…','Спросить, не прерывая…'),
     oninput:autosize,onkeydown:e=>{
       if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ask(inp.value)}
@@ -254,7 +267,7 @@ function build(){
     collapseBtn,
     h('button',{class:'ibtn s',title:O.tr('Close','Закрыть'),onclick:()=>O.askAsideClose()},O.icon('x')));
   head._collapseBtn=collapseBtn;
-  const foot=h('div',{class:'aa-foot'},inp,micBtn,sendBtn);
+  const foot=h('div',{class:'aa-foot'},modelSelect,inp,micBtn,sendBtn);
   win=h('div',{id:'ask-aside',class:'ask-aside'},head,list,
     h('div',{class:'aa-note'},O.tr('Read-only side agent · the main task keeps running','Боковой агент только читает · основная задача продолжается')),
     foot);
