@@ -110,7 +110,7 @@
             android:name=".ActionReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="opencode_by_omma.NOTIFICATION_ACTION" />
+                <action android:name="app.opencode_by_omma.NOTIFICATION_ACTION" />
             </intent-filter>
         </receiver>
 

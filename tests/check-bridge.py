@@ -11,7 +11,7 @@ import re, sys, os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UI = os.path.join(ROOT, 'app/src/main/assets/ui/js')
-KT = os.path.join(ROOT, 'app/src/main/java/opencode_by_omma/MainActivity.kt')
+KT = os.path.join(ROOT, 'app/src/main/java/app/opencode_by_omma/MainActivity.kt')
 MOCK = os.path.join(ROOT, 'tests/mock.js')
 
 kt = open(KT, encoding='utf-8').read()

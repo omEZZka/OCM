@@ -8,11 +8,11 @@ val appVersionCode = ((findProperty("appVersionCode") as String?) ?: "2161").toI
 val ksPass = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "opencodemob"
 
 android {
-    namespace = "opencode_by_omma"
+    namespace = "app.opencode_by_omma"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "opencode_by_omma"
+        applicationId = "app.opencode_by_omma"
         minSdk = 30
         targetSdk = 34
         versionCode = appVersionCode

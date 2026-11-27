@@ -1,4 +1,4 @@
-package opencode_by_omma.widget
+package app.opencode_by_omma.widget
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
@@ -6,8 +6,8 @@ import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
-import opencode_by_omma.MainActivity
-import opencode_by_omma.R
+import app.opencode_by_omma.MainActivity
+import app.opencode_by_omma.R
 
 class PromptBarWidget : AppWidgetProvider() {
 

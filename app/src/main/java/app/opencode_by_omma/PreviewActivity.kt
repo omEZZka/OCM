@@ -1,4 +1,4 @@
-package opencode_by_omma
+package app.opencode_by_omma
 
 import android.annotation.SuppressLint
 import android.content.Intent

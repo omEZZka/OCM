@@ -1,4 +1,4 @@
-package opencode_by_omma
+package app.opencode_by_omma
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
