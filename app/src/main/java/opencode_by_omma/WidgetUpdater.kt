@@ -1,10 +1,10 @@
-package app.opencodemob
+package opencode_by_omma
 
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import app.opencodemob.widget.CoreStatusWidget
+import opencode_by_omma.widget.CoreStatusWidget
 
 /** Publishes live task state to the home-screen status widget. */
 object WidgetUpdater {

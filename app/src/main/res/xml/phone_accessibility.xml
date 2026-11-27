@@ -8,4 +8,4 @@
     android:canTakeScreenshot="true"
     android:notificationTimeout="120"
     android:description="@string/accessibility_desc"
-    android:settingsActivity="app.opencodemob.MainActivity" />
+    android:settingsActivity="opencode_by_omma.MainActivity" />

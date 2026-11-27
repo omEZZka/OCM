@@ -93,6 +93,8 @@ O.openSessions=()=>{
   moreBox.append(
     sect(O.tr('Sessions','Сессии')),
     navItem('down',O.tr('Import session','Импорт сессии'),()=>importSessionFile()),
+    navItem('down',O.tr('Import all sessions','Импорт всех сессий'),()=>importAllSessionsFile()),
+    navItem('up',O.tr('Export all sessions','Экспорт всех сессий'),()=>exportAllSessionsFile()),
     navItem('branch',O.tr('Dialog branches','Ветки диалога'),()=>O.openBranchTree&&O.openBranchTree()),
     navItem('branch',O.tr('Branch tree','Дерево веток'),()=>{
       if(O.openSessionBranchesPanel)O.openSessionBranchesPanel();
@@ -235,6 +237,19 @@ O.openSessions=()=>{
         h('span',{class:'sess-time',title:O.tr('Last activity','Последняя активность')},O.ago(x.time&&x.time.updated)),
         h('button',{class:'ibtn s',style:{flex:'none'},onclick:()=>sessActions(x)},O.icon('dots'))))})}
   draw();offs.push(bus.on('sessions',()=>{if(s.root.isConnected)draw()}),bus.on('perm',()=>{if(s.root.isConnected)draw()}))};
+function exportAllSessionsFile(){
+  const json=O.exportAllSessionsJson();
+  O.actions(O.tr('Export all sessions','Экспорт всех сессий'),[
+    {label:O.tr('Copy JSON','Скопировать JSON'),icon:'copy',fn:()=>O.native.copy(json)},
+    {label:O.tr('Share','Поделиться'),icon:'share',fn:()=>{if(O.native&&O.native.share)O.native.share(json);else O.native.copy(json)}}]);
+}
+function importAllSessionsFile(){
+  const inp=h('input',{type:'file',accept:'application/json,.json',style:{display:'none'}});
+  inp.onchange=()=>{const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();
+    r.onload=()=>{try{const n=O.importAllSessionsJson(String(r.result));O.toast('Импортировано сессий: '+n,2200)}catch(e){O.toast(e.message,4000)}inp.remove()};
+    r.onerror=()=>{O.toast('Не удалось прочитать файл',3000);inp.remove()};r.readAsText(f)};
+  document.body.append(inp);inp.click();
+}
 function importSessionFile(){
   const inp=h('input',{type:'file',accept:'application/json,.json,.ocmjson',style:{display:'none'}});
   inp.onchange=()=>{const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();

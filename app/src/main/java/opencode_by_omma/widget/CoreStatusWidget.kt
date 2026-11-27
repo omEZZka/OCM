@@ -1,4 +1,4 @@
-package app.opencodemob.widget
+package opencode_by_omma.widget
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
@@ -7,9 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.view.View
 import android.widget.RemoteViews
-import app.opencodemob.MainActivity
-import app.opencodemob.Prefs
-import app.opencodemob.R
+import opencode_by_omma.MainActivity
+import opencode_by_omma.Prefs
+import opencode_by_omma.R
 
 class CoreStatusWidget : AppWidgetProvider() {
 

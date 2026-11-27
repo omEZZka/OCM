@@ -602,6 +602,39 @@ O.maybeAutoTitle=(sid,text)=>{
 };
 
 // ---- session JSON export / import ----
+// ---- all sessions JSON export / import ----
+O.exportAllSessionsJson=()=>{
+  const sessions=(S.sessions||[]).map(s=>({
+    id:s.id,title:O.sessionTitle(s),tag:O.sessionTag(s.id),time:s.time,local:!!s.local,
+    messages:(O.visibleMsgs(s.id)||[]).map(m=>({info:m.info,parts:m.parts}))
+  }));
+  return JSON.stringify({format:'ocm-sessions',version:1,exportedAt:Date.now(),sessions},null,2);
+};
+O.importAllSessionsJson=text=>{
+  let o;try{o=JSON.parse(text)}catch(e){throw new Error('Некорректный JSON')}
+  if(!o||!Array.isArray(o.sessions))throw new Error('Это не файл сессий OCM');
+  let count=0;
+  for(const ses of o.sessions){
+    const id='local_'+Date.now().toString(36)+'_'+count;
+    const s={id,title:(ses.title)||'Импортированная сессия',time:{created:Date.now(),updated:Date.now()},local:true,imported:true};
+    O.saveLocalSession(s);
+    const list=(ses.messages||[]).map((m,mi)=>{
+      const info=Object.assign({},m.info||{},{sessionID:id});
+      if(!info.id)info.id='msg_'+mi+'_'+Date.now().toString(36);
+      if(!info.role)info.role='user';
+      const parts=(m.parts||[]).map((p,pi)=>Object.assign({},p,{sessionID:id,messageID:info.id,id:p.id||('prt_'+mi+'_'+pi+'_'+Date.now().toString(36))}));
+      return{info,parts};
+    });
+    O.kv.set('msgs:'+id,list);
+    const ss=O.msgs(id);ss.list=list;ss.idx=new Map(list.map(m=>[m.info.id,m]));
+    if(ses.tag)O.setSessionTag(id,ses.tag);
+    S.sessions=[s,...S.sessions.filter(x=>x.id!==id)];
+    count++;
+  }
+  bus.emit('sessions');
+  return count;
+};
+
 O.exportSessionJson=sid=>{
   const s=S.sessions.find(x=>x.id===sid)||{};
   return JSON.stringify({format:'ocm-session',version:1,exportedAt:Date.now(),

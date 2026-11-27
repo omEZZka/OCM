@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">OpenCode</string>
+    <string name="app_name">OpenCode mobile</string>
     <string name="widget_actions_name">OpenCode: Быстрые действия</string>
     <string name="widget_actions_desc">Быстрый запуск нового чата, терминала и файлов</string>
     <string name="widget_status_name">OpenCode: Статус ядра</string>

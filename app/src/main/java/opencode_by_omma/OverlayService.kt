@@ -1,4 +1,4 @@
-package app.opencodemob
+package opencode_by_omma
 
 import android.app.Notification
 import android.app.NotificationChannel

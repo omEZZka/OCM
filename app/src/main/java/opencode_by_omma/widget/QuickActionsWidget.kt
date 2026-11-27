@@ -1,4 +1,4 @@
-package app.opencodemob.widget
+package opencode_by_omma.widget
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
@@ -6,8 +6,8 @@ import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
-import app.opencodemob.MainActivity
-import app.opencodemob.R
+import opencode_by_omma.MainActivity
+import opencode_by_omma.R
 
 class QuickActionsWidget : AppWidgetProvider() {
 
