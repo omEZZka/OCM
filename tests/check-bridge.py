@@ -99,6 +99,16 @@ for f in sorted(os.listdir(os.path.dirname(KT))):
         if src.count(open_ch) != src.count(close_ch):
             fail.append(f'{f}: unbalanced {label} {src.count(open_ch)} vs {src.count(close_ch)}')
 
+CONTRACT = ['warpStatus', 'warpRefreshGeo', 'warpSetConfig', 'warpRotate', 'warpClearBurned',
+            'warpImportWg', 'warpSelectWg', 'warpDeleteWg', 'extHttp', 'isOnline',
+            'cacheMediaImage', 'saveMediaImage', 'shareImage']
+for need in CONTRACT:
+    if need not in mock_methods:
+        fail.append(f'mock.js is missing the {need}() bridge (upstream 2.30.1 contract)')
+missing_kt = [n for n in CONTRACT if n not in kt_methods]
+if missing_kt:
+    print(f'upstream contract bridges not implemented in Kotlin: {", ".join(missing_kt)}')
+
 print(f'bridge methods used by UI: {len(used)}; @JavascriptInterface in Kotlin: {len(kt_methods)}')
 if fail:
     print('FAIL:')

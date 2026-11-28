@@ -25,13 +25,13 @@ O.openSettings=()=>{
   // Ergonomic layout: search across ALL tabs, quick-access chips for the most-used screens,
   // sticky tab bar, collapsible sections. Voice settings sit near the top, not buried at the end.
   const tabs=h('div',{class:'seg settings-tabs'});
-  const panes={main:h('div'),agent:h('div'),system:h('div')};
+  const panes={main:h('div'),agent:h('div'),system:h('div'),warp:h('div')};
   const sq=h('input',{class:'settings-search',placeholder:O.tr('Search settings…','Поиск по настройкам…'),
     oninput:()=>filterSettings(sq.value)});
   const quick=h('div',{class:'settings-quick'});
-  const body=h('div',null,sq,quick,tabs,panes.main,panes.agent,panes.system);
+  const body=h('div',null,sq,quick,tabs,panes.main,panes.agent,panes.system,panes.warp);
   const s=O.sheet(O.tr('Settings','Настройки'),body,{hud:true});
-  const ORDER=['main','agent','system'];
+  const ORDER=['main','agent','system','warp'];
   let curPane='main';
   const show=pane=>{
     curPane=pane;
@@ -53,7 +53,7 @@ O.openSettings=()=>{
     O.store.set('settingsSwipeHint',true);
     setTimeout(()=>O.toast(O.tr('Swipe left/right to switch tabs','Свайп влево/вправо — переключение вкладок'),2600),600);
   }
-  [['main',O.tr('Main','Основное')],['agent',O.tr('Agent','Агент')],['system',O.tr('System','Система')]]
+  [['main',O.tr('Main','Основное')],['agent',O.tr('Agent','Агент')],['system',O.tr('System','Система')],['warp',O.tr('WARP & Bypass','WARP и обход')]]
     .forEach(([k,label])=>tabs.append(h('button',{'data-pane':k,onclick:()=>{sq.value='';filterSettings('');show(k)}},label)));
   show('main');
   // Quick access: the five screens people open most, one tap from anywhere in settings.
@@ -68,13 +68,13 @@ O.openSettings=()=>{
   // Search: matches row titles/subtitles across every tab; empty query restores tabs.
   function filterSettings(raw){
     const needle=String(raw||'').trim().toLowerCase();
-    const all=[panes.main,panes.agent,panes.system];
+    const all=[panes.main,panes.agent,panes.system,panes.warp];
     if(!needle){
       quick.classList.remove('hide');tabs.classList.remove('hide');
       const cnt0=body.querySelector('.settings-count');if(cnt0)cnt0.textContent='';
-      all.forEach(p=>{[...p.children].forEach(c=>c.classList.remove('hide'));
-        p.querySelectorAll('.settings-row').forEach(r=>r.classList.remove('hide'));
-        p.querySelectorAll('.settings-card').forEach(c=>c.classList.remove('hide'))});
+       all.forEach(p=>{[...p.children].forEach(c=>c.classList.remove('hide'));
+         p.querySelectorAll('.settings-row').forEach(r=>r.classList.remove('hide'));
+         p.querySelectorAll('.settings-card, .warp-panel').forEach(c=>c.classList.remove('hide'))});
       const on=tabs.querySelector('button.on');
       show(on?on.dataset.pane:'main');
       return;
@@ -85,7 +85,7 @@ O.openSettings=()=>{
       p.classList.remove('hide');
       let paneHas=false;
       [...p.children].forEach(block=>{
-        if(block.classList.contains('settings-card')){
+        if(block.classList.contains('settings-card')||block.classList.contains('warp-panel')){
           let cardHas=false;
           block.querySelectorAll('.settings-row').forEach(r=>{
             const txt=(r.textContent||'').toLowerCase();
@@ -267,9 +267,14 @@ O.openSettings=()=>{
   // 6. Jailbreaks & Custom Plugins
   panes.agent.append(h('div',{class:'settings-section-title'},O.tr('Jailbreaks & Plugins','Джейлбрейки и плагины')));
   const jbCard=h('div',{class:'settings-card'});
+  const warpSt0=(O.native&&O.native.warpStatus)?O.native.warpStatus():{enabled:false,mode:'direct'};
+  const warpSub0=warpSt0.enabled
+    ?([String(warpSt0.activeMode||warpSt0.mode||'WARP').toUpperCase(),warpSt0.ip].filter(Boolean).join(' · '))
+    :O.tr('WARP, WireGuard & proxy IP rotation (Bypass 429)','WARP, WireGuard и прокси-ротация IP (обход лимитов)');
   jbCard.append(
     O.listRow('shield',O.tr('Custom Jailbreaks','Пользовательские джейлбрейки'),O.tr('Presets for Zen models, upload & toggle','Пресеты для моделей Zen, загрузка и отключение'),O.icon('chevR'),()=>openJailbreaks()),
     O.listRow('plug',O.tr('Custom Plugins','Пользовательские плагины'),O.tr('Marketplace, upload custom plugins','Каталог и загрузка пользовательских плагинов'),O.icon('chevR'),()=>openCustomPlugins()),
+    O.listRow('zap',O.tr('WARP & Bypass (opencode-infinite)','WARP и обход лимитов'),warpSub0,O.icon('chevR'),()=>{sq.value='';filterSettings('');show('warp')}),
     O.toggleRow('zap','OpenCode Warp (обход лимитов)','https://github.com/warpdotdev/opencode-warp — тестовая функция, по умолчанию выключена',O.store.get('warp_enabled',false),v=>{O.store.set('warp_enabled',v);O.toast(v?'Warp включён (тестовый режим)':'Warp выключен',1500)})
   );
   panes.agent.append(jbCard);
@@ -296,6 +301,13 @@ O.openSettings=()=>{
     O.listRow('tg',O.tr('Community & Telegram','Сообщество Telegram'),'t.me/OpenCodeMob',O.icon('chevR'),()=>O.openUrl('https://t.me/OpenCodeMob'))
   );
   panes.system.append(sysCard);
+
+  // WARP & Bypass — full panel from opencode-infinite, now its own tab (the 3 original tabs + search stay intact).
+  panes.warp.append(h('div',{class:'settings-section-title'},O.tr('WARP & Bypass','WARP и обход лимитов')));
+  panes.warp.append(h('div',{class:'note',style:{marginBottom:'10px'}},O.tr('Cloudflare WARP, WireGuard and proxy rotation to bypass provider quota limits.','Cloudflare WARP, WireGuard и ротация IP для обхода лимитов провайдеров.')));
+  const warpBody=h('div',{class:'warp-panel'});
+  panes.warp.append(warpBody);
+  openWarpSettings(warpBody);
 };
 
 // ---- fallback model chain ----
@@ -411,6 +423,17 @@ function openBackup(){
         h('button',{class:'btn wide',onclick:()=>{const r=O.native.autoBackupNow(pwInp.value);if(r&&r.ok){status.textContent=O.tr('Created: ','Создано: ')+r.path;drawExisting();O.toast(O.tr('Backup created','Бэкап создан'),2000)}else O.toast((r&&r.err)||O.tr('Set a password first','Сначала задайте пароль'),4000)}},O.icon('shield'),O.tr('Backup now','Сделать бэкап сейчас')),
         status);
     })(),
+    h('div',{class:'grp',style:{marginTop:'18px'}},O.tr('Community state (plugins / jailbreaks)','Состояние сообщества (плагины / джейлбрейки)')),
+    h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap'}},
+      h('button',{class:'btn grow',onclick:()=>{
+        try{O.backupCommunityState();O.toast(O.tr('Community state saved','Состояние сообщества сохранено'),1800)}
+        catch(e){O.toast(e.message||'failed',3500)}
+      }},O.icon('shield'),O.tr('Backup community state','Бэкап сообщества')),
+      h('button',{class:'btn grow',onclick:async()=>{
+        if(!await O.confirm(O.tr('Restore community state?','Восстановить состояние сообщества?'),O.tr('Missing local plugins and jailbreaks will be merged back from the backup.','Локальные плагины и джейлбрейки будут восстановлены из бэкапа.'),O.tr('Restore','Восстановить')))return;
+        try{O.restoreCommunityState();O.toast(O.tr('Community state restored','Состояние сообщества восстановлено'),2200)}
+        catch(e){O.toast(e.message||'failed',3500)}
+      }},O.icon('down'),O.tr('Restore community state','Восстановить сообщество'))),
     info);
   sub(O.tr('Encrypted backup','Шифрованный бэкап'),body,{full:true});
 }
@@ -471,8 +494,8 @@ O.checkAllKeys=async()=>{
       const hd=Object.assign({},t.headers);
       if(t.key)hd['Authorization']='Bearer '+t.key;
       const r=await O.native.netGetAsync(url,hd,15000);
-      if(r&&r.status&&r.status>=400)throw O.probeError(r.status,r.body);
-      if(r&&r.ok===false)throw O.probeError(r.status||0,r.err||r.body);
+      if(r&&r.status&&r.status>=400)throw new Error('HTTP '+r.status+': '+(r.body||''));
+      if(r&&r.ok===false)throw new Error(r.err||r.body||'network error');
       let count=0;
       try{const o=JSON.parse(r.body||'{}');const arr=Array.isArray(o)?o:(o.data||o.models||[]);count=Array.isArray(arr)?arr.length:0}catch(_){}
       spin.remove();
@@ -935,6 +958,98 @@ const DB_BACKENDS=[
   'https://ocm-community.clodperv1.workers.dev',
   'https://ocm-zen-community-default-rtdb.firebaseio.com'
 ];
+const STATE_BACKUP_PATHS=[
+  CFG+'/ocm-community-backup.json',
+  '/storage/emulated/0/OpenCode/ocm-state-backup.json'
+];
+O.backupCommunityState=()=>{
+  try{
+    const snap={
+      v:2,
+      ts:Date.now(),
+      custom_plugins:O.store.get('custom_plugins',[]),
+      enabled_plugins:O.store.get('enabled_plugins',[]),
+      deleted_plugins:O.store.get('deleted_plugin_ids',[]),
+      custom_jailbreaks:O.store.get('custom_jailbreaks',[]),
+      active_jailbreak_ids:O.store.get('active_jailbreak_ids',[]),
+      deleted_jailbreaks:O.store.get('deleted_jb_ids',[]),
+      author_token:getAuthorToken()
+    };
+    const json=JSON.stringify(snap,null,2);
+    STATE_BACKUP_PATHS.forEach(p=>{
+      try{O.native.fs('mkdir',O.dirname(p));O.native.writeText(p,json)}catch(_){}
+    });
+  }catch(_){}
+};
+O.restoreCommunityState=()=>{
+  try{
+    let curP=O.store.get('custom_plugins',[]);
+    let curJ=O.store.get('custom_jailbreaks',[]);
+    let enP=O.store.get('enabled_plugins',[]);
+    let actJ=O.store.get('active_jailbreak_ids',[]);
+    if(!Array.isArray(curP))curP=[];
+    if(!Array.isArray(curJ))curJ=[];
+    if(!Array.isArray(enP))enP=[];
+    if(!Array.isArray(actJ))actJ=[];
+
+    for(const p of STATE_BACKUP_PATHS){
+      const r=O.native.readText(p);
+      if(!r||!r.ok||!r.text)continue;
+      try{
+        const b=JSON.parse(r.text);
+        if(Array.isArray(b.custom_plugins)&&b.custom_plugins.length){
+          const mapP=new Map(curP.filter(x=>x&&x.id).map(x=>[String(x.id),x]));
+          b.custom_plugins.forEach(x=>{if(x&&x.id&&!mapP.has(String(x.id)))mapP.set(String(x.id),x)});
+          curP=Array.from(mapP.values());
+        }
+        if(Array.isArray(b.enabled_plugins)&&b.enabled_plugins.length&&!enP.length){
+          enP=[...new Set([...enP,...b.enabled_plugins])];
+        }
+        if(Array.isArray(b.custom_jailbreaks)&&b.custom_jailbreaks.length){
+          const mapJ=new Map(curJ.filter(x=>x&&x.id).map(x=>[String(x.id),x]));
+          b.custom_jailbreaks.forEach(x=>{if(x&&x.id&&!mapJ.has(String(x.id)))mapJ.set(String(x.id),x)});
+          curJ=Array.from(mapJ.values());
+        }
+        if(Array.isArray(b.active_jailbreak_ids)&&b.active_jailbreak_ids.length&&!actJ.length){
+          actJ=[...new Set([...actJ,...b.active_jailbreak_ids])];
+        }
+      }catch(_){}
+    }
+
+    const diskDir=O.native.ls(CFG+'/plugins');
+    if(diskDir&&Array.isArray(diskDir.items)){
+      const mapP=new Map(curP.filter(x=>x&&x.id).map(x=>[String(x.id),x]));
+      diskDir.items.filter(it=>!it.dir&&/\.(js|ts)$/i.test(it.name)).forEach(it=>{
+        const stem=it.name.replace(/\.(js|ts)$/i,'');
+        const hasMatch=[...mapP.values()].some(p=>((p.id||p.name||'').replace(/[^a-zA-Z0-9_-]/g,'_')===stem)||String(p.id)===stem);
+        if(!hasMatch){
+          const rd=O.native.readText(CFG+'/plugins/'+it.name);
+          if(rd&&rd.ok&&rd.text!=null){
+            const pid='plug_disk_'+stem;
+            mapP.set(pid,{id:pid,name:stem,desc:'Восстановлен с диска после обновления',code:rd.text,author:'local',time:Date.now()});
+            if(!enP.includes(pid))enP.push(pid);
+          }
+        }
+      });
+      curP=Array.from(mapP.values());
+    }
+
+    O.store.set('custom_plugins',curP);
+    O.store.set('enabled_plugins',enP);
+    O.store.set('custom_jailbreaks',curJ);
+    O.store.set('active_jailbreak_ids',actJ);
+
+    const enSet=new Set(enP.map(String));
+    O.native.fs('mkdir',CFG+'/plugins');
+    curP.forEach(p=>{
+      if(!p||!p.id)return;
+      if(enSet.has(String(p.id))){
+        const fileSafe=String(p.id||p.name).replace(/[^a-zA-Z0-9_-]/g,'_')+'.js';
+        O.native.writeText(CFG+'/plugins/'+fileSafe,p.code||'// plugin: '+p.name);
+      }
+    });
+  }catch(_){}
+};
 O.cloudDb={
   getBackends(){
     const list=[...DB_BACKENDS];
@@ -2192,8 +2307,243 @@ O.syncAllCommunity=async()=>{
       }
       O.store.set('custom_plugins',Array.from(mapP.values()));
     }
+    O.backupCommunityState();
   }catch(_){}
 };
-setTimeout(()=>{try{O.syncAllCommunity()}catch(_){}},1000);
+setTimeout(()=>{try{O.restoreCommunityState()}catch(_){};try{O.syncAllCommunity()}catch(_){}},1000);
+
+// ---- WARP, WireGuard & Proxy Rotation (opencode-infinite) ----
+O.warpRotateAndRetry=(sid)=>{
+  O.toast(O.tr('Rotating IP via WARP...','Меняем IP через WARP...'),3000);
+  if(O.native&&O.native.warpRotate)O.native.warpRotate(sid||S.sid||'');
+};
+
+function openWarpSettings(target){
+  const body=target||h('div');
+  const MODES=[
+    {id:'warp',label:'Cloudflare WARP',sub:O.tr('Built-in non-root WARP tunnel (auto-registration)','Встроенный нерутовый WARP (авто-регистрация)')},
+    {id:'warp_scan',label:'WARP + Scanner',sub:O.tr('Scans clean Cloudflare WARP endpoints if blocked','Поиск рабочего WARP endpoint при блокировке')},
+    {id:'warp_gool',label:'WARP-in-WARP (Gool)',sub:O.tr('Double-hop Cloudflare tunnel','Двойной туннель Cloudflare')},
+    {id:'wireguard',label:'WireGuard (.conf)',sub:O.tr('Reserve · Use imported WireGuard .conf profiles','Резерв · Импорт и ротация по .conf файлам WireGuard')},
+    {id:'proxy',label:'HTTP / SOCKS5 Proxy',sub:O.tr('Reserve · Your HTTP/HTTPS/SOCKS5 proxy pool','Резерв · Список ваших прокси и Change-IP URL')},
+    {id:'cfon',label:'Psiphon (Reserve)',sub:O.tr('Fallback encrypted tunnel with country selection','Резервный обход с выбором страны, если WARP недоступен')},
+    {id:'direct',label:O.tr('Direct (Disabled)','Отключён (Прямой)'),sub:O.tr('No proxy routing','Прямое подключение без смены IP')}
+  ];
+  const COUNTRIES=['DE','NL','AT','US','GB','FR','SE','CH','FI','JP','SG'];
+
+  let st=(O.native&&O.native.warpStatus)?O.native.warpStatus():{mode:'direct',activeMode:'direct',status:'idle'};
+  let proxyText=st.proxyList||'';
+  let rotateUrlVal=st.rotateUrl||'';
+  let wgNameVal='';
+  let wgConfText='';
+  let s=null;
+
+  const paint=()=>{
+    if(s&&s.root&&!s.root.isConnected)return;
+    body.textContent='';
+    const mode=st.mode||'direct';
+    const actMode=st.activeMode||'direct';
+    const status=st.status||'idle';
+    const dotCls=status==='connected'?'dot ok':(status==='error'?'dot err':(status==='connecting'||status==='rotating'?'dot warn':'dot'));
+    const statusLbl=status==='connected'?O.tr('Connected','Подключён'):
+      status==='connecting'?O.tr('Connecting...','Подключение...'):
+      status==='rotating'?O.tr('Rotating IP...','Ротация IP...'):
+      status==='error'?O.tr('Tunnel Error','Ошибка туннеля'):O.tr('Direct / Idle','Прямое подключение');
+    const modeObj=MODES.find(m=>m.id===actMode)||MODES.find(m=>m.id===mode)||MODES[MODES.length-1];
+    const cityCountry=[st.city,st.country].filter(Boolean).join(', ')||'—';
+
+    const statusCard=h('div',{class:'settings-card',style:{padding:'14px'}},
+      h('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px'}},
+        h('span',{class:dotCls}),
+        h('b',{style:{fontSize:'14.5px',flex:'1'}},statusLbl),
+        h('span',{class:'recommended-badge'},modeObj.label)
+      ),
+      h('div',{class:'hud-metric-row'},
+        h('div',{class:'hud-metric',style:{gridColumn:'span 2',cursor:'pointer',textAlign:'left'},onclick:()=>{if(st.ip)O.native.copy(st.ip)}},
+          h('div',{class:'hud-metric-lbl'},O.tr('Current Exit IP (tap to copy)','Текущий IP (нажмите, чтобы скопировать)')),
+          h('div',{class:'hud-metric-val',style:{fontSize:'13px',color:'var(--fg)',wordBreak:'break-all'}},st.ip||'—')
+        ),
+        h('div',{class:'hud-metric'},
+          h('div',{class:'hud-metric-lbl'},O.tr('Node / Rotations','Узел / Смены')),
+          h('div',{class:'hud-metric-val',style:{fontSize:'12.5px',color:'var(--fg)'}},(st.colo?st.colo+' · ':'')+(st.rotations||0))
+        )
+      ),
+      h('div',{class:'hud-metric-row',style:{gridTemplateColumns:'1fr 1fr',marginBottom:'8px'}},
+        h('div',{class:'hud-metric',style:{textAlign:'left'}},
+          h('div',{class:'hud-metric-lbl'},O.tr('City / Country','Город / Страна')),
+          h('div',{class:'hud-metric-val',style:{fontSize:'12.5px',color:'var(--fg)',fontFamily:'inherit',fontWeight:'600'}},cityCountry)
+        ),
+        h('div',{class:'hud-metric',style:{textAlign:'left'}},
+          h('div',{class:'hud-metric-lbl'},O.tr('ISP / Burned IPs','Провайдер / Сброс IP')),
+          h('div',{class:'hud-metric-val',style:{fontSize:'12px',color:'var(--mut)',fontFamily:'inherit'}},(st.isp||'—').slice(0,22)+' · '+(st.burnedCount||0))
+        )
+      ),
+      st.error?h('div',{class:'err s',style:{marginTop:'4px',lineHeight:'1.4'}},st.error):
+        (st.lastMessage?h('div',{class:'mut s',style:{marginTop:'4px',lineHeight:'1.4'}},st.lastMessage):null),
+      h('div',{style:{display:'flex',gap:'8px',marginTop:'12px'}},
+        h('button',{class:'btn pri grow',disabled:!!st.rotating,onclick:()=>{
+          O.toast(O.tr('Changing IP via WARP...','Меняем IP через WARP...'),3000);
+          O.native.warpRotate(S.sid||'');
+        }},O.icon('refresh'),st.rotating?O.tr('Rotating...','Смена IP...'):O.tr('Change IP Now','Сменить IP')),
+        h('button',{class:'btn grow',onclick:()=>{
+          O.toast(O.tr('Checking current IP & geo...','Проверяем IP и страну...'),1600);
+          O.native.warpRefreshGeo();
+        }},O.icon('globe'),O.tr('Check IP','Проверить IP'))
+      )
+    );
+    body.append(statusCard);
+
+    body.append(h('div',{class:'settings-section-title'},O.tr('Tunnel Mode & Reserve','Режим и резерв (если WARP заблокирован)')));
+    const modeList=h('div',{class:'dock-opts-list',style:{marginBottom:'14px'}});
+    MODES.forEach(m=>{
+      const on=mode===m.id;
+      modeList.append(h('button',{
+        class:'dock-opt-row'+(on?' on':''),
+        onclick:()=>{
+          if(m.id==='wireguard'&&(!st.wgConfigs||!st.wgConfigs.length)){
+            O.toast(O.tr('Import a WireGuard .conf below first','Сначала добавьте WireGuard .conf ниже'),2500);
+          }
+          if(m.id==='proxy'&&!proxyText.trim()){
+            O.toast(O.tr('Add proxies below first','Сначала добавьте прокси в список ниже'),2500);
+          }
+          O.native.warpSetConfig({mode:m.id});
+          O.toast(O.tr('Switching to ','Переключение на ')+m.label+'...',2000);
+        }
+      },
+      h('div',{class:'dock-opt-indicator'}),
+      h('div',{class:'dock-opt-content'},
+        h('span',{class:'dock-opt-label'},m.label),
+        h('span',{class:'dock-opt-desc'},m.sub))));
+    });
+    body.append(modeList);
+
+    body.append(h('div',{class:'settings-section-title'},O.tr('Automatic Quota Bypass','Авто-обход квоты (opencode-infinite)')));
+    const autoCard=h('div',{class:'settings-card'});
+    autoCard.append(
+      O.toggleRow('zap',O.tr('Auto-rotate IP on Quota / 429','Авто-смена IP при лимите квоты'),O.tr('Catch quota errors, rotate exit IP, and auto-continue chat','При ошибке квоты автоматически сменить IP и продолжить ответ'),st.autoRotate!==false,v=>{
+        O.native.warpSetConfig({autoRotate:v});
+      }),
+      O.toggleRow('shield',O.tr('Auto fallback chain','Резерв при блокировке WARP'),O.tr('Fall back to WARP Scan -> WireGuard -> Proxy -> Psiphon','Автоматически пробовать Scan -> WireGuard -> Proxy -> Psiphon'),st.autoFallback!==false,v=>{
+        O.native.warpSetConfig({autoFallback:v});
+      }),
+      O.listRow('trash',O.tr('Clear Burned IP History','Сбросить историю использованных IP'),O.tr('Remembered 24h IPs: ','Запомнено за 24 ч: ')+(st.burnedCount||0),O.icon('chevR'),()=>{
+        st=O.native.warpClearBurned();
+        O.toast(O.tr('Burned IPs cleared','История IP очищена'),1500);
+        paint();
+      })
+    );
+    body.append(autoCard);
+
+    body.append(h('div',{class:'settings-section-title'},O.tr('WireGuard .conf Reserve','Резерв: WireGuard (.conf)')));
+    const wgCard=h('div',{class:'settings-card',style:{padding:'12px 14px'}});
+    const wgConfigs=st.wgConfigs||[];
+    if(wgConfigs.length){
+      const list=h('div',{style:{marginBottom:'10px'}});
+      wgConfigs.forEach(c=>{
+        list.append(h('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'8px 0',borderBottom:'1px solid var(--line)'}},
+          h('button',{class:'grow',style:{textAlign:'left'},onclick:()=>{
+            st=O.native.warpSelectWg(c.id);
+            O.toast(O.tr('Selected WG profile: ','Выбран профиль: ')+c.name,1500);
+            paint();
+          }},
+            h('div',{style:{fontWeight:'600',fontSize:'13.5px',color:c.active?'var(--fg)':'var(--mut)'}},(c.active?'● ':'')+c.name),
+            h('div',{class:'mut s mono'},c.endpoint||'')
+          ),
+          h('button',{class:'ibtn s',title:O.tr('Delete','Удалить'),onclick:()=>{
+            st=O.native.warpDeleteWg(c.id);
+            paint();
+          }},O.icon('trash'))
+        ));
+      });
+      wgCard.append(list);
+    }else{
+      wgCard.append(h('div',{class:'mut s',style:{marginBottom:'10px'}},O.tr('No WireGuard .conf imported yet. Paste config text or pick a .conf file.','Профили WireGuard не добавлены. Вставьте текст .conf или выберите файл на телефоне.')));
+    }
+    const wgNameInp=h('input',{placeholder:O.tr('Profile name (optional)','Имя профиля (необязательно)'),value:wgNameVal,style:{marginBottom:'8px'},oninput:e=>{wgNameVal=e.target.value}});
+    const wgTa=h('textarea',{rows:4,class:'mono',placeholder:'[Interface]\nPrivateKey = ...\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = ...\nEndpoint = host:51820\nAllowedIPs = 0.0.0.0/0',oninput:e=>{wgConfText=e.target.value}});
+    wgTa.value=wgConfText;
+    wgCard.append(
+      wgNameInp,
+      wgTa,
+      h('div',{style:{display:'flex',gap:'8px',marginTop:'8px'}},
+        h('button',{class:'btn pri grow',onclick:()=>{
+          const res=O.native.warpImportWg(wgNameVal,wgTa.value);
+          if(res&&res.ok){
+            wgNameVal='';wgConfText='';wgTa.value='';
+            if(res.status)st=res.status;
+            O.toast(res.message||O.tr('WireGuard imported','WireGuard сохранён'),2000);
+            paint();
+          }else{
+            O.toast((res&&res.message)||O.tr('Invalid WireGuard .conf','Неверный формат WireGuard .conf'),3500);
+          }
+        }},O.icon('plus'),O.tr('Save .conf','Сохранить .conf')),
+        h('button',{class:'btn grow',onclick:()=>{
+          if(window.OC&&OC.pickFile)OC.pickFile('wgconf','');
+          else O.toast(O.tr('File picker unavailable','Выбор файла недоступен'));
+        }},O.icon('folder'),O.tr('Open File','Выбрать файл'))
+      )
+    );
+    body.append(wgCard);
+
+    body.append(h('div',{class:'settings-section-title'},O.tr('Proxy Pool & Psiphon Country','Пул прокси и страна Psiphon')));
+    const pxCard=h('div',{class:'settings-card',style:{padding:'12px 14px'}});
+    const pxTa=h('textarea',{rows:3,class:'mono',placeholder:'socks5://127.0.0.1:1080\nhttp://user:pass@proxy.example.com:8080',oninput:e=>{proxyText=e.target.value}});
+    pxTa.value=proxyText;
+    const rotUrlInp=h('input',{class:'mono',placeholder:O.tr('Change-IP URL webhook (optional)','Change-IP URL для мобильных прокси (необязательно)'),style:{marginTop:'8px'},oninput:e=>{rotateUrlVal=e.target.value}});
+    rotUrlInp.value=rotateUrlVal;
+    const countryBar=h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap',marginTop:'10px'}});
+    COUNTRIES.forEach(cc=>{
+      const on=(st.cfonCountry||'DE')===cc;
+      countryBar.append(h('button',{
+        class:'btn sm'+(on?' pri':''),
+        onclick:()=>{
+          O.native.warpSetConfig({cfonCountry:cc});
+          st.cfonCountry=cc;
+          O.toast('Psiphon: '+cc,1200);
+          paint();
+        }
+      },cc));
+    });
+    pxCard.append(
+      h('label',{class:'mut s',style:{display:'block',marginBottom:'6px'}},O.tr('HTTP / HTTPS / SOCKS5 proxies (one per line)','HTTP / HTTPS / SOCKS5 прокси (по одному на строку)')),
+      pxTa,
+      rotUrlInp,
+      h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{
+        O.native.warpSetConfig({proxyList:proxyText,rotateUrl:rotateUrlVal});
+        O.toast(O.tr('Proxy pool saved','Список прокси сохранён'),1800);
+      }},O.icon('check'),O.tr('Save Proxy Pool','Сохранить прокси')),
+      h('label',{class:'mut s',style:{display:'block',marginTop:'12px',marginBottom:'4px'}},O.tr('Psiphon fallback country','Страна для резервного Psiphon (--cfon)')),
+      countryBar
+    );
+    body.append(pxCard);
+  };
+
+  paint();
+  if(!target)s=sub(O.tr('WARP & Bypass','WARP и обход лимитов'),body,{full:true});
+  if(O.native&&O.native.warpRefreshGeo)O.native.warpRefreshGeo();
+
+  if(!O._warpListenerBound){
+    O._warpListenerBound=true;
+    O.on('warp',d=>{
+      if(!d)return;
+      if(O._warpActivePaint)O._warpActivePaint(d);
+    });
+    O.on('picked_wg',d=>{
+      if(!d)return;
+      if(d.ok){
+        O.toast(d.message||O.tr('WireGuard config imported','Профиль WireGuard импортирован'),2200);
+        if(d.status&&O._warpActivePaint)O._warpActivePaint(d.status);
+      }else{
+        O.toast(d.message||O.tr('Invalid WireGuard .conf','Ошибка .conf файла'),3500);
+      }
+    });
+  }
+  O._warpActivePaint=nextSt=>{
+    st=nextSt;
+    if(!s||(s.root&&s.root.isConnected))paint();
+  };
+  return body;
+}
+O.openWarpSettings=openWarpSettings;
 
 })();

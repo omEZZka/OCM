@@ -28,6 +28,9 @@ class OpenCodeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "stop") { stopSelf(); return START_NOT_STICKY }
         Notifier.ensureChannels(this)
+        // WARP stays off unless the user explicitly enabled it; only then load its state,
+        // start the proxy gate and let the service react to quota-driven IP rotation.
+        if (Runtime.warpEnabled(this)) WarpManager.init(this)
         ServiceCompat.startForeground(
             this, 1, Notifier.runtime(this, "Запуск"),
             if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
@@ -273,7 +276,12 @@ class OpenCodeService : Service() {
                     val now = SystemClock.elapsedRealtime()
                     if (now - lastQuotaNotif > 60_000) {
                         lastQuotaNotif = now
-                        Notifier.event(this, Notifier.QUOTA, "Квота исчерпана", "Лимит модели исчерпан. Подключите свой ключ: Настройки → Модели → Подключить провайдера.", sessionId = sid, sessionTitle = sessionTitle(sid))
+                        if (WarpManager.isAutoRotateEnabled() && WarpManager.isProxied()) {
+                            // WARP rotation is on: tell the user the exit IP is being changed.
+                            Notifier.ipRotated(this, "Обнаружен лимит квоты. Выполняется ротация IP через WARP.", sid, sessionTitle(sid))
+                        } else {
+                            Notifier.event(this, Notifier.QUOTA, "Квота исчерпана", "Лимит модели исчерпан. Подключите свой ключ: Настройки → Модели → Подключить провайдера.", sessionId = sid, sessionTitle = sessionTitle(sid))
+                        }
                     }
                 }
             }

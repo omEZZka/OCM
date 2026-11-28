@@ -67,6 +67,7 @@ function build(){
     ['files','folder',()=>O.tr('Files','Файлы'),()=>O.setTab('files')],
     ['changes','branch',()=>O.tr('Changes','Изменения'),()=>O.setTab('changes')],
     ['search','search',()=>O.tr('Search','Поиск'),()=>O.openGlobalSearch()],
+    ['memory','memory',()=>O.tr('Memory','Память'),()=>toggleMemory()],
     ['projects','folder',()=>O.tr('Projects','Проекты'),()=>O.openProjects()],
     ['sessions','list',()=>O.tr('Sessions','Сессии'),()=>O.openSessions()],
     ['voice','mic',()=>O.tr('Voice','Голос'),()=>O.onMicChoice&&O.onMicChoice()],
@@ -87,6 +88,7 @@ function build(){
     O.navTabs().forEach(id=>{
       const d=NAV_DEFS.find(x=>x[0]===id);if(!d)return;
       B[id]=h('button',{class:'bottom-pill',onclick:d[3]},O.icon(d[1]),h('span',null,d[2]()));
+      if(id==='memory')B.memory.classList.toggle('active',O.store.get('memory',true)!==false);
       bottomBar.append(B[id]);
     });
     B.more=h('button',{class:'bottom-pill',onclick:()=>bottomMenu()},O.icon('dots'),h('span',null,O.tr('Menu','Меню')));
@@ -151,6 +153,8 @@ function build(){
   bus.on('conn',updateBanner);
   bus.on('status',O.debounce(updateBanner,400));
   bus.on('statuspanel',refreshStatus);
+  window.addEventListener('online',()=>{S.offline=false;updateBanner();updateTop()});
+  window.addEventListener('offline',()=>{S.offline=true;updateBanner();updateTop()});
   layout();
   updateTop();
 }
@@ -166,7 +170,18 @@ function layout(){
   SP.changes.classList.toggle('show',sideTab==='changes');
   SB.term.classList.toggle('on',sideTab==='term');
   SB.changes.classList.toggle('on',sideTab==='changes');
-  for(const k in B){if(k!=='more')B[k].classList.toggle('active',tab===k)}
+  for(const k in B){
+    if(k==='more')continue;
+    if(k==='memory')B[k].classList.toggle('active',O.store.get('memory',true)!==false);
+    else B[k].classList.toggle('active',tab===k);
+  }
+}
+
+function toggleMemory(){
+  const v=!O.store.get('memory',true);
+  O.store.set('memory',v);
+  if(B.memory)B.memory.classList.toggle('active',v);
+  O.toast(v?(O.tr('Memory on: project map and rules are generated','Память включена: карта проекта и правила создаются')):(O.tr('Memory off: project map generation stopped','Память выключена: карта проекта больше не создаётся')),2000);
 }
 
 function bottomMenu(){
@@ -185,11 +200,7 @@ function bottomMenu(){
       }},
     {label:O.tr('Changes','Изменения'),icon:'branch',fn:()=>O.setTab('changes')},
     {label:O.tr('Bottom bar…','Нижний бар…'),sub:O.tr('Choose your tabs','Выбрать свои вкладки'),icon:'sliders',fn:()=>O.openNavSettings()},
-    {label:memOn?O.tr('Memory: on','Память: вкл'):O.tr('Memory: off','Память: выкл'),sub:O.tr('Project map and rules generation','Создание карты проекта и правил'),icon:'memory',fn:()=>{
-      const v=!O.store.get('memory',true);
-      O.store.set('memory',v);
-      O.toast(v?(O.tr('Memory on: project map and rules are generated','Память включена: карта проекта и правила создаются')):(O.tr('Memory off: project map generation stopped','Память выключена: карта проекта больше не создаётся')),2000);
-    }},
+    {label:memOn?O.tr('Memory: on','Память: вкл'):O.tr('Memory: off','Память: выкл'),sub:O.tr('Project map and rules generation','Создание карты проекта и правил'),icon:'memory',fn:toggleMemory},
     {label:O.tr('Sessions','Сессии'),icon:'list',fn:()=>O.openSessions()},
     {label:O.tr('Settings','Настройки'),icon:'sliders',fn:()=>O.openSettings()}
   ]);
@@ -215,6 +226,7 @@ O.setFocusMode=on=>{
 O.focusMode=()=>O.store.get('focusMode',false);
 if(O.store.get('focusMode',false))document.documentElement.classList.add('focus-mode');
 
+O.getTab=()=>tab;
 O.setTab=t=>{
   tab=t;
   if(t==='term'||t==='changes')sideTab=t;
@@ -306,6 +318,12 @@ function updateTop(){
   const v=Object.values(S.mcp||{});
   const hasErr=v.some(x=>x.status==='failed'||x.status==='needs_auth');
   if(T.more)T.more.classList.toggle('active',hasErr);
+  if(T.menu){
+    const anyBusy=(S.sessions||[]).some(x=>O.isSessionBusy&&O.isSessionBusy(x.id));
+    const anyUnread=(S.sessions||[]).some(x=>O.hasUnreadMessages&&O.hasUnreadMessages(x.id)>0);
+    T.menu.classList.toggle('has-busy',!!anyBusy);
+    T.menu.classList.toggle('has-unread',!anyBusy&&!!anyUnread);
+  }
   updateTopTitle();
 }
 
@@ -328,18 +346,21 @@ function updateTopTitle(){
 function updateBanner(){
   if(!built)return;
   const err=(O.native.state&&O.native.state().serverError)||'';
-  let t='';
-  if(err)t=O.tr('Local server failed: ','Локальный сервер не запустился: ')+String(err).split('\n')[0];
-  else if(S.offline)t=O.tr('Offline — showing cached chats','Офлайн — показаны кэшированные чаты');
-  else if(!S.up)t=O.tr('Connecting to local runtime...','Подключение к локальному серверу...');
-  T.banner.textContent=t;
-  T.banner.classList.toggle('hide',!t);
-  // a failed server must offer the one action that fixes it, right where the error is shown
-  const old=T.banner.querySelector('button');
-  if(old)old.remove();
+  T.banner.textContent='';
   if(err){
+    T.banner.append(h('span',null,O.tr('Local server failed: ','Локальный сервер не запустился: ')+String(err).split('\n')[0]));
+    // a failed server must offer the one action that fixes it, right where the error is shown
     T.banner.append(h('button',{class:'btn sm',style:{marginLeft:'8px'},onclick:()=>{O.runDiagnostics?O.runDiagnostics():O.openCompat&&O.openCompat()}},O.tr('Diagnose','Диагностика')),
       h('button',{class:'btn sm',style:{marginLeft:'6px'},onclick:()=>{try{OC.restartServer()}catch(_){}}},O.tr('Restart','Перезапуск')));
+    T.banner.classList.remove('hide');
+  }else if(S.offline&&!S.up){
+    T.banner.append(O.icon('wifiOff'),h('span',null,O.tr('No connection — showing cached chats','Нет соединения — показаны кэшированные чаты')));
+    T.banner.classList.remove('hide');
+  }else if(!S.up){
+    T.banner.append(h('span',{class:'spin',style:{width:'12px',height:'12px'}}),h('span',null,O.tr('Connecting to local runtime...','Подключение к локальному серверу...')));
+    T.banner.classList.remove('hide');
+  }else{
+    T.banner.classList.add('hide');
   }
 }
 

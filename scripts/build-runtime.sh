@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds everything the APK embeds:
-#   jniLibs/arm64-v8a/{libproot.so,libproot-loader.so,libtalloc.so}   proot, as native libs (exec-able on Android 10+)
+#   jniLibs/arm64-v8a/{libproot.so,libproot-loader.so,libtalloc.so,libandroid-shmem.so,libwarp.so}
+#                                                                     proot + warp-plus, as native libs (exec-able on Android 10+)
 #   assets/rootfs.tar.xz + rootfs.id                                  Ubuntu 24.04 arm64 with opencode 1.x inside
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,7 +11,7 @@ WORK="$(mktemp -d)"
 mkdir -p "$LIBS" "$ASSETS"
 sudo apt-get update -qq && sudo apt-get install -y -qq patchelf xz-utils >/dev/null
 
-echo "== 1/3 proot from Termux packages =="
+echo "== 1/4 proot from Termux packages =="
 REPO=https://packages.termux.dev/apt/termux-main
 curl -fsSL "$REPO/dists/stable/main/binary-aarch64/Packages" -o "$WORK/Packages"
 fetch_deb() {
@@ -53,7 +54,20 @@ for n in $(patchelf --print-needed "$LIBS/libproot.so"); do
   esac
 done
 
-echo "== 2/3 opencode: newest stable v1.* =="
+echo "== 2/4 warp-plus (WARP / WireGuard / Psiphon android-arm64 tunnel binary) =="
+WARP_TAG="v1.2.6"
+curl -fsSL "https://github.com/bepass-org/warp-plus/releases/download/$WARP_TAG/warp-plus_android-arm64.zip" -o "$WORK/warp-plus.zip"
+python3 -c 'import zipfile, sys; z = zipfile.ZipFile(sys.argv[1]); z.extract("warp-plus", sys.argv[2])' "$WORK/warp-plus.zip" "$WORK"
+test -f "$WORK/warp-plus"
+install -m755 "$WORK/warp-plus" "$LIBS/libwarp.so"
+for n in $(patchelf --print-needed "$LIBS/libwarp.so" 2>/dev/null || true); do
+  case "$n" in
+    libc.so|libdl.so|libm.so|liblog.so) ;;
+    *) echo "libwarp has an unexpected dependency: $n"; exit 1 ;;
+  esac
+done
+
+echo "== 3/4 opencode: newest stable v1.* =="
 TAG="${OPENCODE_TAG:-}"
 if [ -z "$TAG" ]; then
   AUTH=()
@@ -72,7 +86,7 @@ curl -fsSL "https://github.com/anomalyco/opencode/releases/download/$TAG/opencod
 test -f "$WORK/oc/opencode"
 echo "$TAG" > "$WORK/oc/version"
 
-echo "== 3/3 rootfs (Ubuntu 24.04 arm64) =="
+echo "== 4/4 rootfs (Ubuntu 24.04 arm64) =="
 docker rm -f ocroot >/dev/null 2>&1 || true
 # Emulated arm64 containers occasionally lose DNS on GitHub runners ("Could not resolve
 # ports.ubuntu.com"). Pin public resolvers and retry the index fetch before giving up.

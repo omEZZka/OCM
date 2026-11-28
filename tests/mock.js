@@ -1,11 +1,26 @@
 (function(){
-const srv={sessions:[],msgs:{},calls:[],files:{}};window.__srv=srv;
-const DEF={version:'1.0.8',code:1,user:'dev@example.com',name:'Dev',guest:false,googleConfigured:true,installed:true,core:'v1.18.5',perms:{notifications:true,files:true,install:true,battery:false},flags:{snd_done:true,snd_action:true,snd_quota:false,noseccomp:false},ready:true};
-const route=(method,path,body)=>{const u=new URL('http://x'+path),p=u.pathname;srv.calls.push({method,p,q:u.search,body:body?JSON.parse(body):null});
- if(p==='/config/providers')return{providers:[{id:'opencode',name:'OpenCode Zen',models:{
-   'big-pickle':{id:'big-pickle',name:'Big Pickle',limit:{context:200000},cost:{input:0,output:0},variants:{low:{},high:{}}},
-   'gpt-x':{id:'gpt-x',name:'GPT X',limit:{context:100000},cost:{input:1,output:2}},
-   'claude-super-long-preview-ultra-experimental-context-window-1m':{id:'claude-super-long-preview-ultra-experimental-context-window-1m',name:'Claude Super Long Preview Ultra Experimental Context Window 1M',limit:{context:1000000},cost:{input:0,output:0},variants:{low:{},high:{}}}}}],default:{opencode:'big-pickle'}};
+const srv={sessions:[],msgs:{},calls:[],files:{},config:{provider:{}}};window.__srv=srv;
+const DEF={version:'1.0.8',code:1,user:'dev@example.com',name:'Dev',guest:false,googleConfigured:true,installed:true,core:'v1.18.5',perms:{notifications:true,files:true,install:true,battery:false},flags:{snd_done:true,snd_action:true,snd_quota:false,noseccomp:false},ready:true,online:true};
+const route=(method,path,body)=>{const u=new URL('http://x'+path),p=u.pathname;const parsedBody=body?JSON.parse(body):null;srv.calls.push({method,p,q:u.search,body:parsedBody});
+  if(p==='/global/config'&&method==='PATCH'&&parsedBody){
+    if(parsedBody.provider){srv.config.provider=Object.assign(srv.config.provider||{},parsedBody.provider)}
+    else if(parsedBody.$schema&&window.__cfg){try{const c=JSON.parse(window.__cfg);srv.config.provider=c.provider||{}}catch(_){}}
+    return srv.config;
+  }
+  if(p==='/config/providers'){
+    const base=[{id:'opencode',name:'OpenCode Zen',models:{
+      'big-pickle':{id:'big-pickle',name:'Big Pickle',limit:{context:200000},cost:{input:0,output:0},variants:{low:{},high:{}}},
+      'gpt-x':{id:'gpt-x',name:'GPT X',limit:{context:100000},cost:{input:1,output:2}},
+      'claude-super-long-preview-ultra-experimental-context-window-1m':{id:'claude-super-long-preview-ultra-experimental-context-window-1m',name:'Claude Super Long Preview Ultra Experimental Context Window 1M',limit:{context:1000000},cost:{input:0,output:0},variants:{low:{},high:{}}}}}];
+    for(const [pid,pdef] of Object.entries(srv.config.provider||{})){
+      const models={};
+      for(const [mid,mdef] of Object.entries(pdef.models||{})){
+        models[mid]=Object.assign({id:mid,providerID:pid,name:mdef.name||mid},mdef);
+      }
+      base.push({id:pid,name:pdef.name||pid,source:'config',env:[],options:pdef.options||{},models});
+    }
+    return{providers:base,default:{opencode:'big-pickle'}};
+  }
  if(p==='/experimental/console/orgs')return window.__orgs!==undefined?window.__orgs:{orgs:[{accountEmail:'dev@example.com',orgName:'Org',active:true}]};
  if(p==='/provider')return{all:[{id:'opencode',name:'OpenCode'},{id:'anthropic',name:'Anthropic'}],connected:['opencode'],default:{}};
  if(p==='/provider/auth')return{anthropic:[{type:'oauth',label:'Claude Pro/Max'},{type:'api',label:'API key'}]};
@@ -49,7 +64,16 @@ window.OC={
  resetInstall(){window.__resetInstall=1;OCEvent('install',{pct:30});setTimeout(()=>OCEvent('install',{done:true}),20)},
   start(){setTimeout(()=>OCEvent('ready',{}),10)},restartServer(){window.__restarted=1},resetConfig(){window.__resetConfig=1},hardRestart(){window.__hardRestart=1},minimize(){},grant(k){window.__granted=k},setFlag(k,v){(window.__flags=window.__flags||{})[k]=v},testSound(){},
  http(id,m,p,b){setTimeout(()=>{try{OCEvent('http',{id,status:200,ct:'application/json',body:JSON.stringify(route(m,p,b))})}catch(e){OCEvent('http',{id,status:500,ct:'text/plain',body:String(e)})}},4)},
- drop(){},uiHandshake(){},silentSession(sid){(window.__silentSessions=window.__silentSessions||[]).push(sid)},sseStart(){sse=true;setTimeout(()=>OCEvent('sse',{t:'open'}),5)},sseStop(){},wsOpen(id){setTimeout(()=>{OCEvent('ws',{id,t:'open'});OCEvent('ws',{id,t:'msg',d:'root@phone:~# '})},5)},wsSend(id,t){(window.__wsSent=window.__wsSent||[]).push(t)},wsClose(){},
+  extHttp(id,m,u,h,b){setTimeout(()=>OCEvent('exthttp',{id,ok:false,status:0,ct:'',body:'',err:'mock offline'}),4)},
+  isOnline(){return true},
+  warpStatus:()=>JSON.stringify({enabled:false,mode:'direct',activeMode:'direct',status:'idle',ip:'198.51.100.1',city:'Amsterdam',country:'Netherlands',countryCode:'NL',autoRotate:true,autoFallback:true,cfonCountry:'DE',burnedCount:0,rotations:0,wgConfigs:[]}),
+  warpRefreshGeo(){},warpSetConfig(j){window.__warpCfg=j},warpRotate(sid){setTimeout(()=>OCEvent('warp_rotated',{ok:true,ip:'203.0.113.7',city:'Frankfurt',country:'Germany',sessionID:sid}),10)},
+  warpClearBurned:()=>JSON.stringify({enabled:false,mode:'direct',burnedCount:0}),
+  warpImportWg:(n,c)=>JSON.stringify({ok:true,endpoint:'127.0.0.1:51820'}),warpSelectWg:()=>JSON.stringify({}),warpDeleteWg:()=>JSON.stringify({}),
+  cacheMediaImage(id,s,f){setTimeout(()=>OCEvent('media_cached',{id,ok:true,path:'/root/media/'+f,name:f,url:s}),5)},
+  saveMediaImage(s,f){setTimeout(()=>OCEvent('media_saved',{ok:true,name:f||'image.png'}),5)},
+  shareImage(s,f){window.__sharedImage=[s,f]},
+  drop(){},uiHandshake(){},silentSession(sid){(window.__silentSessions=window.__silentSessions||[]).push(sid)},sseStart(){sse=true;setTimeout(()=>OCEvent('sse',{t:'open'}),5)},sseStop(){},wsOpen(id){setTimeout(()=>{OCEvent('ws',{id,t:'open'});OCEvent('ws',{id,t:'msg',d:'root@phone:~# '})},5)},wsSend(id,t){(window.__wsSent=window.__wsSent||[]).push(t)},wsClose(){},
  ls:p=>JSON.stringify({ok:true,path:p,items:[{name:'app',dir:true,size:0},{name:'notes.txt',dir:false,size:120},{name:'shot.png',dir:false,size:2048}]}),fs:(op,p,arg)=>{window.__fsOps=window.__fsOps||[];(window.__fsOps).push({op,p,arg});return JSON.stringify({ok:true})},
  readText(p){const f=srv.files[p];return f===undefined?JSON.stringify({ok:false,err:'Not a file'}):JSON.stringify({ok:true,text:f})},
  writeText(p,t){srv.files[p]=String(t);(window.__writes=window.__writes||[]).push(p);return JSON.stringify({ok:true})},

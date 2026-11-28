@@ -1,10 +1,10 @@
 (function(){
 const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
-let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn,stickyEl,agentAvatar;
+let msgsEl,dockEl,popEl,ta,sendBtn,agentChip,modelChip,t2iChip,varChip,attsEl,jumpEl,statusEl,todoEl,revEl,fileIn,nokeyEl,comp,projChip,vcsChip,projTxt,vcsTxt,footerPrompt,chatRoot,mmProgressEl,mmFloatBtn,stickyEl,agentAvatar;
 const msgEls=new Map(),partEls=new Map(),open=new Set(),timers=new Map();
 // Parts the user expanded/collapsed by hand: survives re-renders, never auto-collapsed.
 const manualParts=new Set();
-let atts=[],mentions=[],stick=true,revKey='',trail=[];
+let atts=[],mentions=[],stick=true,revKey='',trail=[],t2iOn=false,lastModelKey='',pendingResumeSid='',lastAutoRotateAt=0,warpWaiter=null;
 // True while WE move scrollTop programmatically: the scroll handler must not interpret our own
 // intermediate positions as "user scrolled away" (that killed pinning mid-inflation and left the
 // session opened in the middle).
@@ -70,6 +70,7 @@ O.chatInit=root=>{
   agentAvatar=h('button',{class:'agent-avatar',title:O.tr('Who is answering','Кто отвечает'),onclick:agentCard},O.icon('bot'));
   O.longPress(agentAvatar,()=>O.openAgents(),500);
   modelChip=h('button',{class:'hud-pill model-pill',onclick:()=>O.openModels()},h('span',null,O.tr('Select model','Выбрать модель')),O.icon('chevD'));
+  t2iChip=h('button',{class:'hud-pill t2i-pill hide',title:O.tr('Toggle T2I photo generation mode','Режим генерации фото (T2I)'),onclick:()=>{t2iOn=!t2iOn;t2iChip.classList.toggle('on',t2iOn);updateChips()}},O.icon('image'),h('span',null,'T2I'));
   // Tap: while a call runs it ends it, otherwise a sheet asks what the user wants.
   // Long-press: straight to dictation, the fastest path for a single phrase.
   const micBtn=h('button',{class:'hud-icon-btn mic-btn',onclick:()=>{
@@ -96,7 +97,7 @@ O.chatInit=root=>{
   },500);
   // Composer chips: ONLY + / mode / model / voice / send. Outline, context, plan and the avatar
   // moved into the mode chip's long-press menu — the row overflowed on narrow phones.
-  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentChip,modelChip);
+  const cbarLeft=h('div',{class:'cbar-left'},plusBtn,agentChip,modelChip,t2iChip);
   // Zen IP rotation chip (only for OpenCode provider models): manual rotate on tap.
   const zenIpBtn=h('button',{class:'hud-icon-btn zen-ip-btn hide',title:O.tr('Rotate IP for Zen models','Сменить IP для моделей Zen'),onclick:async()=>{
     if(O.rotateZenIp){await O.rotateZenIp();return}
@@ -204,6 +205,27 @@ O.chatInit=root=>{
   });
 
   bus.on('meta',updateChips);bus.on('conn',updateChips);
+  O.on('warp_rotated',async d=>{
+    if(!d)return;
+    if(warpWaiter){const fn=warpWaiter;warpWaiter=null;fn(d);return}
+    const loc=[d.city,d.country].filter(Boolean).join(', ');
+    if(d.ok){
+      O.toast(O.tr('New IP: ','Новый IP: ')+(d.ip||'WARP')+(loc?(' ('+loc+')'):''),3000);
+      const targetSid=pendingResumeSid||d.sessionID||'';
+      pendingResumeSid='';
+      if(targetSid&&targetSid===S.sid&&S.model&&!busy()){
+        try{
+          await api('POST','/session/'+targetSid+'/prompt_async',{
+            messageID:O.mid(),agent:S.agent,model:S.model,variant:S.variant||undefined,
+            parts:[{type:'text',synthetic:true,text:'The previous IP/quota limit has cleared after switching exit IP via WARP. Continue cleanly from where you left off without repeating completed work.'}]
+          },{timeout:30000});
+        }catch(_){}
+      }
+    }else if(pendingResumeSid||d.sessionID){
+      pendingResumeSid='';
+      O.toast(d.message||O.tr('WARP IP rotation failed','Не удалось сменить IP через WARP'),3500);
+    }
+  });
   bus.on('serror',p=>{if(p&&(!p.sessionID||p.sessionID===S.sid)){const e=p.error;const t=e&&(e.data&&e.data.message||e.name);if(t&&e.name!=='MessageAbortedError'){
     const kind=O.errorKind(e,t);
     // ContextOverflow mid-run is a signal for the core's auto-compaction, not a user-facing error.
@@ -214,6 +236,8 @@ O.chatInit=root=>{
       if(kind==='quota'&&O._fallback&&p.sessionID===O._fallback.sid&&O._fallback.tries.length){/* fall through to fallback */}
       else return;
     }
+    // Zen-quota models: rotate the WARP exit IP first. Fork's key/model fallback stays as backup.
+    if(kind==='quota'&&maybeWarpRotate(p,t))return;
     if(O._fallback&&p.sessionID===O._fallback.sid&&O._fallback.tries.length){
       const fb=O._fallback;O._fallback=null;const next=fb.tries.shift();
       (async()=>{
@@ -257,6 +281,29 @@ O.chatInit=root=>{
   bus.on('perm',syncAgentPulse);
   updateChips();renderAll();
 };
+const quotaModelOf=p=>{
+  const sid=(p&&p.sessionID)||S.sid;
+  const s=sid?O.msgs(sid):null;
+  const last=s&&[...s.list].reverse().find(x=>x.info&&x.info.providerID&&x.info.modelID);
+  return (p&&(p.model||p.info))||(last&&last.info)||S.model;
+};
+// Only preinstalled OpenCode/Zen models may be rotated. 60s cooldown keeps a 429 storm
+// from spinning the proxy; when rotation is unavailable the caller keeps the fork fallback.
+function maybeWarpRotate(p,text){
+  const st=S.status[(p&&p.sessionID)||S.sid];
+  if(st&&st.type==='retry')return false;
+  if(!O.isZenQuotaModel||!O.isZenQuotaModel(quotaModelOf(p)))return false;
+  const wst=(O.native&&O.native.warpStatus?O.native.warpStatus():null)||{};
+  if(!wst.autoRotate||!(wst.enabled||wst.autoFallback)||wst.rotating)return false;
+  const now=Date.now();
+  if(now-lastAutoRotateAt<60000)return false;
+  lastAutoRotateAt=now;
+  pendingResumeSid=(p&&p.sessionID)||S.sid||'';
+  O.notifyLimit(O.tr('Rotating IP via WARP','Смена IP через WARP'),O.tr('Quota reached, switching IP and resuming...','Лимит квоты — меняем IP через WARP и продолжаем...'));
+  O.toast(O.tr('Quota limit reached — rotating WARP IP...','Лимит квоты — меняем IP через WARP...'),3200);
+  O.native.warpRotate(pendingResumeSid);
+  return true;
+}
 O.notifyLimit=(title,text)=>{
   try{if(window.OC&&OC.testSound)OC.testSound('quota')}catch(_){}
   try{if(O.native&&O.native.notify)O.native.notify('quota',title||O.tr('Limit Reached','Лимит исчерпан'),text||O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'))}catch(_){}
@@ -1543,7 +1590,33 @@ function fillTool(el,p){const st=p.state||{},m=toolMeta(p),isOpen=open.has(p.id)
     m.ic,h('span',{class:'t'},m.t||p.tool||O.tr('Tool','Инструмент')),
     rep>1?h('span',{class:'tool-rep'},'×'+rep):null,
     h('span',{class:'sub grow'},m.s||''),stat,O.icon('chevR','chev')));
+  const media=extractToolMedia(p);
+  if(media.length&&O.renderMediaCard){
+    const box=h('div',{style:{marginTop:'8px',display:'flex',flexDirection:'column',gap:'8px'}});
+    media.forEach(it=>box.append(O.renderMediaCard({rawSrc:it.rawSrc,filename:it.filename,caption:it.caption,compact:true})));
+    el.append(box);
+  }
   if(isOpen)el.append(h('div',{class:'tool-b'},toolBody(p)))}
+function extractToolMedia(p){
+  const st=p.state||{},md=st.metadata||{},out=String(st.output||md.output||'');
+  const seen=new Set(),res=[];
+  const add=(raw,fname,cap)=>{
+    const u=String(raw||'').trim();if(!u||seen.has(u))return;
+    const isImg=/^data:image\//i.test(u)||/\.(png|jpe?g|webp|gif|bmp|avif)(?:$|[?#])/i.test(u)||/\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(fname||'');
+    if(!isImg)return;
+    seen.add(u);res.push({rawSrc:u,filename:fname||O.basename(u.split('?')[0])||'image.png',caption:cap||''});
+  };
+  if(Array.isArray(st.attachments))st.attachments.forEach(a=>{if(a&&(a.url||a.uri||a.path))add(a.url||a.uri||a.path,a.filename||a.name,a.description||a.caption)});
+  if(Array.isArray(st.content))st.content.forEach(c=>{if(c&&(c.type==='file'||c.type==='image')&&(c.url||c.uri||c.data)){
+    const mime=c.mime||c.mimeType||'image/png';
+    const src=c.url||c.uri||(c.data?'data:'+mime+';base64,'+c.data:'');
+    if(mime.startsWith('image/')||src.startsWith('data:image/'))add(src,c.filename||c.name);
+  }});
+  [md.outputPaths,md.files,md.attachments].forEach(arr=>{if(Array.isArray(arr))arr.forEach(x=>add(typeof x==='string'?x:(x&&(x.url||x.path))))});
+  let m;const re=/^MEDIA_SAVED:([^\r\n]+)/gm;
+  while((m=re.exec(out))!==null)add(m[1].trim());
+  return res;
+}
 async function openChild(sid){try{if(!O.child(sid)){const s=await api('GET','/session/'+sid);(S.childSessions=S.childSessions||{})[sid]=s}}catch{}trail.push(S.sid);await O.openSession(sid);bus.emit('session')}
 O.openChild=openChild;
 
@@ -1919,6 +1992,14 @@ function updateChips(){
   else if(m)mName=m.modelID;
   const spanMo=modelChip.querySelector('span');
   if(spanMo)spanMo.textContent=mName;
+  const mk=m?(m.providerID+'/'+m.modelID):'';
+  const hasT2i=Boolean(mi&&O.isT2IModel&&O.isT2IModel(mi));
+  const pureT2i=Boolean(mi&&O.isPureT2IModel&&O.isPureT2IModel(mi));
+  if(mk!==lastModelKey){lastModelKey=mk;t2iOn=pureT2i}
+  if(t2iChip){
+    t2iChip.classList.toggle('hide',!hasT2i);
+    t2iChip.classList.toggle('on',hasT2i&&t2iOn);
+  }
   if(modelChip){
     const prof=Object.keys(O.modelProfiles()).find(k=>{
       const p=O.modelProfile(k);return p&&m&&p.main===(m.providerID+'/'+m.modelID);
@@ -1967,7 +2048,8 @@ function updateChips(){
   const nokey=!m&&!S.offline&&S.up;
   nokeyEl.classList.toggle('hide',!nokey);
   ta.disabled=!!S.offline&&!S.up;
-  ta.placeholder=ta.disabled?(O.tr('Offline — reading cached chats','Офлайн — чтение кэшированных чатов')):(O.tr('Chat with OpenCode...','Чат с OpenCode...'));
+  ta.placeholder=ta.disabled?(O.tr('Offline — reading cached chats','Офлайн — чтение кэшированных чатов'))
+    :(hasT2i&&t2iOn?O.tr('Describe image to generate...','Опишите изображение для генерации...'):O.tr('Chat with OpenCode...','Чат с OpenCode...'));
   updateSend();
 }
 function updateSend(){
@@ -2021,7 +2103,8 @@ function autosize(){
   if(ta.offsetHeight!==want){ta.style.height=want+'px';if(stick)scrollEnd()}
 }
 const BUILTINS=[
- {n:'new',d:'Начать новую сессию',i:'plus',run:()=>O.newSession()},
+  {n:'imagine',get d(){return O.tr('Generate image in chat (T2I)','Сгенерировать фото в чате (T2I)')},i:'image',run:arg=>{if(arg&&arg.trim())O.generateImagePrompt(arg.trim());else{ta.value='/imagine ';onInput();ta.focus()}}},
+  {n:'new',d:'Начать новую сессию',i:'plus',run:()=>O.newSession()},
  {n:'sessions',d:'Переключить сессию',i:'list',run:()=>O.openSessions()},
  {n:'models',d:'Выбрать модель',i:'cpu',run:()=>O.openModels()},
   {n:'plan',d:'Пошаговый план задачи',i:'list',run:()=>O.openPlan()},
@@ -2069,6 +2152,197 @@ const BUILTINS=[
  {n:'help',d:'Что я умею',i:'info',run:()=>O.openHelp()},
  {n:'exit',d:'Свернуть приложение (сервер продолжает работать)',i:'out',run:()=>OC.minimize()}];
 async function sess(){if(S.sid)return S.sid;const s=await O.newSession();return s.id}
+function resolveT2iEndpoint(){
+  const cfg=O.readCfgObj?O.readCfgObj():{provider:{}};
+  let authObj={};
+  try{
+    const ar=O.native&&O.native.readText?O.native.readText('/root/.local/share/opencode/auth.json'):null;
+    if(ar&&ar.ok&&ar.text)authObj=JSON.parse(ar.text||'{}')||{};
+  }catch(_){}
+  const KNOWN_URLS={
+    openai:'https://api.openai.com/v1',
+    openrouter:'https://openrouter.ai/api/v1',
+    xai:'https://api.x.ai/v1',
+    togetherai:'https://api.together.xyz/v1',
+    fireworks:'https://api.fireworks.ai/inference/v1'
+  };
+  const lookup=(pid,mid)=>{
+    if(!pid||!mid)return null;
+    const cp=(cfg.provider&&cfg.provider[pid])||{};
+    const mp=(S.providers||[]).find(p=>p.id===pid)||{};
+    const rawUrl=(cp.options&&cp.options.baseURL)||(mp.options&&mp.options.baseURL)||mp.api||KNOWN_URLS[pid]||'';
+    const baseURL=String(rawUrl||'').trim().replace(/\/+$/,'');
+    if(!baseURL)return null;
+    const rawKey=(cp.options&&cp.options.apiKey)||(mp.options&&mp.options.apiKey)||(authObj[pid]&&(authObj[pid].key||authObj[pid].access||authObj[pid].token))||'';
+    const headers=Object.assign({},(mp.options&&mp.options.headers)||{},(cp.options&&cp.options.headers)||{});
+    return{providerID:pid,modelID:mid,baseURL,apiKey:String(rawKey||''),headers};
+  };
+  if(S.model){
+    const curEp=lookup(S.model.providerID,S.model.modelID);
+    if(curEp)return curEp;
+  }
+  for(const [pid,pdef] of Object.entries(cfg.provider||{})){
+    const mods=pdef&&pdef.models?Object.entries(pdef.models):[];
+    for(const [mid,mdef] of mods){
+      if(O.isT2IModel&&O.isT2IModel(Object.assign({id:mid},mdef||{}))){
+        const ep=lookup(pid,mid);if(ep)return ep;
+      }
+    }
+  }
+  return null;
+}
+function parseT2iImages(data){
+  const imgs=[];let text='';
+  const seen=new Set();
+  const add=src=>{
+    const s=String(src||'').trim();if(!s||seen.has(s))return;
+    seen.add(s);imgs.push(s);
+  };
+  if(!data||typeof data!=='object')return{imgs,text};
+  if(Array.isArray(data.data)){
+    data.data.forEach(it=>{
+      if(!it)return;
+      if(it.b64_json)add('data:image/png;base64,'+it.b64_json);
+      else if(it.url)add(it.url);
+    });
+  }
+  if(data.url)add(data.url);
+  if(data.image)add(typeof data.image==='string'&&!data.image.startsWith('http')&&!data.image.startsWith('data:')?('data:image/png;base64,'+data.image):data.image);
+  if(Array.isArray(data.images)){
+    data.images.forEach(it=>{
+      if(typeof it==='string')add(it);
+      else if(it&&it.b64_json)add('data:image/png;base64,'+it.b64_json);
+      else if(it&&((it.image_url&&it.image_url.url)||it.url))add((it.image_url&&it.image_url.url)||it.url);
+    });
+  }
+  const msg=data.choices&&data.choices[0]&&data.choices[0].message;
+  if(msg){
+    if(Array.isArray(msg.images)){
+      msg.images.forEach(it=>{
+        if(typeof it==='string')add(it);
+        else if(it&&it.b64_json)add('data:image/png;base64,'+it.b64_json);
+        else if(it&&((it.image_url&&it.image_url.url)||it.url))add((it.image_url&&it.image_url.url)||it.url);
+      });
+    }
+    if(Array.isArray(msg.content)){
+      msg.content.forEach(c=>{
+        if(!c)return;
+        if(c.type==='image_url'&&c.image_url&&c.image_url.url)add(c.image_url.url);
+        else if(c.type==='image'&&(c.url||c.data))add(c.url||('data:'+(c.mime_type||'image/png')+';base64,'+c.data));
+        else if(c.type==='text'&&c.text)text+=(text?'\n':'')+c.text;
+      });
+    }else if(typeof msg.content==='string'){
+      let cleaned=msg.content;
+      const b64Re=/!\[[^\]]*\]\((data:image\/[^)\s]+)\)|(data:image\/[a-zA-Z0-9+]+;base64,[A-Za-z0-9+/=]+)/g;
+      let m;
+      while((m=b64Re.exec(msg.content))!==null){add(m[1]||m[2]);cleaned=cleaned.replace(m[0],'')}
+      const mdUrlRe=/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
+      while((m=mdUrlRe.exec(msg.content))!==null){add(m[1]);cleaned=cleaned.replace(m[0],'')}
+      const bareUrlRe=/https?:\/\/[^\s"'<>]+\.(?:png|jpe?g|webp|gif|avif)(?:\?[^\s"'<>]*)?/gi;
+      while((m=bareUrlRe.exec(cleaned))!==null){add(m[0])}
+      text=cleaned.trim();
+    }
+  }
+  return{imgs,text};
+}
+O.generateImagePrompt=async(promptText)=>{
+  const prompt=String(promptText||'').trim();
+  if(!prompt)return;
+  const ep=resolveT2iEndpoint();
+  if(!ep){
+    O.toast(O.tr('Connect a Custom API / OpenAI-compatible provider with a T2I model first','Сначала подключите Custom API провайдер с T2I-моделью'),4000);
+    if(O.openConnect)O.openConnect();
+    return;
+  }
+  let sid;
+  try{sid=await sess()}catch(e){O.toast(e.message||'Session error');return}
+  const uid=O.mid(),amid=O.mid();
+  const userM=O.upsertMsg({id:uid,sessionID:sid,role:'user',time:{created:Date.now()},agent:S.agent,model:{providerID:ep.providerID,modelID:ep.modelID}});
+  userM.local=true;
+  userM.parts=[{id:'prt_u_'+uid,sessionID:sid,messageID:uid,type:'text',text:prompt}];
+  bus.emit('msg',sid,userM);
+  const assistM=O.upsertMsg({id:amid,sessionID:sid,role:'assistant',time:{created:Date.now()},agent:S.agent,providerID:ep.providerID,modelID:ep.modelID});
+  assistM.local=true;
+  assistM.parts=[{id:'prt_a_wait_'+amid,sessionID:sid,messageID:amid,type:'text',text:O.tr('_Generating image via '+ep.modelID+'..._','_Генерирую фото через '+ep.modelID+'..._')}];
+  bus.emit('msg',sid,assistM);scrollEnd(true);
+  const base=ep.baseURL;
+  const vBase=/\/v\d+(?:alpha|beta)?(?:\/openai)?$/i.test(base)?base:(base+'/v1');
+  const imgEp=vBase+'/images/generations';
+  const chatEp=vBase+'/chat/completions';
+  const hdrs=Object.assign({'Content-Type':'application/json'},ep.headers||{});
+  if(ep.apiKey&&ep.apiKey!=='sk-local')hdrs['Authorization']='Bearer '+ep.apiKey;
+  const isQuotaErr=(status,msg)=>status===429||/quota|usage.?limit|rate.?limit|limit\s+reached|insufficient|exceeded|credit|balance|funds|\b429\b/i.test(String(msg||''));
+  const callApiOnce=async()=>{
+    let lastStatus=0,lastMsg='';
+    let r=await O.extFetch(imgEp,{method:'POST',headers:hdrs,body:{model:ep.modelID,prompt,n:1,response_format:'b64_json'},timeout:95000});
+    if(!r.ok&&r.status===400&&/response_format/i.test(r.text||'')){
+      r=await O.extFetch(imgEp,{method:'POST',headers:hdrs,body:{model:ep.modelID,prompt,n:1},timeout:95000});
+    }
+    if(r.ok){
+      const parsed=parseT2iImages(r.data);
+      if(parsed.imgs.length)return parsed;
+    }else{
+      lastStatus=r.status;
+      lastMsg=(r.data&&r.data.error&&r.data.error.message)||(r.data&&r.data.message)||r.text||('HTTP '+r.status);
+      if(lastStatus===401||lastStatus===403||isQuotaErr(lastStatus,lastMsg))throw Object.assign(new Error(lastMsg),{status:lastStatus});
+    }
+    let rc=await O.extFetch(chatEp,{method:'POST',headers:hdrs,body:{model:ep.modelID,messages:[{role:'user',content:prompt}],modalities:['image','text']},timeout:95000});
+    if(!rc.ok&&rc.status===400&&/modalit/i.test(rc.text||'')){
+      rc=await O.extFetch(chatEp,{method:'POST',headers:hdrs,body:{model:ep.modelID,messages:[{role:'user',content:prompt}]},timeout:95000});
+    }
+    if(rc.ok){
+      const parsed=parseT2iImages(rc.data);
+      if(parsed.imgs.length)return parsed;
+      throw new Error(parsed.text||O.tr('Model returned text without an image','Модель вернула ответ без изображения'));
+    }
+    const cMsg=(rc.data&&rc.data.error&&rc.data.error.message)||(rc.data&&rc.data.message)||rc.text||lastMsg||('HTTP '+(rc.status||lastStatus));
+    throw Object.assign(new Error(cMsg),{status:rc.status||lastStatus});
+  };
+  try{
+    let result;
+    try{
+      result=await callApiOnce();
+    }catch(e){
+      const wst=O.native&&O.native.warpStatus?O.native.warpStatus():{};
+      const zen=!O.isZenQuotaModel||O.isZenQuotaModel({providerID:ep.providerID,modelID:ep.modelID,name:ep.modelID});
+      if(isQuotaErr(e.status,e.message)&&zen&&wst.autoRotate&&(wst.enabled||wst.autoFallback)&&O.native&&O.native.warpRotate){
+        O.toast(O.tr('Quota limit reached — rotating WARP IP...','Лимит квоты — меняем IP через WARP...'),3200);
+        await new Promise(resolve=>{
+          const tm=setTimeout(()=>{warpWaiter=null;resolve()},25000);
+          warpWaiter=()=>{clearTimeout(tm);resolve()};
+          O.native.warpRotate('');
+        });
+        result=await callApiOnce();
+      }else throw e;
+    }
+    const parts=[];
+    if(result.text)parts.push({id:'prt_t_'+amid,sessionID:sid,messageID:amid,type:'text',text:result.text});
+    for(let i=0;i<result.imgs.length;i++){
+      const rawSrc=result.imgs[i];
+      const fname='t2i_'+Date.now()+'_'+(i+1)+'.png';
+      let finalUrl=rawSrc,finalName=fname;
+      if(O.native&&O.native.cacheMedia){
+        const cached=await O.native.cacheMedia(rawSrc,fname);
+        if(cached&&cached.ok&&cached.url){finalUrl=cached.url;finalName=cached.name||fname}
+      }
+      parts.push({id:'prt_img_'+amid+'_'+i,sessionID:sid,messageID:amid,type:'file',mime:'image/png',url:finalUrl,filename:finalName,description:prompt});
+    }
+    assistM.info.time={created:assistM.info.time.created,completed:Date.now()};
+    assistM.parts=parts;
+    bus.emit('msg',sid,assistM);scrollEnd(true);
+    if(O.saveSessionMsgs)O.saveSessionMsgs(sid);
+  }catch(e){
+    assistM.info.time={created:assistM.info.time.created,completed:Date.now()};
+    assistM.parts=[{id:'prt_err_'+amid,sessionID:sid,messageID:amid,type:'text',text:'**T2I Error:** '+String(e.message||'Request failed')}];
+    bus.emit('msg',sid,assistM);
+    if(isQuotaErr(e.status,e.message)){
+      O.notifyLimit(O.tr('Limit Reached','Лимит исчерпан'),O.tr('Free quota limit reached.','Бесплатные лимиты закончились.'));
+      O.showQuotaAccountModal(e.message);
+    }else{
+      O.toast(e.message||'T2I error',4000);
+    }
+  }
+};
 async function doInit(){if(!S.model)return O.openConnect();try{const sid=await sess();api('POST','/session/'+sid+'/init',{messageID:O.mid(),providerID:S.model.providerID,modelID:S.model.modelID},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}}
 async function doUndo(){const l=O.visibleMsgs(S.sid||'').filter(m=>m.info.role==='user');if(!l.length)return O.toast('Нечего отменять');revertTo(l[l.length-1])}
 async function doRedo(){try{await api('POST','/session/'+S.sid+'/unrevert',{})}catch(e){O.toast(e.message)}}
@@ -2174,6 +2448,10 @@ async function onSend(modelOverride,fromQueue){
     if(sc){if(!S.model)return O.openConnect();clear();try{const sid=await sess();O.maybeAutoTitle(sid,text);api('POST','/session/'+sid+'/command',{command:sc.name,arguments:cm[2]||'',agent:S.agent,model:modelStr()},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}}
 
   if(!sendModel&&!O.mmActive()){O.toast('Подключите провайдера, чтобы выбрать модель');O.openConnect();return}
+  const curMi=sendModel&&O.modelInfo(sendModel.providerID,sendModel.modelID);
+  if(text&&!atts.length&&curMi&&((O.isPureT2IModel&&O.isPureT2IModel(curMi))||(O.isT2IModel&&O.isT2IModel(curMi)&&t2iOn))){
+    clear();await O.generateImagePrompt(text);return;
+  }
   if(text.startsWith('!')){const cmd=text.slice(1).trim();
     if(/^opencode(\s+tui)?\s*$/i.test(cmd)){O.toast('Приложение уже является интерфейсом OpenCode. TUI — во вкладке «Терминал» → Shell, агент — во вкладке «Чат»',6000);clear();return}
     clear();try{const sid=await sess();O.maybeAutoTitle(sid,text);api('POST','/session/'+sid+'/shell',{agent:S.agent,model:S.model,command:cmd},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}return}

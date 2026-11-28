@@ -1,13 +1,13 @@
 # One-time setup
 
-1. Push this repo to `lovereplit-bit/OCM` (branch `main`). The workflow in
+1. Push this repo to `omEZZka/ocm` (branch `main`). The workflow in
    `.github/workflows/build.yml` builds on every push and publishes the APK to Releases.
-   Release names look like `OpenCode-1.0.8-<code>.apk`; the app compares `<code>` for OTA.
+   Release names look like `OpenCode-2.30.1-<code>.apk`; the app compares `<code>` for OTA.
 
 2. Google sign-in (optional until you want it):
    - Google Cloud Console > APIs & Services > Credentials
    - Create an OAuth client of type **Web application**; copy its client ID into the repo secret `GOOGLE_WEB_CLIENT_ID`
-   - Create a second OAuth client of type **Android** with package `app.opencodemob` and the SHA-1 printed by the
+   - Create a second OAuth client of type **Android** with package `app.opencode_by_omma` and the SHA-1 printed by the
      "Signing key" step of the workflow run
    - Without the secret the app falls back to a local profile and says so on the login screen
 
@@ -16,15 +16,19 @@
    over yours, so for a public repo move it into secrets instead: set `KEYSTORE_BASE64` (base64 of the .jks) and
    `KEYSTORE_PASSWORD`, then delete the file from the repo. The workflow prefers the secrets.
 
-4. Version: change `VERSION_NAME` in the workflow. The version code is `29887625 + run_number`, so every build
-   stays above the 1.1.x upstream-client line that reached 29887625.
+4. Version: change `VERSION_NAME` in the workflow (currently `2.30.1`). The version code is
+   `29889000 + run_number`, so every build stays above all previously published lines (the 1.1.x
+   upstream-client line reached 29887625). The Gradle defaults are `2.30.1` / `30230101`.
 
 ## What the build does
 
 1. `scripts/build-runtime.sh` - proot as native libs, Ubuntu arm64 rootfs, newest stable opencode `v1.*`.
 2. `scripts/fetch-ui-deps.sh` - marked, DOMPurify, highlight.js, xterm.js (pinned npm versions) and the file-type
    icons from the opencode repo at the same tag. Everything is vendored into the APK, so the UI needs no network.
-3. Gradle builds, signs and the workflow publishes `OpenCode-<version>-<code>.apk` to Releases.
+3. Gradle builds with `--stacktrace`; stdout/stderr go to `gradle-build.log` via `tee` with `pipefail`.
+   On failure `scripts/report-failure.py` posts the log to the GitHub step summary and the commit comment;
+   the log is always uploaded as the `gradle-build-log` artifact.
+4. The workflow publishes `OpenCode-<version>-<code>.apk` to Releases.
 
 ## Behaviour worth knowing
 

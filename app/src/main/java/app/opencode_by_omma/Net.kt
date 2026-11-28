@@ -25,6 +25,16 @@ object Net {
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(15, TimeUnit.MINUTES).writeTimeout(60, TimeUnit.SECONDS)
         .connectionPool(okhttp3.ConnectionPool(8, 10, TimeUnit.MINUTES))
         .retryOnConnectionFailure(true).build()
+    private val extHttp = OkHttpClient.Builder()
+        .connectTimeout(12, TimeUnit.SECONDS).readTimeout(90, TimeUnit.SECONDS).writeTimeout(30, TimeUnit.SECONDS)
+        .followRedirects(true).followSslRedirects(true).build()
+    private val proxiedExtHttp by lazy {
+        extHttp.newBuilder()
+            .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", WarpManager.GATE_PORT)))
+            .build()
+    }
+    /** External (non-local-server) requests go through the WARP gate only when WARP is enabled. */
+    fun externalClient(): OkHttpClient = if (WarpManager.isProxied()) proxiedExtHttp else extHttp
     private val stream = http.newBuilder().readTimeout(0, TimeUnit.SECONDS).pingInterval(20, TimeUnit.SECONDS).build()
     private val pool = Executors.newCachedThreadPool()
     private val sockets = ConcurrentHashMap<String, WebSocket>()
@@ -33,6 +43,49 @@ object Net {
 
     private fun base() = "127.0.0.1:${ServerState.port}"
     private fun auth() = Runtime.basic(ServerState.password)
+
+    /** Arbitrary external URL called from the UI; result is delivered as OCEvent('exthttp', json). */
+    fun extRequest(c: Context, id: String, method: String, url: String, headersJson: String, body: String, emit: (String, JSONObject) -> Unit) {
+        pool.execute {
+            val o = JSONObject().put("id", id)
+            try {
+                val cleanMethod = method.uppercase().ifEmpty { "GET" }
+                val needsBody = cleanMethod == "POST" || cleanMethod == "PUT" || cleanMethod == "PATCH"
+                val rb = if (needsBody) body.toRequestBody("application/json; charset=utf-8".toMediaType()) else null
+                val b = Request.Builder().url(url).method(cleanMethod, rb)
+                if (headersJson.isNotBlank()) {
+                    try {
+                        val hObj = JSONObject(headersJson)
+                        val keys = hObj.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            val v = hObj.optString(k, "")
+                            if (k.isNotBlank() && v.isNotBlank()) b.header(k, v)
+                        }
+                    } catch (_: Exception) {}
+                }
+                externalClient().newCall(b.build()).execute().use { r: Response ->
+                    o.put("status", r.code)
+                        .put("ok", r.isSuccessful)
+                        .put("ct", r.header("Content-Type") ?: "")
+                    val bytes = try { r.body?.bytes() ?: ByteArray(0) } catch (_: Exception) { ByteArray(0) }
+                    if (bytes.size < 200_000) o.put("body", String(bytes, Charsets.UTF_8))
+                    else {
+                        val dir = File(c.cacheDir, "resp").apply { mkdirs() }
+                        val cutoff = System.currentTimeMillis() - 10 * 60_000L
+                        dir.listFiles()?.forEach { f ->
+                            if (f.isFile && f.lastModified() < cutoff) try { f.delete() } catch (_: Exception) {}
+                        }
+                        File(dir, id).writeBytes(bytes)
+                        o.put("file", true)
+                    }
+                }
+            } catch (e: Exception) {
+                o.put("ok", false).put("status", 0).put("err", e.message ?: e.toString())
+            }
+            emit("exthttp", o)
+        }
+    }
 
     fun request(c: Context, id: String, method: String, path: String, body: String, emit: (String, JSONObject) -> Unit) {
         pool.execute {

@@ -3,12 +3,69 @@ const O=window.OCM,h=O.h,S=O.S,api=O.api,bus=O.bus;
 let treeEl,titleEl,exp=new Set(),cache=new Map(),gst={},filterQuery='';
 const sortN=a=>a.sort((x,y)=>(x.type===y.type?0:x.type==='directory'?-1:1)||x.name.localeCompare(y.name));
 const absOf=n=>n.absolute||(S.dir+'/'+n.path);
+const PRESET_DIRS=[
+  {label:'Загрузки',icon:'down',path:'/storage/emulated/0/Download'},
+  {label:'Документы',icon:'doc',path:'/storage/emulated/0/Documents'},
+  {label:'Галерея',icon:'image',path:'/storage/emulated/0/DCIM'},
+  {label:'OpenCode',icon:'bot',path:'/storage/emulated/0/OpenCode'},
+  {label:'Дом (/root)',icon:'folder',path:'/root'},
+  {label:'SD-карта',icon:'folder',path:'/storage/emulated/0'}
+];
 O.filesInit=root=>{
   titleEl=h('b',{class:'grow',style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},'Файлы');
   treeEl=h('div',{id:'tree',class:'modern-tree'});
   const searchInp=h('input',{class:'files-search-inp',placeholder:'Поиск в проекте...',oninput:e=>{filterQuery=e.target.value.toLowerCase().trim();draw()}});
   const searchWrap=h('div',{class:'files-search-wrap'},O.icon('search'),searchInp,
     h('button',{class:'ibtn s',style:{marginLeft:'auto'},onclick:()=>{searchInp.value='';filterQuery='';draw()}},O.icon('x')));
+
+  const pathInp=h('input',{
+    class:'files-path-inp mono',
+    placeholder:'Введите путь (напр. /sdcard/Download)...',
+    value:S.dir||'/root',
+    onkeydown:e=>{if(e.key==='Enter')applyPath(pathInp.value)}
+  });
+  const pathApplyBtn=h('button',{
+    class:'btn sm pri',
+    style:{padding:'3px 10px',fontSize:'12px',borderRadius:'8px',marginLeft:'auto',flexShrink:0},
+    onclick:()=>applyPath(pathInp.value)
+  },O.tr('Go','Перейти'));
+  const pathBar=h('div',{class:'files-path-bar'},O.icon('folder'),pathInp,pathApplyBtn);
+
+  const presetChips=[];
+  const presetsScroll=h('div',{class:'files-presets-scroll'});
+  PRESET_DIRS.forEach(pd=>{
+    const chip=h('button',{
+      class:'files-preset-chip'+(S.dir===pd.path?' on':''),
+      onclick:()=>applyPath(pd.path)
+    },O.icon(pd.icon),pd.label);
+    presetChips.push({chip,path:pd.path});
+    presetsScroll.append(chip);
+  });
+  const syncPathUi=()=>{
+    const d=S.dir||'/root';
+    pathInp.value=d;
+    titleEl.textContent=O.basename(d)||'/';
+    presetChips.forEach(pc=>{
+      pc.chip.classList.toggle('on',pc.path===d||
+        (pc.path==='/storage/emulated/0/Download'&&d==='/sdcard/Download')||
+        (pc.path==='/storage/emulated/0/Documents'&&d==='/sdcard/Documents'));
+    });
+  };
+  const applyPath=async p=>{
+    let target=String(p||'').trim();
+    if(!target)target='/root';
+    if(target.startsWith('~/'))target='/root/'+target.slice(2);
+    target=target.replace(/\/+$/,'');
+    if(!target.startsWith('/'))target='/'+target;
+    try{
+      await O.setDir(target);
+      syncPathUi();
+      O.toast(O.tr('Working folder: ','Рабочая папка: ')+target,1500);
+    }catch(e){
+      O.toast(O.tr('Could not change folder: ','Ошибка смены папки: ')+e.message,3000);
+    }
+  };
+
   root.append(
     h('div',{class:'pane-h'},
       O.icon('folder'),titleEl,
@@ -17,10 +74,12 @@ O.filesInit=root=>{
       h('button',{class:'ibtn s',title:'Новый файл',onclick:()=>newEntry('',false)},O.icon('plus')),
       h('button',{class:'ibtn s',title:'Обновить',onclick:()=>O.refreshFiles(true)},O.icon('refresh'))
     ),
+    pathBar,
+    presetsScroll,
     searchWrap,
     treeEl
   );
-  bus.on('files',O.debounce(()=>{O.refreshFiles(false);if(O.scheduleProjectMap)O.scheduleProjectMap()},600));bus.on('dir',()=>{exp.clear();cache.clear();treeEl.textContent='';titleEl.textContent=O.basename(S.dir)||'/'});
+  bus.on('files',O.debounce(()=>{O.refreshFiles(false);if(O.scheduleProjectMap)O.scheduleProjectMap()},600));bus.on('dir',()=>{exp.clear();cache.clear();treeEl.textContent='';syncPathUi()});
   bus.on('idle',()=>{O.refreshFiles(false);if(O.scheduleProjectMap)O.scheduleProjectMap()})};
 // Directory listings are cached in IndexedDB for offline use. Without an index the cache grew
 // forever (one key per directory ever opened, in every project), so keep a per-project list of the

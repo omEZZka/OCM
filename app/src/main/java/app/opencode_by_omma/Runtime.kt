@@ -328,6 +328,53 @@ object Runtime {
         return a
     }
 
+    /** True only when the user explicitly enabled a non-direct WARP mode (persisted by WarpManager). */
+    fun warpEnabled(c: Context): Boolean = try {
+        val f = File(c.filesDir, "warp/state.json")
+        if (!f.exists()) false
+        else {
+            val m = org.json.JSONObject(f.readText()).optString("mode", "direct").lowercase().trim()
+            m.isNotEmpty() && m != "direct"
+        }
+    } catch (_: Exception) { false }
+
+    /** Checks if the device currently has an active internet-capable network. */
+    fun isOnline(c: Context): Boolean = try {
+        val cm = c.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
+        val net = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(net) ?: return false
+        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    } catch (_: Exception) {
+        false
+    }
+
+    /** Disposes the running OpenCode server instance so updated opencode.json models load immediately. */
+    fun disposeRunningInstance() {
+        if (!ServerState.ready || ServerState.port <= 0) return
+        kotlin.concurrent.thread(isDaemon = true) {
+            try {
+                val con = URL("http://127.0.0.1:${ServerState.port}/instance/dispose").openConnection() as HttpURLConnection
+                con.requestMethod = "POST"
+                con.connectTimeout = 2500
+                con.readTimeout = 4000
+                con.setRequestProperty("Authorization", basic(ServerState.password))
+                con.setRequestProperty("Content-Type", "application/json")
+                con.doOutput = true
+                con.outputStream.use { it.write("{}".toByteArray()) }
+                con.responseCode
+                con.disconnect()
+
+                // Warm up provider registry right away so SessionPrompt.getModel sees new models
+                val warm = URL("http://127.0.0.1:${ServerState.port}/config/providers").openConnection() as HttpURLConnection
+                warm.connectTimeout = 2500
+                warm.readTimeout = 5000
+                warm.setRequestProperty("Authorization", basic(ServerState.password))
+                warm.responseCode
+                warm.disconnect()
+            } catch (_: Exception) {}
+        }
+    }
+
     /** Runs a short-lived command inside the proot env with merged piped output (for `opencode console login/logout`). */
     fun prootCmd(c: Context, uid: String, cmd: List<String>): Process {
         val lib = c.applicationInfo.nativeLibraryDir
@@ -347,44 +394,181 @@ object Runtime {
         return pb.start()
     }
 
+    /** Strip JSONC comments and trailing commas outside string literals so URLs like https:// are preserved. */
+    internal fun cleanJson(raw: String): String {
+        val noComments = StringBuilder(raw.length)
+        var i = 0
+        val n = raw.length
+        var inString = false
+        var escaped = false
+        while (i < n) {
+            val c = raw[i]
+            if (inString) {
+                noComments.append(c)
+                if (escaped) {
+                    escaped = false
+                } else if (c == '\\') {
+                    escaped = true
+                } else if (c == '\u0022') {
+                    inString = false
+                }
+                i++
+                continue
+            }
+            if (c == '\u0022') {
+                inString = true
+                noComments.append(c)
+                i++
+                continue
+            }
+            if (c == '/' && i + 1 < n) {
+                val next = raw[i + 1]
+                if (next == '/') {
+                    i += 2
+                    while (i < n && raw[i] != '\n') i++
+                    continue
+                }
+                if (next == '*') {
+                    i += 2
+                    while (i + 1 < n && !(raw[i] == '*' && raw[i + 1] == '/')) i++
+                    i = if (i + 1 < n) i + 2 else n
+                    continue
+                }
+            }
+            noComments.append(c)
+            i++
+        }
+
+        val s = noComments.toString()
+        val out = StringBuilder(s.length)
+        inString = false
+        escaped = false
+        var idx = 0
+        val len = s.length
+        while (idx < len) {
+            val c = s[idx]
+            if (inString) {
+                out.append(c)
+                if (escaped) {
+                    escaped = false
+                } else if (c == '\\') {
+                    escaped = true
+                } else if (c == '\u0022') {
+                    inString = false
+                }
+                idx++
+                continue
+            }
+            if (c == '\u0022') {
+                inString = true
+                out.append(c)
+                idx++
+                continue
+            }
+            if (c == ',') {
+                var j = idx + 1
+                while (j < len && s[j].isWhitespace()) j++
+                if (j < len && (s[j] == '\u007D' || s[j] == ']')) {
+                    idx++
+                    continue
+                }
+            }
+            out.append(c)
+            idx++
+        }
+        return out.toString().trim()
+    }
+
     fun sanitizeConfig(c: Context, uid: String, forceReset: Boolean = false) {
         try {
             val home = home(c, uid)
             val cfgDir = File(home, ".config/opencode").apply { mkdirs() }
             val configFile = File(cfgDir, "opencode.json")
-            val files = listOf(configFile, File(cfgDir, "opencode.jsonc"))
-            for (f in files) {
-                if (!f.exists()) continue
-                if (forceReset) {
-                    val bak = File(cfgDir, f.name + ".bak-" + System.currentTimeMillis())
-                    try { f.renameTo(bak) } catch (_: Exception) {}
-                    f.writeText("{}\n")
-                    continue
-                }
-                val txt = f.readText().trim()
-                if (txt.isEmpty()) {
-                    f.writeText("{}\n")
-                    continue
+            val jsoncFile = File(cfgDir, "opencode.jsonc")
+
+            // Migrate jsonc contents into json so there is no split-brain config. Keep a backup
+            // of the original jsonc: users with custom settings must not lose a single line.
+            if (jsoncFile.exists()) {
+                if (!configFile.exists() || configFile.length() == 0L) {
+                    try { jsoncFile.copyTo(configFile, overwrite = true) } catch (_: Exception) {}
+                } else {
+                    try {
+                        val from = org.json.JSONObject(cleanJson(jsoncFile.readText()))
+                        val to = org.json.JSONObject(cleanJson(configFile.readText()))
+                        var merged = false
+                        val keys = from.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            if (!to.has(k)) { to.put(k, from.get(k)); merged = true }
+                        }
+                        if (merged) configFile.writeText(to.toString(2))
+                    } catch (_: Exception) {}
                 }
                 try {
-                    val obj = org.json.JSONObject(ProxyShim.stripJsoncPublic(txt))
-                    val prov = obj.optJSONObject("provider")
-                    if (prov != null) {
-                        prov.remove("local")
-                        prov.remove("ollama")
-                        if (prov.length() == 0) obj.remove("provider")
-                    }
-                    f.writeText(obj.toString(2))
-                } catch (_: Exception) {
-                    val bak = File(cfgDir, f.name + ".corrupt-" + System.currentTimeMillis())
-                    try { f.renameTo(bak) } catch (_: Exception) {}
-                    f.writeText("{}\n")
-                }
+                    jsoncFile.copyTo(File(cfgDir, "opencode.jsonc.migrated-" + System.currentTimeMillis()), overwrite = true)
+                } catch (_: Exception) {}
+                try { jsoncFile.delete() } catch (_: Exception) {}
             }
+
+            if (forceReset) {
+                if (configFile.exists()) {
+                    val bak = File(cfgDir, "opencode.json.bak-" + System.currentTimeMillis())
+                    try { configFile.renameTo(bak) } catch (_: Exception) {}
+                }
+                val fresh = org.json.JSONObject()
+                configFile.writeText(fresh.toString(2))
+                return
+            }
+
             if (!configFile.exists()) {
-                configFile.writeText("{}\n")
+                configFile.writeText(org.json.JSONObject().toString(2))
+                return
+            }
+
+            val txt = configFile.readText().trim()
+            if (txt.isEmpty()) {
+                configFile.writeText(org.json.JSONObject().toString(2))
+                return
+            }
+
+            try {
+                val cleaned = cleanJson(txt)
+                val obj = org.json.JSONObject(cleaned)
+                val fixed = cleanBrokenProviderOverrides(obj)
+                if (cleaned != txt || fixed) {
+                    configFile.writeText(obj.toString(2))
+                }
+            } catch (_: Exception) {
+                val bak = File(cfgDir, "opencode.json.corrupt-" + System.currentTimeMillis())
+                try { configFile.copyTo(bak, overwrite = true) } catch (_: Exception) {}
+                configFile.writeText(org.json.JSONObject().toString(2))
             }
         } catch (_: Exception) {}
+    }
+
+    /** Removes only the known-broken rotator plugins and repairs @ai-sdk/openai relays.
+     *  `local` / `ollama` (localmodels.js) are never touched. */
+    private fun cleanBrokenProviderOverrides(rootObj: org.json.JSONObject): Boolean {
+        var changed = false
+        try {
+            val prov = rootObj.optJSONObject("provider") ?: return false
+            for (id in listOf("clawrouter", "opencode-ip-rotator")) {
+                if (prov.has(id)) { prov.remove(id); changed = true }
+            }
+            val it = prov.keys()
+            while (it.hasNext()) {
+                val pid = it.next()
+                if (pid == "local" || pid == "ollama" || pid == "lmstudio" || pid == "lm-studio") continue
+                val p = prov.optJSONObject(pid) ?: continue
+                if (p.optString("npm", "") != "@ai-sdk/openai") continue
+                val baseUrl = p.optJSONObject("options")?.optString("baseURL", "") ?: ""
+                if (baseUrl.isNotEmpty() && !baseUrl.contains("api.openai.com")) {
+                    p.put("npm", "@ai-sdk/openai-compatible")
+                    changed = true
+                }
+            }
+        } catch (_: Exception) {}
+        return changed
     }
 
     /** Routes custom OpenAI-compatible providers through the local Responses -> Chat Completions shim. */
@@ -482,6 +666,114 @@ object Runtime {
                 echo "Opening web preview for ${S}TARGET..."
             """.trimIndent() + "\n"
 
+            val t2iContent = """
+                #!/usr/bin/env python3
+                import base64, json, os, re, sys, time, urllib.error, urllib.request
+
+                def load_provider():
+                    cfg_path = os.path.expanduser("~/.config/opencode/opencode.json")
+                    if not os.path.exists(cfg_path):
+                        return None
+                    try:
+                        cfg = json.load(open(cfg_path, encoding="utf-8"))
+                    except Exception:
+                        return None
+                    prov = cfg.get("provider") or {}
+                    req_model = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("T2I_MODEL", "")
+                    req_pid = os.environ.get("T2I_PROVIDER", "")
+                    candidates = []
+                    for pid, p in prov.items():
+                        if not isinstance(p, dict):
+                            continue
+                        opts = p.get("options") or {}
+                        base = str(opts.get("baseURL") or "").rstrip("/")
+                        key = str(opts.get("apiKey") or "")
+                        if not base:
+                            continue
+                        models = p.get("models") or {}
+                        for mid, m in models.items():
+                            is_t2i = bool(isinstance(m, dict) and ((m.get("options") or {}).get("t2i") or "image" in ((m.get("modalities") or {}).get("output") or [])))
+                            if re.search(r"image|flux|dall-e|imagen|sdxl|midjourney|ideogram|seedream|nano-banana|t2i", mid, re.I):
+                                is_t2i = True
+                            score = 0
+                            if req_pid and pid == req_pid:
+                                score += 10
+                            if req_model and mid == req_model:
+                                score += 20
+                            if is_t2i:
+                                score += 5
+                            candidates.append((score, base, key, mid))
+                    candidates.sort(key=lambda x: x[0], reverse=True)
+                    return candidates[0] if candidates else None
+
+                def main():
+                    if len(sys.argv) < 2 or not sys.argv[1].strip():
+                        print("Usage: t2i <prompt> [out.png] [model_id]", file=sys.stderr)
+                        sys.exit(1)
+                    prompt = sys.argv[1].strip()
+                    out_path = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2].strip() else f"/root/.cache/opencode-mob/media/t2i_{int(time.time()*1000)}.png"
+                    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+                    pick = load_provider()
+                    if not pick:
+                        print("ERROR: No custom API provider with baseURL configured for T2I.", file=sys.stderr)
+                        sys.exit(2)
+                    _, base, key, model = pick
+                    if base.endswith("/v1"):
+                        img_ep = base + "/images/generations"
+                        chat_ep = base + "/chat/completions"
+                    else:
+                        img_ep = base + "/v1/images/generations"
+                        chat_ep = base + "/v1/chat/completions"
+                    hdr = {"Content-Type": "application/json"}
+                    if key:
+                        hdr["Authorization"] = "Bearer " + key
+                    img_bytes = None
+                    try:
+                        req = urllib.request.Request(img_ep, data=json.dumps({"model": model, "prompt": prompt, "n": 1}).encode("utf-8"), headers=hdr)
+                        with urllib.request.urlopen(req, timeout=90) as r:
+                            res = json.loads(r.read().decode("utf-8", "replace"))
+                        item = (res.get("data") or [{}])[0]
+                        if item.get("b64_json"):
+                            img_bytes = base64.b64decode(item["b64_json"])
+                        elif item.get("url"):
+                            with urllib.request.urlopen(item["url"], timeout=60) as ir:
+                                img_bytes = ir.read()
+                    except Exception:
+                        img_bytes = None
+                    if img_bytes is None:
+                        try:
+                            req = urllib.request.Request(chat_ep, data=json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}]}).encode("utf-8"), headers=hdr)
+                            with urllib.request.urlopen(req, timeout=90) as r:
+                                res = json.loads(r.read().decode("utf-8", "replace"))
+                            msg = ((res.get("choices") or [{}])[0].get("message") or {})
+                            imgs = msg.get("images") or []
+                            if imgs:
+                                u = (imgs[0].get("image_url") or {}).get("url") or imgs[0].get("url") or ""
+                                if u.startswith("data:image/"):
+                                    img_bytes = base64.b64decode(u.split(",", 1)[1])
+                                elif u.startswith("http"):
+                                    with urllib.request.urlopen(u, timeout=60) as ir:
+                                        img_bytes = ir.read()
+                            if img_bytes is None and isinstance(msg.get("content"), str):
+                                m = re.search(r"data:image/[a-zA-Z0-9+]+;base64,([A-Za-z0-9+/=]+)", msg["content"])
+                                if m:
+                                    img_bytes = base64.b64decode(m.group(1))
+                        except Exception as e:
+                            print(f"ERROR: T2I request failed: {e}", file=sys.stderr)
+                            sys.exit(3)
+                    if not img_bytes:
+                        print("ERROR: Model returned no image payload.", file=sys.stderr)
+                        sys.exit(4)
+                    with open(out_path, "wb") as f:
+                        f.write(img_bytes)
+                    abs_p = os.path.abspath(out_path)
+                    print(f"MEDIA_SAVED:{abs_p}")
+                    print(f"![Generated Image]({abs_p})")
+
+                if __name__ == "__main__":
+                    main()
+            """.trimIndent() + "\n"
+
             val appBins = listOf(
                 File(rootBin, "openapp"), File(rootBin, "open-app"),
                 File(rootUsrBin, "openapp"), File(homeBin, "openapp")
@@ -500,6 +792,14 @@ object Runtime {
             for (f in prevBins) {
                 try {
                     f.writeText(openpreviewContent)
+                    Os.chmod(f.path, 0x1ED)
+                } catch (_: Exception) {}
+            }
+
+            val t2iBins = listOf(File(rootBin, "t2i"), File(rootUsrBin, "t2i"), File(homeBin, "t2i"))
+            for (f in t2iBins) {
+                try {
+                    f.writeText(t2iContent)
                     Os.chmod(f.path, 0x1ED)
                 } catch (_: Exception) {}
             }
@@ -605,7 +905,7 @@ object Runtime {
 
             // Global System Prompt (AGENTS.md)
             val promptText = """
-# OpenCode Mobile Environment & Instructions (v2.0.1)
+# OpenCode Mobile Environment & Instructions (v2.0.2)
 
 You are running inside **OpenCode Mobile** directly on native Android (ARM64 / aarch64 architecture).
 You have full access to a complete Linux userspace environment, terminal tools, and native Android integrations.
@@ -639,7 +939,12 @@ You can embed interactive buttons in your markdown responses (the app renders cl
 - `<button data-action="files">Открыть Файлы</button>`
 - `<button data-action="term">Терминал</button>`
 
-## 5. Diff Statistics Reporting (MANDATORY)
+## 5. Attaching & Generating Photos (T2I)
+When creating, generating, plotting, or saving an image (`.png`, `.jpg`, `.jpeg`, `.webp`):
+- If you are calling an image generation model via shell, use `t2i "<prompt>"` (or save any generated image inside the workspace / `/root/.cache/opencode-mob/media/`).
+- Always embed the image in your response as standard Markdown `![description](/absolute/path/to/image.png)` (or `https://...` / `data:image/...`) so OpenCode Mobile displays it as a photo attachment card in chat.
+
+## 6. Diff Statistics Reporting (MANDATORY)
 At the very end of EVERY response, you MUST output a separate line with line additions and deletions:
 +N -M
 For example:
@@ -648,8 +953,7 @@ For example:
             """.trimIndent()
 
             for (dir in listOf(cfg, home, dotOpencode)) {
-                val file = File(dir, "AGENTS.md")
-                if (file.createNewFile()) file.writeText("<!-- ocm:managed:start -->\n$promptText\n<!-- ocm:managed:end -->")
+                File(dir, "AGENTS.md").writeText("<!-- ocm:managed:start -->\n$promptText\n<!-- ocm:managed:end -->")
             }
 
             val readme = File(home, "README.md")
@@ -673,13 +977,97 @@ For example:
         } catch (_: Exception) {}
     }
 
+    fun updateDns(c: Context) {
+        try {
+            val servers = mutableListOf<String>()
+            val cm = c.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            val net = cm?.activeNetwork
+            if (net != null) {
+                val lp = cm.getLinkProperties(net)
+                lp?.dnsServers?.forEach { addr ->
+                    val ip = addr.hostAddress
+                    if (!ip.isNullOrBlank() && !servers.contains(ip)) servers.add(ip)
+                }
+            }
+            if (servers.isEmpty()) {
+                servers.addAll(listOf("1.1.1.1", "8.8.8.8", "8.8.4.4", "9.9.9.9"))
+            } else {
+                servers.addAll(listOf("1.1.1.1", "8.8.8.8"))
+            }
+            val resolvContent = servers.distinct().joinToString("\n") { "nameserver $it" } + "\noptions timeout:2 attempts:3\n"
+            val resolvFile = File(rootfs(c), "etc/resolv.conf")
+            resolvFile.parentFile?.mkdirs()
+            resolvFile.writeText(resolvContent)
+        } catch (_: Exception) {}
+    }
+
+    @Volatile private var activeServerProc: Process? = null
+
+    fun stopActiveServer() {
+        val p = activeServerProc ?: return
+        try {
+            if (p.isAlive) {
+                p.destroy()
+                val deadline = System.currentTimeMillis() + 1500
+                while (p.isAlive && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(50)
+                }
+                if (p.isAlive) {
+                    p.destroyForcibly()
+                    val fDeadline = System.currentTimeMillis() + 500
+                    while (p.isAlive && System.currentTimeMillis() < fDeadline) {
+                        Thread.sleep(50)
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        if (activeServerProc === p) activeServerProc = null
+    }
+
     fun startServer(c: Context, uid: String, port: Int, password: String, noSeccomp: Boolean): Process {
-        ensureDefaults(c, uid)
         val lib = c.applicationInfo.nativeLibraryDir
         val root = rootfs(c)
         val home = home(c, uid)
         val ptmp = File(c.filesDir, "proot-tmp").apply { mkdirs() }
 
+        // WARP mode only: route the server through the local ProxyGate and track the instance so
+        // restarts cannot leave a stale process holding the port. Default (direct) keeps the
+        // original inline proot invocation and ProxyShim behaviour untouched.
+        if (warpEnabled(c)) {
+            stopActiveServer()
+            ensureDefaults(c, uid)
+            updateDns(c)
+            WarpManager.init(c)
+            val a = prootBase(c, uid)
+            a += listOf("/usr/local/bin/opencode", "serve", "--hostname", "127.0.0.1", "--port", port.toString())
+            val gateUrl = "http://127.0.0.1:${WarpManager.GATE_PORT}"
+            val noProxy = "127.0.0.1,localhost,::1"
+            val pb = ProcessBuilder(a).redirectErrorStream(true).directory(c.filesDir)
+            pb.environment().apply {
+                clear()
+                put("LD_LIBRARY_PATH", lib)
+                put("PROOT_LOADER", "$lib/libproot-loader.so")
+                put("PROOT_TMP_DIR", ptmp.path)
+                if (noSeccomp) put("PROOT_NO_SECCOMP", "1")
+                put("HOME", "/root"); put("USER", "root"); put("SHELL", "/bin/bash")
+                put("LANG", "C.UTF-8"); put("TERM", "xterm-256color"); put("TMPDIR", "/tmp")
+                put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+                put("HTTP_PROXY", gateUrl); put("HTTPS_PROXY", gateUrl)
+                put("http_proxy", gateUrl); put("https_proxy", gateUrl)
+                put("NO_PROXY", noProxy); put("no_proxy", noProxy)
+                put("OPENCODE_SERVER_USERNAME", "opencode")
+                put("OPENCODE_SERVER_PASSWORD", password)
+                put("OPENCODE_DISABLE_AUTOUPDATE", "1") // stay on 1.x: no `upgrade --major` behind our back
+                put("OPENCODE_DISABLE_PRUNE", "1")
+                put("DISABLE_TELEMETRY", "1")
+                put("DO_NOT_TRACK", "1")
+            }
+            val proc = pb.start()
+            activeServerProc = proc
+            return proc
+        }
+
+        ensureDefaults(c, uid)
         val a = mutableListOf(
             "$lib/libproot.so", "--kill-on-exit", "--link2symlink", "--sysvipc", "-0",
             "-r", root.path, "-w", "/root",

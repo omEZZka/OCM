@@ -3,9 +3,40 @@ const O=window.OCM,api=O.api,h=O.h;
 const bus=O.bus={h:{},on(n,f){(this.h[n]=this.h[n]||[]).push(f);return()=>this.off(n,f)},
   off(n,f){const a=this.h[n];if(!a)return;const i=a.indexOf(f);if(i>=0)a.splice(i,1)},
   emit(n,...a){(this.h[n]||[]).slice().forEach(f=>{try{f(...a)}catch(e){console.error(n,e)}})}};
-const S=O.S={dir:'',sessions:[],sid:null,status:{},perms:[],questions:[],todos:{},diffs:{},
+const S=O.S={dir:'',sessions:[],childSessions:{},sid:null,status:{},unread:O.store.get('session_unread',{}),perms:[],questions:[],todos:{},diffs:{},
   providers:[],agents:[],commands:[],cfg:{},agent:'build',model:null,variant:null,mcp:{},lsp:[],branch:'',
   offline:false,up:false,gstatus:{},account:{email:null,checked:false},opts:Object.assign({thinking:true,details:true,theme:'opencode',fs:14,hideKeyboardAfterSend:false},O.store.get('opts',{}))};
+// ---- unread counters (hamburger badges) ----
+const activeWork=new Set(),seenUnreadMsgs=new Map();
+const rootSid=sid=>{let cur=sid,seen=new Set();while(cur&&S.childSessions&&S.childSessions[cur]&&!seen.has(cur)){seen.add(cur);cur=S.childSessions[cur].parentID}return cur||sid};
+const isViewing=sid=>!!(sid&&sid===S.sid&&(!O.getTab||O.getTab()==='chat'||innerWidth>=820)&&!document.hidden);
+O.isSessionBusy=sid=>{const raw=S.status&&S.status[sid],st=raw&&normStatus(raw);if(st&&st.type!=='idle')return true;return Object.values(S.childSessions||{}).some(c=>c.parentID===sid&&S.status&&S.status[c.id]&&normStatus(S.status[c.id]).type!=='idle')};
+O.hasUnreadMessages=sid=>Number((S.unread&&S.unread[sid])||0);
+O.markSessionUnread=(sid,msgId)=>{
+  const rsid=rootSid(sid);
+  if(!rsid||isViewing(rsid))return;
+  if(msgId){
+    let set=seenUnreadMsgs.get(rsid);
+    if(!set){set=new Set();seenUnreadMsgs.set(rsid,set)}
+    if(set.has(msgId))return;
+    set.add(msgId);
+  }else if(Number(S.unread[rsid]||0)>0){
+    bus.emit('sessions');
+    return;
+  }
+  S.unread[rsid]=Number(S.unread[rsid]||0)+1;
+  O.store.set('session_unread',S.unread);
+  bus.emit('sessions');
+};
+O.markSessionRead=sid=>{
+  const rsid=rootSid(sid);
+  if(!rsid)return;
+  seenUnreadMsgs.delete(rsid);
+  if(!S.unread||!S.unread[rsid])return;
+  delete S.unread[rsid];
+  O.store.set('session_unread',S.unread);
+  bus.emit('sessions');
+};
 O.saveOpts=()=>{O.store.set('opts',S.opts);document.documentElement.dataset.theme=S.opts.theme;document.documentElement.style.setProperty('--fs',S.opts.fs+'px')};
 // Auto theme: follow the Android/system dark-mode preference when enabled.
 // The manual choice is remembered separately so toggling auto off restores it.
@@ -322,6 +353,7 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
     const did=p.info&&p.info.id;
     S.sessions=S.sessions.filter(x=>x.id!==did);
     if(did){
+      if(S.unread&&S.unread[did]){delete S.unread[did];O.store.set('session_unread',S.unread)}
       O.dropMsgs(did);
       try{O.dropCachedMsgs(did)}catch(_){}
       try{O.clearDraft(did)}catch(_){}
@@ -332,7 +364,9 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
     const st=normStatus(p.status);
     const was=S.status[p.sessionID];
     S.status[p.sessionID]=st;bus.emit('status',p.sessionID);
+    if(st.type!=='idle')activeWork.add(p.sessionID);
     if(st.type==='idle'&&was&&was.type!=='idle'){
+      if(activeWork.has(p.sessionID)){activeWork.delete(p.sessionID);O.markSessionUnread(p.sessionID)}
       bus.emit('idle',p.sessionID);
       const fl=O.inflight&&O.inflight();if(fl&&fl.sid===p.sessionID)O.clearInflight();
       if(p.sessionID===S.sid)O.syncSessionMessages(p.sessionID);
@@ -344,6 +378,7 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
     try{for(const [k,rec] of [...deltaQ]){if(rec.t)clearTimeout(rec.t);deltaQ.delete(k);bus.emit('part',p.sessionID,rec.m,rec.pt)}}catch(_){}
     const was=S.status[p.sessionID];
     S.status[p.sessionID]={type:'idle'};bus.emit('status',p.sessionID);
+    if(activeWork.has(p.sessionID)){activeWork.delete(p.sessionID);O.markSessionUnread(p.sessionID)}
     // Some server builds deliver only session.status:idle; emit idle here too or the queue
     // and turn timers never fire (deduped on the UI side).
     if(!was||was.type!=='idle')bus.emit('idle',p.sessionID);
@@ -352,9 +387,9 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
     break}
   case'session.error':bus.emit('serror',p);break;
   case'session.diff':S.diffs[p.sessionID]=p.diff||[];bus.emit('diff',p.sessionID);break;
-  case'message.updated':{const m=O.upsertMsg(p.info);bus.emit('msg',p.info.sessionID,m);saveMsgs(p.info.sessionID);break}
+  case'message.updated':{const m=O.upsertMsg(p.info);if(p.info&&p.info.role==='assistant')O.markSessionUnread(p.info.sessionID,p.info.id);bus.emit('msg',p.info.sessionID,m);saveMsgs(p.info.sessionID);break}
   case'message.removed':{const s=O.msgs(p.sessionID);s.list=s.list.filter(m=>m.info.id!==p.messageID);s.idx.delete(p.messageID);bus.emit('msg-removed',p.sessionID,p.messageID);break}
-  case'message.part.updated':{const m=O.upsertPart(p.part);bus.emit('part',p.part.sessionID,m,p.part);saveMsgs(p.part.sessionID);break}
+  case'message.part.updated':{const m=O.upsertPart(p.part);if(m&&m.info&&m.info.role==='assistant')O.markSessionUnread(p.part.sessionID,m.info.id);bus.emit('part',p.part.sessionID,m,p.part);saveMsgs(p.part.sessionID);break}
   case'message.part.delta':{
     const s=O.msgs(p.sessionID);let m=s.idx.get(p.messageID);
     if(!m)m=O.upsertMsg({id:p.messageID,sessionID:p.sessionID,role:'assistant',time:{created:Date.now()}});
@@ -371,6 +406,7 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
       pt.type='reasoning';
       if(!pt.text||pt.text!==pt[f])pt.text=pt[f];
     }
+    if(m.info&&m.info.role==='assistant')O.markSessionUnread(p.sessionID,m.info.id);
     emitPartCoalesced(p.sessionID,m,pt,p.sessionID+'|'+p.messageID+'|'+p.partID);break}
   case'message.part.removed':{const m=O.msgs(p.sessionID).idx.get(p.messageID);if(m){m.parts=m.parts.filter(x=>x.id!==p.partID);bus.emit('part-removed',p.sessionID,m,p.partID)}break}
   case'permission.updated':case'permission.asked':{const q=normPerm(p);if(!S.perms.some(x=>x.id===q.id))S.perms.push(q);bus.emit('perm');break}
@@ -416,10 +452,14 @@ document.addEventListener('visibilitychange',()=>{
       const ns=st[S.sid]?normStatus(st[S.sid]):{type:'idle'};
       const old=S.status[S.sid];
       S.status[S.sid]=ns;
-      if(!old||old.type!==ns.type){bus.emit('status',S.sid);if(ns.type==='idle'&&old&&old.type!=='idle')bus.emit('idle',S.sid)}
-    }).catch(()=>{});
-  }
-});
+       if(!old||old.type!==ns.type){bus.emit('status',S.sid);if(ns.type==='idle'&&old&&old.type!=='idle')bus.emit('idle',S.sid)}
+     }).catch(()=>{});
+   }
+   if(isViewing(S.sid))O.markSessionRead(S.sid);
+ });
+ window.addEventListener('online',()=>bus.emit('conn'));
+ window.addEventListener('offline',()=>bus.emit('conn'));
+
 
 // ---- overlay bubble state ----
 // The floating bubble lives in a separate Android service, so it reads its state from Prefs. Push a
@@ -479,6 +519,121 @@ O.isModelFree=x=>{
   if(/\bfree\b|бесплатн/i.test(str))return true;
   if(x.pid==='opencode'&&(!c||(!c.input&&!c.output)))return true;
   return false;
+};
+// ---- custom provider config (opencode.json + auth.json) ----
+O.readCfgObj=()=>{
+  const t=(O.native&&O.native.cfgRead?O.native.cfgRead():'')||'';
+  let obj={};
+  try{if(t&&t.trim())obj=O.parseJsonc(t)}catch(_){}
+  if(!obj||typeof obj!=='object'||Array.isArray(obj))obj={};
+  obj.provider=obj.provider||{};
+  return obj;
+};
+O.saveProviderConfig=async(pid,provDef,apiKey)=>{
+  const obj=O.readCfgObj();
+  const hadPrev=Boolean(obj.provider&&obj.provider[pid]);
+  const fullObj=Object.assign({},obj,{provider:Object.assign({},obj.provider,{[pid]:provDef})});
+  if(hadPrev){
+    const cleanObj=Object.assign({},obj,{provider:Object.assign({},obj.provider)});
+    delete cleanObj.provider[pid];
+    const pw=O.native.cfgWrite(JSON.stringify(cleanObj,null,2));
+    if(!pw.ok)throw new Error(pw.err||'Ошибка записи opencode.json');
+  }
+  let hotLoaded=false;
+  if(S.up){
+    try{
+      await api('PATCH','/global/config',{provider:{[pid]:provDef}},{dir:false,timeout:10000});
+      hotLoaded=true;
+    }catch(_){}
+  }
+  if(!hotLoaded){
+    const w=O.native.cfgWrite(JSON.stringify(fullObj,null,2));
+    if(!w.ok)throw new Error(w.err||'Ошибка записи opencode.json');
+  }
+  if(apiKey)try{await api('PUT','/auth/'+pid,{type:'api',key:apiKey})}catch(_){}
+  try{await api('POST','/instance/dispose',null)}catch(_){}
+  await new Promise(r=>setTimeout(r,300));
+  await O.loadMeta();
+  const loadedProv=S.providers.find(p=>p.id===pid&&p.models&&Object.keys(p.models).length>0);
+  if(loadedProv)return{loaded:true};
+  O.native.cfgWrite(JSON.stringify(fullObj,null,2));
+  return{loaded:false};
+};
+O.removeProviderConfig=async pid=>{
+  const cc=O.readCfgObj();
+  const existed=Boolean(cc.provider&&cc.provider[pid]);
+  delete cc.provider[pid];
+  try{
+    const ar=O.native.readText('/root/.local/share/opencode/auth.json');
+    if(ar&&ar.ok&&ar.text){
+      const ao=JSON.parse(ar.text||'{}');
+      if(ao[pid]){delete ao[pid];O.native.writeText('/root/.local/share/opencode/auth.json',JSON.stringify(ao,null,2))}
+    }
+  }catch(_){}
+  const schemaUrl=cc.$schema||'https://opencode.ai/config.json';
+  const diskObj=Object.assign({},cc);delete diskObj.$schema;
+  O.native.cfgWrite(JSON.stringify(diskObj,null,2));
+  if(S.up){try{await api('PATCH','/global/config',{$schema:schemaUrl},{dir:false,timeout:8000})}catch(_){}}
+  try{await api('POST','/instance/dispose',null)}catch(_){}
+  await new Promise(r=>setTimeout(r,200));
+  await O.loadMeta();
+  if(S.providers.some(p=>p.id===pid)){
+    O.native.cfgWrite(JSON.stringify(Object.assign({$schema:schemaUrl},diskObj),null,2));
+    if(window.OC&&OC.restartServer)OC.restartServer();
+  }
+  return existed;
+};
+O.customProviderIds=()=>{
+  try{
+    const prov=O.readCfgObj().provider||{};
+    return new Set(Object.keys(prov).filter(k=>k!=='opencode'));
+  }catch(_){return new Set()}
+};
+O.isCustom=pid=>{
+  if(!pid||pid==='opencode')return false;
+  const p=S.providers.find(x=>x.id===pid);
+  return O.customProviderIds().has(pid)||!!(p&&p.source==='config');
+};
+// ---- text-to-image capability flags ----
+O.isT2IModel=m=>{
+  if(!m)return false;
+  if(m.options&&m.options.t2i===true)return true;
+  if(m.capabilities&&m.capabilities.output&&m.capabilities.output.image===true)return true;
+  if(m.modalities){
+    if(Array.isArray(m.modalities.output)&&m.modalities.output.includes('image'))return true;
+    if(Array.isArray(m.modalities)&&m.modalities.includes('image_output'))return true;
+  }
+  const idStr=((m.id||'')+' '+(m.name||'')).toLowerCase();
+  return /\b(gpt-image|dall-e|imagen|flux|sdxl|sd3|stable-diffusion|midjourney|ideogram|recraft|seedream|wanx|qwen-image|gemini-.*image|nano-banana|grok-.*image|t2i)\b/.test(idStr);
+};
+O.isPureT2IModel=m=>{
+  if(!m)return false;
+  const idStr=((m.id||'')+' '+(m.name||'')).toLowerCase();
+  if(/\b(dall-e|imagen|flux|sdxl|sd3|stable-diffusion|midjourney|ideogram|recraft|seedream|gpt-image|grok-.*image)\b/.test(idStr))return true;
+  if(m.modalities&&Array.isArray(m.modalities.output)&&m.modalities.output.includes('image')&&!m.modalities.output.includes('text'))return true;
+  return false;
+};
+// Preinstalled OpenCode models run on the shared Zen quota; WARP rotation is only legal for them.
+O.isZenQuotaModel=m=>{
+  if(!m)return false;
+  const pid=String(m.providerID||m.pid||m.provider||m.providerId||'').toLowerCase();
+  const mid=String(m.modelID||m.mid||m.id||'').toLowerCase();
+  const name=String(m.name||'').toLowerCase();
+  const configured=O.store.get('zenQuotaModels',null);
+  if(Array.isArray(configured)&&configured.length){
+    return configured.some(k=>{const s=String(k||'').toLowerCase();return s===pid||s===mid||s===pid+'/'+mid});
+  }
+  if(pid==='opencode')return true;
+  if(m.zen===true||/\bzen\b|zen[-_/]?quota|opencode[-_/]?zen/.test(pid+' '+mid+' '+name))return true;
+  return false;
+};
+O.resolveMediaUrl=raw=>{
+  const s=String(raw||'').trim();
+  if(!s)return '';
+  if(/^(?:https?:|data:|blob:)/i.test(s))return s;
+  let p=s.replace(/^file:\/\//i,'');
+  if(!p.startsWith('/'))p=(S.dir||'/root').replace(/\/+$/,'')+'/'+p.replace(/^\.\//,'');
+  return 'https://appassets.androidplatform.net/_media/?path='+encodeURIComponent(p);
 };
 O.primaryAgents=()=>S.agents.filter(a=>a.mode!=='subagent'&&!a.hidden);
 O.pinnedModels=()=>O.store.get('pinnedModels',[]);
@@ -1284,7 +1439,11 @@ O.openPlan=()=>{
 };
 
 O.allModels=()=>{
-  return S.providers.flatMap(p=>Object.values(p.models||{}).map(m=>({pid:p.id,pname:p.name,mid:m.id,name:m.name||m.id,m})));
+  const customIds=O.customProviderIds();
+  return S.providers.flatMap(p=>{
+    const isCustom=O.isCustom(p.id)||(customIds.has(p.id)||p.source==='config')&&p.id!=='opencode';
+    return Object.entries(p.models||{}).map(([k,m])=>({pid:p.id,pname:p.name||p.id,mid:(m&&m.id)||k,name:(m&&(m.name||m.id))||k,isCustom,m}));
+  });
 };
 O.pickDefaults=()=>{
   const prim=O.primaryAgents();if(!prim.some(a=>a.name===S.agent))S.agent=(prim[0]&&prim[0].name)||'build';
@@ -1422,6 +1581,7 @@ O.openSession=async(sid,fresh)=>{
   // key off S.dir; updating only O.dir dropped events of per-folder sessions.
   if(sid){const sd=O.sessionDir(sid);if(sd&&sd!==O.dir){O.dir=sd;S.dir=sd}}
   S.sid=sid;O.store.set('sid.'+S.dir,sid);
+  if(sid)O.markSessionRead(sid);
   trimStore();
   if(!sid){bus.emit('open',null);return}
   if(String(sid).startsWith('local_')){

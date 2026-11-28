@@ -42,6 +42,7 @@ O.togglePin=id=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i>=0)l.spli
 O.movePinned=(id,delta)=>{const l=O.pinnedSessions();const i=l.indexOf(id);if(i<0)return;const j=Math.max(0,Math.min(l.length-1,i+delta));if(i===j)return;const [x]=l.splice(i,1);l.splice(j,0,x);O.store.set('pinned',l);bus.emit('sessions');};
 O.openSessions=()=>{
   const list=h('div'),tagBar=h('div',{style:{display:'flex',gap:'6px',overflowX:'auto',marginBottom:'8px'}});
+  const sessSummary=h('div',{class:'sess-summary-bar'});
   const q=search(O.tr('Search sessions and messages...','Поиск по сессиям и сообщениям...'),()=>draw());
   // message hits are async (IndexedDB), so they land in a separate block under the session list
   const hits=h('div',{class:'msg-hits hide'});
@@ -75,6 +76,13 @@ O.openSessions=()=>{
   let activeTag=O.sessionTagFilter();
   let activeFolder='';
   activeFolderSetter=id=>{activeFolder=id;draw();};
+  let filterMode='all';
+  const busyCheck=id=>O.isSessionBusy?O.isSessionBusy(id):!!(S.status[id]&&S.status[id].type!=='idle');
+  const unreadCheck=id=>{
+    if(O.hasUnreadMessages)return Number(O.hasUnreadMessages(id))||0;
+    if(O.isUnread){const x=(S.sessions||[]).find(y=>y.id===id);if(x&&O.isUnread(x))return 1}
+    return Number((S.unread&&S.unread[id])||0);
+  };
   // Compact grid nav: primary destinations are icon tiles (one glance, one tap), secondary
   // actions collapse into a "More" row so the session list gets the vertical space it deserves.
   const tile=(ic,label,fn)=>h('button',{class:'drawer-tile',onclick:()=>{s.close();fn();}},O.icon(ic),h('span',null,label));
@@ -122,7 +130,7 @@ O.openSessions=()=>{
     O.icon('dots'),h('span',null,O.tr('More','Ещё')),O.icon('chevD','drawer-more-chev'));
   const newBtn=h('button',{class:'btn pri wide drawer-new',onclick:async()=>{s.close();try{await O.newSession()}catch(e){O.toast(e.message)}}},O.icon('plus'),O.tr('New session','Новая сессия'));
   const offs=[];
-  const s=O.sheet(O.tr('Sessions','Сессии'),h('div',{class:'drawer-v2'},newBtn,q,tagBar,navGrid,moreBtn,moreBox,h('div',{class:'drawer-sess-head'},O.icon('chat'),h('b',null,O.tr('Recent sessions','Недавние сессии'))),list,hits),{drawer:true,
+  const s=O.sheet(O.tr('Sessions','Сессии'),h('div',{class:'drawer-v2'},newBtn,q,sessSummary,tagBar,navGrid,moreBtn,moreBox,h('div',{class:'drawer-sess-head'},O.icon('chat'),h('b',null,O.tr('Recent sessions','Недавние сессии'))),list,hits),{drawer:true,
     onClose:()=>{clearTimeout(hitTimer);offs.splice(0).forEach(f=>{try{f()}catch(_){}})}});
   function drawTags(){
     tagBar.textContent='';
@@ -169,7 +177,19 @@ O.openSessions=()=>{
       stateChip('all',O.tr('Everything','Все')));
   };
   function draw(){list.textContent='';drawState();drawTags();runHitSearch();const f=q.value.toLowerCase();
-    let items=S.sessions.filter(x=>O.sessionTitle(x).toLowerCase().includes(f)&&(!activeTag||O.sessionTag(x.id)===activeTag));
+    sessSummary.textContent='';
+    const all=(S.sessions||[]);
+    const busyCount=all.filter(x=>busyCheck(x.id)).length;
+    const unreadCount=all.filter(x=>unreadCheck(x.id)>0).length;
+    if(busyCount||unreadCount){
+      sessSummary.style.display='flex';
+      const chip=(id,lbl,cnt)=>h('button',{class:'sess-filter-chip'+(filterMode===id?' on':''),onclick:()=>{filterMode=filterMode===id?'all':id;draw()}},lbl+' · '+cnt);
+      if(busyCount)sessSummary.append(chip('busy',O.tr('Running','В работе'),busyCount));
+      if(unreadCount)sessSummary.append(chip('unread',O.tr('Unread','Новые ответы'),unreadCount));
+    }else{
+      filterMode='all';sessSummary.style.display='none';
+    }
+    let items=all.filter(x=>O.sessionTitle(x).toLowerCase().includes(f)&&(!activeTag||O.sessionTag(x.id)===activeTag));
     if(activeFolder)items=items.filter(x=>O.sessionFolderOf(x.id)===activeFolder);
     // state filter: archived chats are hidden unless the user explicitly looks at them
     const runningOf=x=>{const st=S.status[x.id];return !!(st&&st.type!=='idle')};
@@ -177,6 +197,7 @@ O.openSessions=()=>{
     else if(stateGroup==='archived')items=items.filter(x=>O.isArchived(x.id));
     else if(stateGroup==='run')items=items.filter(x=>!O.isArchived(x.id)&&runningOf(x));
     else if(stateGroup==='idle')items=items.filter(x=>!O.isArchived(x.id)&&!runningOf(x));
+    if(filterMode==='unread')items=items.filter(x=>unreadCheck(x.id)>0);
     list.append(stateBar);
     // Pinned: one flat block ordered by user priority (pin array order), never split by days.
     const pinOrder=O.pinnedSessions();
@@ -222,12 +243,14 @@ O.openSessions=()=>{
         list.append(h('div',{class:'grp',style:{marginTop:'0'}},O.tr('Pinned','Закреплённые')));
       }
       const st=S.status[x.id],b=st&&st.type!=='idle',sm=x.summary,tag=O.sessionTag(x.id);
+      const unread=unreadCheck(x.id);
       const isWork=O.isWorkSession(x.id);
       const pend=O.sessionPending(x.id);
       list.append(h('div',{class:'settings-row sess-row'+(x.id===S.sid?' on':'')},
         h('button',{class:'settings-row-text',onclick:()=>{s.close();O.openSession(x.id)}},
           h('b',{style:{display:'flex',alignItems:'center',gap:'6px'}},
-            O.isUnread&&O.isUnread(x)?h('span',{class:'sess-unread',title:O.tr('New answer','Новый ответ')}):null,
+            unread>0?h('span',{class:'sess-unread',title:O.tr('New answer','Новый ответ')}):null,
+            unread>0?h('span',{class:'sess-pill unread'},unread>1?O.tr('New · '+unread,'Новое · '+unread):O.tr('New reply','Новый ответ')):null,
             pin?O.icon('pin','pin-ic'):null,h('span',{class:'sess-title'},O.sessionTitle(x)),isWork?h('span',{class:'sess-badge work',title:O.tr('Working set','Рабочая сессия')},O.icon('star')):null,x.local?h('span',{class:'mut s'},'· offline'):null),
           h('span',{class:'sess-sub'},(tag?'#'+tag+'  ':'')+(sm&&(sm.additions||sm.deletions)?'+'+sm.additions+' -'+sm.deletions:'')+sessionStatBit(x))),
         pend.q?h('span',{class:'sess-badge q',title:O.tr('Question pending','Ждёт ответа на вопрос')},O.icon('at'),pend.q>1?h('i',null,pend.q):null):null,
@@ -541,13 +564,7 @@ O.openModels=()=>{
       models.forEach(x=>O.hideModel(x.pid+'/'+x.mid));
       if(S.model&&S.model.providerID===pid){S.model=null;O.pickDefaults&&O.pickDefaults();bus.emit('meta')}
       // 2. remove the config entry (models live inside it)
-      try{
-        const t=O.native.cfgRead();
-        if(t&&t.trim()){
-          const obj=O.parseJsonc(t);
-          if(obj.provider&&obj.provider[pid]){delete obj.provider[pid];O.native.cfgWrite(JSON.stringify(obj,null,2))}
-        }
-      }catch(_){}
+      try{if(O.removeProviderConfig)await O.removeProviderConfig(pid)}catch(e){O.toast(e.message||String(e),3000)}
       // 3. remove the API key from auth.json and the local key ring
       try{
         const r=O.native.readText('/root/.local/share/opencode/auth.json');
@@ -1472,14 +1489,39 @@ O.openCustomProvider=parentSheet=>{
   const statusBox=h('div',{class:'mut s',style:{margin:'8px 0'}});
   const modelList=h('div',{class:'hide',style:{maxHeight:'240px',overflowY:'auto',margin:'8px 0',border:'1px solid var(--line)',borderRadius:'8px',padding:'6px'}});
   let foundModels=[];const sel=new Set();
+  let curProto='@ai-sdk/openai-compatible';
+  let markFree=true,markT2i=false;
 
+  const PRESETS=[
+    {id:'openrouter',name:'OpenRouter',url:'https://openrouter.ai/api/v1',proto:'@ai-sdk/openai-compatible',icon:'globe',models:''},
+    {id:'groq',name:'Groq',url:'https://api.groq.com/openai/v1',proto:'@ai-sdk/openai-compatible',icon:'zap',models:''},
+    {id:'deepseek',name:'DeepSeek',url:'https://api.deepseek.com/v1',proto:'@ai-sdk/openai-compatible',icon:'cpu',models:'deepseek-chat, deepseek-reasoner'},
+    {id:'ollama',name:'Ollama (Local)',url:'http://127.0.0.1:11434/v1',proto:'@ai-sdk/openai-compatible',icon:'llama',models:''},
+    {id:'lmstudio',name:'LM Studio',url:'http://127.0.0.1:1234/v1',proto:'@ai-sdk/openai-compatible',icon:'laptop',models:''},
+    {id:'google-openai',name:'Gemini API',url:'https://generativelanguage.googleapis.com/v1beta/openai',proto:'@ai-sdk/openai-compatible',icon:'cube',models:'gemini-2.5-flash, gemini-2.5-pro'},
+    {id:'anthropic-custom',name:'Anthropic Relay',url:'https://api.anthropic.com/v1',proto:'@ai-sdk/anthropic',icon:'shield',models:'claude-sonnet-4-20250514'},
+    {id:'together',name:'Together AI',url:'https://api.together.xyz/v1',proto:'@ai-sdk/openai-compatible',icon:'code',models:''},
+    {id:'nvidia',name:'NVIDIA NIM',url:'https://integrate.api.nvidia.com/v1',proto:'@ai-sdk/openai-compatible',icon:'cpu',models:''},
+    {id:'llamacpp',name:'llama.cpp',url:'http://127.0.0.1:8080/v1',proto:'@ai-sdk/openai-compatible',icon:'cpu',models:''}
+  ];
+  const PROTOS=[
+    ['@ai-sdk/openai-compatible','OpenAI-совм.'],
+    ['@ai-sdk/anthropic','Anthropic'],
+    ['@ai-sdk/google','Gemini'],
+    ['@ai-sdk/openai','OpenAI Resp.']
+  ];
+  const protoSeg=h('div',{class:'seg'});
+  const updateProtoSeg=()=>{protoSeg.querySelectorAll('button').forEach((b,i)=>b.classList.toggle('on',PROTOS[i][0]===curProto))};
+  PROTOS.forEach(([val,lbl])=>{
+    protoSeg.append(h('button',{type:'button',class:val===curProto?'on':'',onclick:()=>{curProto=val;updateProtoSeg()}},lbl));
+  });
   const presets=h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'12px'}},
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='groq';nameInp.value='Groq';urlInp.value='https://api.groq.com/openai/v1'}},O.icon('zap'),'Groq'),
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='openrouter';nameInp.value='OpenRouter';urlInp.value='https://openrouter.ai/api/v1'}},O.icon('globe'),'OpenRouter'),
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='ollama';nameInp.value='Ollama (Local)';urlInp.value='http://127.0.0.1:11434/v1'}},O.icon('llama'),'Ollama'),
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='together';nameInp.value='Together AI';urlInp.value='https://api.together.xyz/v1'}},'Together'),
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='lmstudio';nameInp.value='LM Studio';urlInp.value='http://127.0.0.1:1234/v1';keyInp.value=''}},O.icon('laptop'),'LM Studio'),
-    h('button',{class:'btn sm',type:'button',onclick:()=>{idInp.value='llamacpp';nameInp.value='llama.cpp';urlInp.value='http://127.0.0.1:8080/v1';keyInp.value=''}},O.icon('cpu'),'llama.cpp'));
+    PRESETS.map(pr=>h('button',{class:'btn sm',type:'button',onclick:()=>{
+      idInp.value=pr.id;nameInp.value=pr.name;urlInp.value=pr.url;curProto=pr.proto;
+      if(pr.models&&!manualInp.value.trim())manualInp.value=pr.models;
+      updateProtoSeg();
+      statusBox.textContent=O.tr('Preset selected: ','Пресет выбран: ')+pr.name+'. '+O.tr('Enter the key and press «Test request» or «Save».','Введите ключ и нажмите «Тест запроса» или «Сохранить».');
+    }},O.icon(pr.icon),pr.name)));
 
   // One-tap local model server inside the proot runtime: downloads nothing, uses the model path the
   // user already has and explains exactly which command it runs.
@@ -1524,6 +1566,82 @@ O.openCustomProvider=parentSheet=>{
     finally{probeBtn.disabled=false}}
   },O.icon('search'),'Прозвонить API (получить список моделей)');
 
+  const normalizeBaseUrl=raw=>{
+    let u=String(raw||'').trim();
+    if(!u)return '';
+    if(!/^https?:\/\//i.test(u)){
+      const local=/^(127\.0\.0\.1|localhost|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(u);
+      u=(local?'http://':'https://')+u;
+    }
+    return u.replace(/\/+$/,'').replace(/\/(chat\/completions|completions|responses|messages|models)$/i,'').replace(/\/+$/,'');
+  };
+  const buildHeaders=(url,key)=>{
+    const hd={'Accept':'application/json','Content-Type':'application/json'};
+    if(key){
+      if(curProto==='@ai-sdk/anthropic'){
+        hd['x-api-key']=key;hd['anthropic-version']='2023-06-01';hd['Authorization']='Bearer '+key;
+      }else hd['Authorization']='Bearer '+key;
+    }
+    if(url.includes('openrouter.ai')||idInp.value.trim()==='openrouter'){
+      hd['HTTP-Referer']='https://opencode.mobile';hd['X-Title']='OpenCode Mobile';
+    }
+    return hd;
+  };
+  const buildTestReq=(base,modelId,key)=>{
+    if(curProto==='@ai-sdk/anthropic')return{ep:base+'/v1/messages',payload:{model:modelId,max_tokens:8,messages:[{role:'user',content:'Reply OK'}]}};
+    if(curProto==='@ai-sdk/google')return{ep:base+'/models/'+encodeURIComponent(modelId)+':generateContent'+(key?('?key='+encodeURIComponent(key)):''),payload:{contents:[{parts:[{text:'Reply OK'}]}],generationConfig:{maxOutputTokens:16}}};
+    return{ep:base+'/chat/completions',payload:{model:modelId,messages:[{role:'user',content:'Reply OK'}],max_tokens:8,stream:false}};
+  };
+  const testBtn=h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:async()=>{
+    const base=normalizeBaseUrl(urlInp.value);
+    if(!base)return O.toast(O.tr('Enter Base URL first','Сначала введите Base URL'),2500);
+    const key=keyInp.value.trim();
+    const modelId=(manualInp.value.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean)[0])||[...sel][0]||'gpt-4o-mini';
+    testBtn.disabled=true;statusBox.textContent=O.tr('Sending test request…','Отправляю тестовый запрос…');
+    try{
+      const hd=buildHeaders(base,key);
+      let url=base,tReq=buildTestReq(url,modelId,key);
+      let r=await O.extFetch(tReq.ep,{method:'POST',headers:hd,body:tReq.payload,timeout:18000});
+      if(!r.ok&&(r.status===403||r.status===404||r.status===405)&&!/\/v\d|\/openai|\/api\/paas/i.test(base)){
+        const alt=base+'/v1',altReq=buildTestReq(alt,modelId,key);
+        const r2=await O.extFetch(altReq.ep,{method:'POST',headers:hd,body:altReq.payload,timeout:18000});
+        if(r2.ok||r2.status<r.status){r=r2;url=alt}
+      }
+      if(url!==base)urlInp.value=url;
+      if(r.ok){
+        statusBox.textContent=O.tr('Test passed (HTTP ','Тест пройден (HTTP ')+r.status+'). '+O.tr('API and key work with model ','API и ключ работают с моделью ')+modelId+'.';
+        O.toast(O.tr('API responds correctly!','API отвечает корректно!'),2000);
+      }else{
+        const errMsg=(r.data&&r.data.error&&r.data.error.message)||(typeof r.text==='string'?r.text.slice(0,180):'');
+        statusBox.textContent=O.tr('HTTP error ','Ошибка HTTP ')+r.status+': '+errMsg;
+        O.toast(O.tr('API returned HTTP ','API вернул HTTP ')+r.status,3500);
+      }
+    }catch(e){
+      statusBox.textContent=O.tr('Test error: ','Ошибка теста: ')+e.message;
+      O.toast(O.tr('Connection error: ','Ошибка соединения: ')+e.message,3500);
+    }finally{testBtn.disabled=false}
+  }},O.icon('zap'),O.tr('Test request','Тест запроса'));
+
+  const freeToggle=O.toggleRow('shield',
+    O.tr('Show in "Free Models" view','Показывать с фильтром бесплатных'),
+    O.tr('Prevent custom API models from being hidden by the free filter','Чтобы модели вашего API не скрывались фильтром в чате'),
+    markFree,
+    v=>{markFree=v});
+  const t2iToggle=O.toggleRow('image',
+    O.tr('Image generation (T2I) models','Генерация фото (T2I) модели'),
+    O.tr('Enable inline T2I image generation & photo attachments in chat','Разрешить этим моделям генерировать и прикреплять фото в чат'),
+    markT2i,
+    v=>{markT2i=v});
+
+  const makeModelEntry=mid=>{
+    const entry={name:mid,attachment:true,tool_call:true,temperature:true,limit:{context:128000,output:8192}};
+    if(markT2i||(O.isT2IModel&&O.isT2IModel({id:mid,name:mid}))){
+      entry.modalities={input:['text','image'],output:['text','image']};
+      entry.options={t2i:true};
+    }
+    if(markFree)entry.cost={input:0,output:0};
+    return entry;
+  };
   const saveBtn=h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:async()=>{
     const pid=idInp.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g,'')||('custom-'+Date.now().toString(36));
     const pname=nameInp.value.trim()||pid;
@@ -1533,9 +1651,7 @@ O.openCustomProvider=parentSheet=>{
     if(pid==='groq'||url.includes('groq.com')){
       if(!url.includes('/openai/v1'))url=url.replace(/\/+$/,'')+'/openai/v1';
     }
-    const mo={};if(sel.size>0){sel.forEach(mid=>{mo[mid]={name:mid}})}else mo['default']={name:'Default Model'};
-    const t=O.native.cfgRead();let obj={};try{if(t.trim())obj=O.parseJsonc(t)}catch{}
-    obj.provider=obj.provider||{};
+    const mo={};if(sel.size>0){sel.forEach(mid=>{mo[mid]=makeModelEntry(mid)})}else mo['default']=makeModelEntry('Default Model');
     const provOpts={baseURL:url,apiKey:key||'dummy'};
     let shim='';try{shim=OC.shimUrl?OC.shimUrl():''}catch(_){}
     if(shim&&!url.includes('127.0.0.1')&&!url.includes('localhost')){
@@ -1545,9 +1661,11 @@ O.openCustomProvider=parentSheet=>{
     if(pid==='openrouter'||url.includes('openrouter.ai')){
       provOpts.headers={'HTTP-Referer':'https://opencode.mobile','X-Title':'OpenCode Mobile'};
     }
-    obj.provider[pid]={name:pname,npm:'@ai-sdk/openai',options:provOpts,models:mo};
-    const w=O.native.cfgWrite(JSON.stringify(obj,null,2));
-    if(!w.ok)return O.toast(w.err||'Ошибка записи');
+    const provDef={name:pname,npm:curProto,options:provOpts,models:mo};
+    try{
+      const res=await O.saveProviderConfig(pid,provDef,key);
+      if(res&&res.loaded)O.toast(O.tr('Saved. Restarting core to activate ','Сохранено. Перезапуск ядра для ')+pname+'...',3000);
+    }catch(e){return O.toast(e.message||'Ошибка записи opencode.json',4000)}
     if(key)try{await api('PUT','/auth/'+pid,{type:'api',key})}catch(_){}
     // AUTO-PROBE (new): the config alone is not enough — a provider added without a model list
     // showed up empty until the user pressed "refresh". Probe the endpoint now, write the real
@@ -1559,9 +1677,8 @@ O.openCustomProvider=parentSheet=>{
         const list=await probeModels(url,key);
         if(list&&list.length){
           const freshModels={};
-          list.forEach(mid=>{freshModels[mid]={name:mid}});
-          obj.provider[pid].models=freshModels;
-          O.native.cfgWrite(JSON.stringify(obj,null,2));
+          list.forEach(mid=>{freshModels[mid]=makeModelEntry(mid)});
+          try{await O.saveProviderConfig(pid,Object.assign({},provDef,{models:freshModels}),key)}catch(_){}
           probed=list.length;
         }
       }
@@ -1576,12 +1693,18 @@ O.openCustomProvider=parentSheet=>{
   },O.icon('check'),'Сохранить и подключить');
 
   const sh=O.sheet('Свой провайдер / Прозвон моделей',h('div',null,
-    presets,localBar,
+    presets,
+    h('div',{class:'field'},h('label',null,O.tr('API Protocol / SDK','Формат API / Протокол')),protoSeg),
+    localBar,
     h('div',{class:'field'},h('label',null,'ID провайдера (латиница)'),idInp),
     h('div',{class:'field'},h('label',null,'Отображаемое имя'),nameInp),
-    h('div',{class:'field'},h('label',null,'Base URL (OpenAI-совместимый)'),urlInp),
+    h('div',{class:'field'},h('label',null,'Base URL'),urlInp),
     h('div',{class:'field'},h('label',null,'API-ключ (необязательно для локальных)'),keyInp),
-    probeBtn,statusBox,modelList,saveBtn),{full:true});
+    h('div',{style:{display:'flex',gap:'8px',margin:'10px 0'}},probeBtn,testBtn),
+    statusBox,modelList,
+    h('div',{class:'field'},h('label',null,O.tr('Models (auto or comma-separated IDs)','Модели (через запятую, если /models недоступен)')),manualInp),
+    h('div',{class:'group-card'},freeToggle,t2iToggle),
+    saveBtn),{full:true});
 };
 
 // ---- themes / help ----

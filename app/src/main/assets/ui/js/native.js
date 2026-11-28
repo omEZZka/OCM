@@ -1,10 +1,12 @@
 (function(){
 const O=window.OCM;
-const pend=new Map();let seq=0;const mediaPend=new Map();let mediaSeq=0;const L={};
+const pend=new Map();const extPend=new Map();let seq=0;const mediaPend=new Map();let mediaSeq=0;const L={};
 O.on=(n,f)=>{(L[n]=L[n]||[]).push(f);return()=>O.off(n,f)};
 O.off=(n,f)=>{const a=L[n];if(!a)return;const i=a.indexOf(f);if(i>=0)a.splice(i,1)};
 O.emit=(n,d)=>{(L[n]||[]).slice().forEach(f=>{try{f(d)}catch(e){console.error(n,e)}})};
 window.OCEvent=(n,d)=>{if(n==='http'){finishHttp(d);return}
+  if(n==='exthttp'){finishExtHttp(d);return}
+  if(n==='media_cached'){const p=d&&mediaPend.get(d.id);if(p){mediaPend.delete(d.id);p.res(d);return}}
   if(n==='mediaNet'){finishMediaNet(d);return}
   (L[n]||[]).forEach(f=>{try{f(d)}catch(e){console.error(n,e)}})};
 O.dir='';
@@ -68,6 +70,32 @@ async function finishHttp(d){const p=pend.get(d.id);if(!p)return;pend.delete(d.i
     else p.rej(Object.assign(new Error((data&&data.data&&data.data.message)||(data&&data.message)||(typeof data==='string'&&data.slice(0,200))||('HTTP '+d.status)),{status:d.status,data}))}
   function reject(e){p.rej(e)}
 }
+async function finishExtHttp(d){const p=extPend.get(d.id);if(!p)return;extPend.delete(d.id);
+  if(d.err&&!d.status){p.rej(Object.assign(new Error(d.err),{status:0,net:true}));return}
+  let text=d.body||'';
+  if(d.file){try{text=await(await fetch('/_resp/'+d.id)).text()}catch(e){p.rej(e);return}finally{try{OC.drop(d.id)}catch{}}}
+  let data=text;
+  if(text&&((d.ct||'').includes('json')||text.trim().startsWith('{')||text.trim().startsWith('['))){try{data=JSON.parse(text)}catch{}}
+  p.res({ok:Boolean(d.ok||(d.status>=200&&d.status<300)),status:d.status||0,ct:d.ct||'',text,data});
+}
+O.extFetch=(url,opt)=>{opt=opt||{};
+  const method=(opt.method||'GET').toUpperCase();
+  const headers=opt.headers||{};
+  const body=opt.body==null?'':(typeof opt.body==='string'?opt.body:JSON.stringify(opt.body));
+  const ms=opt.timeout||15000;
+  if(window.OC&&typeof OC.extHttp==='function'){
+    return new Promise((res,rej)=>{
+      const id='e'+(++seq)+'_'+Date.now().toString(36);
+      extPend.set(id,{res,rej});
+      try{OC.extHttp(id,method,url,JSON.stringify(headers),body)}catch(e){extPend.delete(id);rej(e);return}
+      setTimeout(()=>{if(extPend.has(id)){extPend.delete(id);rej(new Error('Таймаут запроса к '+url))}},ms);
+    });
+  }
+  const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),ms);
+  return fetch(url,{method,headers,body:(method==='POST'||method==='PUT'||method==='PATCH')?body:undefined,signal:ctrl.signal})
+    .then(async r=>{clearTimeout(t);const text=await r.text();let data=text;try{data=JSON.parse(text)}catch{};return{ok:r.ok,status:r.status,ct:r.headers.get('content-type')||'',text,data}})
+    .catch(e=>{clearTimeout(t);throw e});
+};
 function finishMediaNet(d){const p=mediaPend.get(d.id);if(!p)return;mediaPend.delete(d.id);clearTimeout(p.timer);
   try{const r=JSON.parse(d.result||'{}');if(r.ok)p.res(r);else p.rej(Object.assign(new Error(r.err||('HTTP '+(r.status||0))),{status:r.status||0,data:r}))}
   catch(e){p.rej(e)}}
@@ -149,7 +177,25 @@ O.native={
   secureGet:k=>{try{return OC.secureGet(k)||''}catch(_){return''}},
   secureRemove:k=>{try{return !!OC.secureRemove(k)}catch(_){return false}},
   secureImportLegacy:o=>{try{return !!OC.secureImportLegacy(JSON.stringify(o||{}))}catch(_){return false}},
-  state:()=>j(OC.state())||{}
+  state:()=>j(OC.state())||{},
+  isOnline:()=>{try{return window.OC&&OC.isOnline?Boolean(OC.isOnline()):navigator.onLine!==false}catch{return navigator.onLine!==false}},
+  warpStatus:()=>j(window.OC&&OC.warpStatus?OC.warpStatus():'{}')||{mode:'direct',activeMode:'direct',status:'idle',enabled:false},
+  warpRefreshGeo:()=>{try{if(window.OC&&OC.warpRefreshGeo)OC.warpRefreshGeo()}catch(_){}},
+  warpSetConfig:cfg=>{try{if(window.OC&&OC.warpSetConfig)OC.warpSetConfig(JSON.stringify(cfg||{}))}catch(_){}},
+  warpRotate:sid=>{try{if(window.OC&&OC.warpRotate)OC.warpRotate(sid||'')}catch(_){}},
+  warpClearBurned:()=>j(window.OC&&OC.warpClearBurned?OC.warpClearBurned():'{}')||{},
+  warpImportWg:(name,conf)=>j(window.OC&&OC.warpImportWg?OC.warpImportWg(name||'',conf||''):'{}')||{ok:false},
+  warpSelectWg:id=>j(window.OC&&OC.warpSelectWg?OC.warpSelectWg(id||''):'{}')||{},
+  warpDeleteWg:id=>j(window.OC&&OC.warpDeleteWg?OC.warpDeleteWg(id||''):'{}')||{},
+  cacheMedia:(src,filename)=>new Promise(res=>{
+    if(!window.OC||typeof OC.cacheMediaImage!=='function'){res({ok:true,url:src,name:filename||'image.png'});return}
+    const id='m'+(++mediaSeq)+'_'+Date.now().toString(36);
+    mediaPend.set(id,{res});
+    try{OC.cacheMediaImage(id,String(src||''),String(filename||'image.png'))}catch(e){mediaPend.delete(id);res({ok:false,error:e.message});return}
+    setTimeout(()=>{if(mediaPend.has(id)){mediaPend.delete(id);res({ok:false,error:'timeout'})}},25000);
+  }),
+  saveImage:(src,filename)=>{try{if(window.OC&&OC.saveMediaImage)OC.saveMediaImage(String(src||''),String(filename||''))}catch(_){}},
+  shareImage:(src,filename)=>{try{if(window.OC&&OC.shareImage)OC.shareImage(String(src||''),String(filename||''))}catch(_){}}
 };
 O.openUrl=u=>{if(/^https?:\/\//i.test(u)&&!/appassets\.androidplatform\.net/i.test(u))OC.openLink(u)};
 document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a[href]');if(!a)return;const u=a.getAttribute('href');e.preventDefault();if(/^https?:\/\//i.test(u))O.openUrl(u)});

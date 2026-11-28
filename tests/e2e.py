@@ -111,6 +111,32 @@ try:
     pg.wait_for_timeout(200)
     chk('send idle after idle event',pg.locator('#send.stop').count()==0)
     chk('top title updated',len(pg.inner_text('#top .top-title-txt'))>0)
+    # ---- upstream 2.30.1 parity: subtitle, tool bodies, badges, tokens ----
+    sub=pg.evaluate("({dir:OCM.S.dir||'',branch:OCM.S.branch||'',title:(document.querySelector('#top .top-title-txt')||{}).textContent||''})")
+    chk('подзаголовок с каталогом и веткой',('root' in sub['dir'] or 'app' in sub['dir']) and sub['branch']=='main' and len(sub['title'])>0)
+    chk('tokens в подзаголовке','tok' in pg.evaluate("((document.querySelector('#top .top-tokens-val')||{}).textContent||'')"))
+    pg.click('.cmd-group .cg-head')
+    pg.wait_for_timeout(150)
+    tools=pg.evaluate("""()=>{
+      const g=document.querySelector('.cmd-group');
+      const ts=g?[...g.querySelectorAll('.tool')]:[];
+      if(ts[0])ts[0].querySelector('.tool-h').click();
+      const body0=ts[0]?ts[0].textContent:'';
+      if(ts[1])ts[1].querySelector('.tool-h').click();
+      const adds=g?g.querySelectorAll('.diff .a').length:0;
+      const dels=g?g.querySelectorAll('.diff .d').length:0;
+      return {n:ts.length,cmd:body0.includes('ls -la')&&body0.includes('main.py'),diff:adds>=1&&dels>=1};
+    }""")
+    chk('bash body command+output',tools['cmd'])
+    chk('edit diff colored lines',tools['diff'])
+    chk('changes badge',pg.evaluate("!!document.querySelector('.msg-diff-line')"))
+    pg.click('.cmd-group .cg-head')
+    pg.wait_for_timeout(100)
+    pg.evaluate("__push({type:'permission.asked',properties:{id:'per_parity',sessionID:'ses_1',permission:'bash',patterns:['ls'],metadata:{}}})")
+    pg.wait_for_timeout(200)
+    chk('chat badge for permission',pg.evaluate("document.documentElement.dataset.pending")=='1' and pg.evaluate("!document.querySelector('.top-title-dot').classList.contains('hide')"))
+    pg.evaluate("__push({type:'permission.replied',properties:{requestID:'per_parity',sessionID:'ses_1'}})")
+    pg.wait_for_timeout(150)
     # slash menu
     pg.fill('#composer textarea','/')
     pg.dispatch_event('#composer textarea','input')
@@ -891,7 +917,7 @@ try:
       OCM.S.dir='/root';
       const t=await OCM.buildFileTree('/root','ses_scopeA');
       const cached=OCM.fileTreeFor('ses_scopeA');
-      return {count:t.count,hasTree:!!(cached&&cached.text),text:cached?cached.text:'',hasSkip:!/node_modules|\.git\//.test(cached?cached.text:'')};
+      return {count:t.count,hasTree:!!(cached&&cached.text),text:cached?cached.text:'',hasSkip:!/node_modules|[.]git\//.test(cached?cached.text:'')};
     }""")
     chk('file tree built + cached for session',ft['count']>0 and ft['hasTree'])
     chk('file tree skips noise dirs',ft['hasSkip'])
@@ -1709,6 +1735,123 @@ try:
     pg.wait_for_selector('.sheet.full >> button:has-text("Обновить")')
     chk('core update offered for 1.x','v1.18.6' in pg.inner_text('.sheet.full'))
     pg.screenshot(path=os.environ.get('SHOTS','/tmp')+'/s9_updates.png')
+    # ---- upstream 2.30.1 parity checks (adapted to fork selectors) ----
+    for _ in range(8):
+        if not pg.evaluate("OCM.back()"): break
+    # long model name must not push the thinking/variant chips under the send button
+    pos=pg.evaluate("""async ()=>{
+      const longId='claude-super-long-preview-ultra-experimental-context-window-1m';
+      const p=OCM.S.providers.find(x=>x.id==='opencode')||OCM.S.providers[0];
+      if(p){p.models=p.models||{};if(!p.models[longId])p.models[longId]={id:longId,name:'Claude Super Long Preview Ultra Experimental Context Window 1M',limit:{context:1000000}}}
+      const prev=OCM.S.model;
+      OCM.S.model={providerID:p?p.id:'opencode',modelID:longId};OCM.bus.emit('meta');
+      await new Promise(r=>setTimeout(r,180));
+      const chip=document.querySelector('#composer .model-pill');
+      const send=document.querySelector('#send');
+      const bar=document.querySelector('#composer .cbar-row');
+      const c=chip&&chip.getBoundingClientRect(),s=send&&send.getBoundingClientRect(),b=bar&&bar.getBoundingClientRect();
+      const ok=!!(c&&s&&b&&c.right<=s.left+2&&c.left>=b.left-1&&c.right<=b.right+1);
+      const text=(chip&&chip.querySelector('span')||{}).textContent||'';
+      OCM.S.model=prev;OCM.bus.emit('meta');
+      return {ok,text};
+    }""")
+    chk('positioning thinking chip',pos['ok'] and len(pos['text'])>10)
+    # T2I chip appears for image-capable models and toggles
+    t2i=pg.evaluate("""async ()=>{
+      const mid='gpt-image-1';
+      const p=OCM.S.providers.find(x=>x.id==='opencode')||OCM.S.providers[0];
+      if(p){p.models=p.models||{};p.models[mid]={id:mid,name:'GPT Image 1',modalities:{output:['image']}}}
+      const prev=OCM.S.model;
+      OCM.S.model={providerID:p?p.id:'opencode',modelID:mid};OCM.bus.emit('meta');
+      await new Promise(r=>setTimeout(r,180));
+      const chip=document.querySelector('#composer .t2i-pill');
+      const shown=!!chip&&!chip.classList.contains('hide');
+      const before=chip?chip.classList.contains('on'):false;
+      if(chip)chip.click();
+      const toggled=chip&&chip.classList.contains('on')!==before;
+      const text=chip?chip.textContent.trim():'';
+      OCM.S.model=prev;OCM.bus.emit('meta');
+      return {shown,toggled,text};
+    }""")
+    chk('T2I chip',t2i['shown'] and t2i['toggled'] and 'T2I' in t2i['text'])
+    # quota hints depend on the account state
+    pg.evaluate("""()=>{
+      OCM.S.status[OCM.S.sid]={type:'idle'};
+      const t=document.querySelector('#toast');if(t)t.textContent='';
+      __push({type:'session.error',properties:{sessionID:OCM.S.sid,error:{name:'QuotaError',data:{message:'Free usage limit reached'}}}});
+    }""")
+    pg.wait_for_timeout(280)
+    qt=pg.evaluate("(document.querySelector('#toast')||{}).textContent||''")
+    chk('quota hints: signed-in does not offer login','Квота' in qt and 'Войдите' not in qt)
+    pg.evaluate("window.__orgs={orgs:[]};OCM.checkAccount()")
+    pg.wait_for_timeout(450)
+    pg.evaluate("""()=>{
+      const t=document.querySelector('#toast');if(t)t.textContent='';
+      __push({type:'session.error',properties:{sessionID:OCM.S.sid,error:{name:'QuotaError',data:{message:'Free usage limit reached again'}}}});
+    }""")
+    pg.wait_for_timeout(280)
+    qt=pg.evaluate("[...document.querySelectorAll('.sheet')].map(s=>s.textContent).join(' ')+' '+((document.querySelector('#toast')||{}).textContent||'')")
+    chk('quota hints: signed-out offers Google/GitHub','Войдите' in qt)
+    pg.evaluate("OCM.back();window.__orgs=undefined;OCM.checkAccount()")
+    pg.wait_for_timeout(250)
+    # Warp CLI link + docs.warp.dev inside the About sheet
+    pg.evaluate("OCM.openSettings()")
+    pg.wait_for_selector('.sheet >> nth=-1 >> .settings-tabs')
+    pg.click('.sheet >> nth=-1 >> .settings-tabs button[data-pane="system"]')
+    pg.click('.sheet >> nth=-1 >> .settings-row:has-text("О приложении")')
+    pg.wait_for_timeout(200)
+    about=pg.inner_text('.sheet >> nth=-1')
+    chk('WARP CLI link in settings','OpenCode CLI-агент (Warp)' in about and 'docs.warp.dev/agents/cli-agents/opencode' in about)
+    pg.click('.sheet >> nth=-1 >> button:has-text("OpenCode CLI-агент (Warp)")')
+    pg.wait_for_timeout(120)
+    chk('Warp CLI opens docs.warp.dev',pg.evaluate("window.__opened")=='https://docs.warp.dev/agents/cli-agents/opencode/')
+    pg.evaluate("OCM.back();OCM.back();OCM.back()")
+    # WARP settings tab and live status
+    warp=pg.evaluate("""async ()=>{
+      OCM.openSettings();
+      await new Promise(r=>setTimeout(r,180));
+      const sh=[...document.querySelectorAll('.sheet')].pop();
+      const row=[...sh.querySelectorAll('.settings-row')].some(x=>x.textContent.includes('WARP и обход лимитов'));
+      const tabs=[...sh.querySelectorAll('.settings-tabs button')].map(b=>b.getAttribute('data-pane'));
+      sh.querySelector('.settings-tabs button[data-pane="warp"]').click();
+      await new Promise(r=>setTimeout(r,180));
+      const panel=sh.textContent.includes('Cloudflare WARP')&&sh.textContent.includes('198.51.100.1');
+      const st=OCM.native.warpStatus();
+      OCM.back();
+      return {row,tabs,panel,mode:st.mode};
+    }""")
+    chk('WARP settings: tab + status',warp['row'] and 'warp' in warp['tabs'] and warp['panel'] and warp['mode']=='direct')
+    # session drawer unread badges
+    unread=pg.evaluate("""async ()=>{
+      OCM.store.set('seenAt.ses_9',1);
+      __push({type:'session.updated',properties:{info:{id:'ses_9',title:'Непрочитанный ответ',time:{created:1,updated:Date.now()+100000},directory:'/root'}}});
+      await new Promise(r=>setTimeout(r,180));
+      OCM.openSessions();
+      await new Promise(r=>setTimeout(r,200));
+      const sh=[...document.querySelectorAll('.sheet')].pop();
+      const dots=sh.querySelectorAll('.sess-unread').length;
+      OCM.back();
+      return dots;
+    }""")
+    chk('session unread badges',unread>=1)
+    # path bar in the files pane
+    pathbar=pg.evaluate("""()=>{
+      const p=document.querySelector('#pane-files .files-path-bar');
+      const v=p&&p.querySelector('.files-path-inp');
+      return {has:!!p,value:v?v.value:''};
+    }""")
+    chk('path bar',pathbar['has'] and 'root' in pathbar['value'])
+    # in-app preview iframe
+    prev=pg.evaluate("""async ()=>{
+      OCM.openPreview('/root');
+      await new Promise(r=>setTimeout(r,180));
+      const sh=[...document.querySelectorAll('.sheet')].pop();
+      const f=sh.querySelector('iframe.web-preview-frame');
+      const src=f?f.getAttribute('src')||'':'';
+      OCM.back();
+      return {has:!!f,src};
+    }""")
+    chk('preview iframe',prev['has'] and len(prev['src'])>0)
     # ---- wide layout ----
     for _ in range(6):
         if not pg.evaluate("OCM.back()"): break
@@ -1716,6 +1859,7 @@ try:
     pg.wait_for_timeout(400)
     chk('wide mode set',pg.get_attribute('#app','data-mode')=='wide')
     chk('3 panes visible',pg.locator('#pane-files').is_visible() and pg.locator('#pane-chat').is_visible() and pg.locator('#pane-side').is_visible())
+    chk('tabbar hidden in wide (panes replace nav)',not pg.locator('#bottom-bar').is_visible() or (pg.locator('#pane-files').is_visible() and pg.locator('#pane-side').is_visible()))
     pg.screenshot(path=os.environ.get('SHOTS','/tmp')+'/s10_wide.png')
     # ---- guest boot ----
     gctx=b.new_context(viewport={"width":390,"height":780},device_scale_factor=2,has_touch=True,is_mobile=True)

@@ -1,9 +1,110 @@
 (function(){
 const O=window.OCM,h=O.h;
+
+// ---- Image lightbox & media cards (work alongside the fork's .thumb elements) ----
+O.openImageLightbox=(src,caption,filename)=>{
+  const resolved=(O.resolveMediaUrl?O.resolveMediaUrl(src):src)||src;
+  const fname=filename||(caption&&!/\s{3,}/.test(caption)?caption:'')||'opencode_image.png';
+  let zoomed=false;
+  const img=h('img',{
+    class:'ocm-lb-img',
+    src:resolved,
+    alt:caption||fname,
+    onclick:e=>{
+      e.stopPropagation();
+      zoomed=!zoomed;
+      img.classList.toggle('zoomed',zoomed);
+    }
+  });
+  const close=()=>{
+    if(!lb.isConnected)return;
+    lb.classList.remove('on');
+    setTimeout(()=>{if(lb.isConnected)lb.remove()},200);
+    const i=O.sheets.indexOf(api);
+    if(i>=0)O.sheets.splice(i,1);
+  };
+  const api={root:null,close};
+  const lb=h('div',{class:'ocm-lightbox',onclick:close},
+    h('div',{class:'ocm-lb-top',onclick:e=>e.stopPropagation()},
+      h('button',{class:'ibtn',title:O.tr('Close','Закрыть'),onclick:close},O.icon('x')),
+      h('div',{class:'ocm-lb-ttl grow'},
+        h('b',null,caption||O.basename(fname)||O.tr('Generated image','Изображение')),
+        caption&&caption!==fname?h('span',null,O.basename(fname)):null
+      ),
+      h('button',{class:'ibtn',title:O.tr('Save to Downloads','Сохранить в Загрузки'),onclick:()=>{
+        if(O.native&&O.native.saveImage)O.native.saveImage(resolved,fname);
+        else O.toast(O.tr('Saved','Сохранено'));
+      }},O.icon('download')),
+      h('button',{class:'ibtn',title:O.tr('Share','Поделиться'),onclick:()=>{
+        if(O.native&&O.native.shareImage)O.native.shareImage(resolved,fname);
+      }},O.icon('share'))
+    ),
+    h('div',{class:'ocm-lb-stage'},img)
+  );
+  api.root=lb;
+  document.body.append(lb);
+  O.sheets.push(api);
+  requestAnimationFrame(()=>lb.classList.add('on'));
+};
+
+O.on('media_saved',d=>{
+  if(!d)return;
+  if(d.ok)O.toast(O.tr('Saved to Downloads/OpenCode: ','Сохранено в Загрузки/OpenCode: ')+(d.name||''),2400);
+  else O.toast(O.tr('Save failed: ','Ошибка сохранения: ')+(d.error||''),3000);
+});
+
+O.renderMediaCard=opts=>{
+  opts=opts||{};
+  const rawSrc=String(opts.rawSrc||opts.src||'').trim();
+  const src=(O.resolveMediaUrl?O.resolveMediaUrl(rawSrc):rawSrc)||rawSrc;
+  const caption=String(opts.caption||'').trim();
+  const fname=String(opts.filename||'').trim()||O.basename(rawSrc.split('?')[0])||'image.png';
+  const compact=Boolean(opts.compact);
+
+  const img=h('img',{
+    class:'ocm-media-img',
+    src,
+    alt:caption||fname,
+    loading:'lazy'
+  });
+  const stage=h('div',{class:'ocm-media-stage'},img);
+  img.addEventListener('error',()=>{
+    if(img._retried||!/^(https?:)/i.test(rawSrc)||!O.native||!O.native.cacheMedia){
+      stage.textContent='';
+      stage.append(h('div',{class:'ocm-media-err'},O.icon('image'),h('span',null,O.tr('Preview unavailable','Предпросмотр недоступен'))));
+      return;
+    }
+    img._retried=true;
+    O.native.cacheMedia(rawSrc,fname).then(r=>{
+      if(r&&r.ok&&r.url){img.src=r.url}
+      else{
+        stage.textContent='';
+        stage.append(h('div',{class:'ocm-media-err'},O.icon('image'),h('span',null,O.tr('Image failed to load','Не удалось загрузить фото'))));
+      }
+    });
+  });
+
+  const label=caption||(!/^t2i_\d+/.test(fname)?fname:O.tr('Generated Photo','Сгенерированное фото'));
+  const card=h('div',{class:'ocm-media-card'+(compact?' compact':'')},
+    stage,
+    h('div',{class:'ocm-media-bar'},
+      h('div',{class:'ocm-media-meta'},O.icon('image'),h('span',null,label)),
+      h('div',{class:'ocm-media-acts'},
+        h('button',{class:'ibtn s',title:O.tr('Fullscreen','На весь экран'),onclick:e=>{e.stopPropagation();O.openImageLightbox(img.src||src,caption,fname)}},O.icon('maximize')),
+        h('button',{class:'ibtn s',title:O.tr('Download','Скачать'),onclick:e=>{e.stopPropagation();if(O.native&&O.native.saveImage)O.native.saveImage(img.src||src,fname)}},O.icon('download')),
+        h('button',{class:'ibtn s',title:O.tr('Share','Поделиться'),onclick:e=>{e.stopPropagation();if(O.native&&O.native.shareImage)O.native.shareImage(img.src||src,fname)}},O.icon('share'))
+      )
+    )
+  );
+  stage.onclick=()=>O.openImageLightbox(img.src||src,caption,fname);
+  return card;
+};
+
 // ---- markdown ----
 O.md=t=>{try{return DOMPurify.sanitize(marked.parse(t||'',{gfm:true}),{USE_PROFILES:{html:true},FORBID_TAGS:['style','form','textarea','select'],FORBID_ATTR:['onerror','onload'],ADD_TAGS:['button','action','openapp'],ADD_ATTR:['data-action','data-target','data-path','type','target']})}catch{return'<pre>'+O.esc(t)+'</pre>'}};
 O.enhance=(el,opts)=>{
   const lite=opts&&opts.lite;
+  const shownMedia=new Set();
   el.querySelectorAll('pre').forEach(pre=>{if(pre.dataset.e||pre.closest('.codeblock'))return;pre.dataset.e='1';
     const code=pre.querySelector('code');const lang=((code&&code.className.match(/language-([\w+#-]+)/))||[])[1]||'';
     if(code&&window.hljs&&!lite){try{hljs.highlightElement(code)}catch{}}
@@ -11,6 +112,20 @@ O.enhance=(el,opts)=>{
     pre.replaceWith(wrap);wrap.append(pre)});
   // Mermaid diagrams (```mermaid blocks) render offline once the part is final
   if(!lite&&O.renderDiagrams)O.renderDiagrams(el);
+
+  // Markdown pictures become photo cards; fork .thumb elements are created in chat.js and
+  // are never touched here, so both renderers coexist.
+  if(!lite)el.querySelectorAll('img').forEach(img=>{
+    if(img.closest('.ocm-media-card')||img.classList.contains('thumb'))return;
+    const raw=img.getAttribute('src')||'';
+    if(!raw)return;
+    shownMedia.add(raw);
+    shownMedia.add(O.resolveMediaUrl?O.resolveMediaUrl(raw):raw);
+    const card=O.renderMediaCard({rawSrc:raw,caption:img.getAttribute('alt')||'',filename:O.basename(raw.split('?')[0])});
+    const parent=img.parentElement;
+    if(parent&&parent.tagName==='P'&&parent.childNodes.length===1)parent.replaceWith(card);
+    else img.replaceWith(card);
+  });
 
   // Connect interactive buttons created in markdown
   el.querySelectorAll('button[data-action]').forEach(btn=>{
@@ -80,8 +195,14 @@ O.enhance=(el,opts)=>{
       const chip=h('button',{class:'inline-preview-chip',title:O.tr('Open in-app preview','Открыть в приложении'),onclick:e=>{
         e.preventDefault();e.stopPropagation();
         O.openPreview(txt);
-      }},O.icon('cube'),' Открыть сайт');
+      }      },O.icon('cube'),' Открыть сайт');
       c.after(chip);
+    }else if(!c.closest('pre')&&/^(\/[^\s"'<>]+|\.?[a-zA-Z0-9_./-]+\.(?:png|jpe?g|webp|gif|avif))$/i.test(txt)){
+      const resolved=O.resolveMediaUrl?O.resolveMediaUrl(txt):txt;
+      if(!shownMedia.has(txt)&&!shownMedia.has(resolved)&&!(c.nextElementSibling&&c.nextElementSibling.classList.contains('ocm-media-card'))){
+        shownMedia.add(txt);shownMedia.add(resolved);
+        c.after(O.renderMediaCard({rawSrc:txt,filename:O.basename(txt)}));
+      }
     }
   });
 };

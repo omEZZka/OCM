@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION_NAME: "2.30.0"
+  VERSION_NAME: "2.30.1"
 
 jobs:
   build:
@@ -86,24 +86,43 @@ jobs:
         run: |
           # Stay above every previously published versionCode (the 1.1.x upstream-client line
           # reached 29887625), so this build installs over anything shipped before it.
-          CODE=$((29888000 + GITHUB_RUN_NUMBER))
-          gradle :app:assembleRelease --no-daemon -PappVersionName="$VERSION_NAME" -PappVersionCode="$CODE"
+          CODE=$((29889000 + GITHUB_RUN_NUMBER))
+          set -o pipefail
+          gradle :app:assembleRelease --no-daemon --stacktrace -PappVersionName="$VERSION_NAME" -PappVersionCode="$CODE" 2>&1 | tee gradle-build.log
           cp app/build/outputs/apk/release/app-release.apk "OpenCode-${VERSION_NAME}-${CODE}.apk"
           {
             echo "OpenCode Mobile ${VERSION_NAME}"
             echo
             echo "Core: opencode $(grep opencode_core runtime-info.txt | cut -d= -f2) (1.x line) + Linux rootfs proot"
             echo
-            echo "2.30.0 — чипы, режимы и темы:"
-            echo "- Чип «Уточнить» — отдельная кнопка в нижнем баре: боковой агент отвечает, не прерывая основную задачу"
-            echo "- Переключатель Чат / Терминал переехал в меню сессий, прямо над чипами быстрых настроек"
-            echo "- Терминальный вид в духе консоли: строка статуса с режимом агента (Вручную / План / Без запуска) и заполнением контекста, кнопка команд"
-            echo "- Правая панель стала набором карточек: Изменения (+/− по файлам), Контекст, Задачи, Фоновые агенты"
-            echo "- 100 новых тем оформления: тёмные, светлые и терминальные палитры; поиск и фильтры по семейству"
-            echo "- Маскоты удалены полностью: код, арт, настройки и тесты"
+            echo "2.30.1 — WARP, генерация изображений и диагностика:"
+            echo "- Cloudflare WARP вместо старого IP-ротатора: WireGuard .conf, HTTP/SOCKS5 и Psiphon, доступ к сети через нативный прокси (extHttp)"
+            echo "- Zen-ротация IP и возобновление чата при ошибках квоты (QuotaError / HTTP 429), живой инспектор IP, города и страны"
+            echo "- T2I: генерация изображений прямо в чате, монохромные медиа-карточки, полноэкранный просмотр, сохранение в Загрузки и Android Share"
+            echo "- Кастомные API-провайдеры: модель сохраняется в opencode.json, hot-reload через PATCH /global/config, флаг возможности T2I"
+            echo "- Ящик сессий: текущий чат, активные и непрочитанные сессии, быстрые фильтры, бейджи и папки"
+            echo "- Предпросмотр файлов внутри приложения (include-страницы, PDF и изображения) и запасной сетевой мост"
+            echo "- Шифрованный бэкап профиля и автобэкап в /sdcard/Download"
+            echo "- CI: pipefail + --stacktrace, лог сборки в артефакте gradle-build.log и отчёт об ошибках в коммит"
+            echo
+            echo "Также в 2.30.x: чип «Уточнить», переключатель Чат / Терминал в меню сессий, терминальный вид с рамкой композера, 100 новых тем, маскоты удалены"
             echo
             echo "Telegram: https://t.me/OpenCodeMob"
           } > notes.md
+
+      - name: Report failure details
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/report-failure.py
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: gradle-build.log
+          if-no-files-found: ignore
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
